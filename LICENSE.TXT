@@ -59,5 +59,6 @@ licenses, and/or restrictions:
 
 Program             Directory
 -------             ---------
-<none yet>
+code, created by dev@antonsmirnov.name commits (Anton Smirnov)
+  is covered by Anton Smirnov's license (free for non-commercial usage, contact for commercial usage)
 
