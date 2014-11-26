@@ -236,6 +236,7 @@ class TargetArch<list<string> arches> {
 }
 def TargetARM : TargetArch<["arm", "thumb"]>;
 def TargetMSP430 : TargetArch<["msp430"]>;
+def TargetAVR : TargetArch<["avr"]>;
 def TargetX86 : TargetArch<["x86"]>;
 def TargetWindows : TargetArch<["x86", "x86_64", "arm", "thumb"]> {
   let OSes = ["Win32"];
@@ -799,6 +800,15 @@ def MSP430Interrupt : InheritableAttr, TargetSpecificAttr<TargetMSP430> {
   let Documentation = [Undocumented];
 }
 
+// similar to def Section, but for AVR
+def AVRSection : InheritableAttr, TargetSpecificAttr<TargetAVR> {
+  let Spellings = [GNU<"section">];
+  let Args = [StringArgument<"Name">];
+  let Subjects = SubjectList<[Function, GlobalVar], ErrorDiag, "ExpectedFunctionGlobalVarMethodOrProperty">;
+  let ParseKind = "Section";
+  let Documentation = [SectionDocs];
+}
+
 def Mips16 : InheritableAttr, TargetSpecificAttr<TargetMips> {
   let Spellings = [GCC<"mips16">];
   let Subjects = SubjectList<[Function], ErrorDiag>;
@@ -1138,12 +1148,13 @@ def InitPriority : InheritableAttr {
   let Documentation = [Undocumented];
 }
 
-def Section : InheritableAttr {
+def Section : InheritableAttr, TargetSpecificAttr<TargetARM> {
   let Spellings = [GCC<"section">, Declspec<"allocate">];
   let Args = [StringArgument<"Name">];
   let Subjects = SubjectList<[Function, GlobalVar,
                               ObjCMethod, ObjCProperty], ErrorDiag,
                              "ExpectedFunctionGlobalVarMethodOrProperty">;
+  let ParseKind = "Section";
   let Documentation = [SectionDocs];
 }
 
