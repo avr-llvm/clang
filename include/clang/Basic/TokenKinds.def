@@ -230,6 +230,7 @@ PUNCTUATOR(greatergreatergreater, ">>>")
 //   KEYNOMS  - This is a keyword that must never be enabled under
 //              Microsoft mode
 //   KEYOPENCL  - This is a keyword in OpenCL
+//	 KEYAVR - This is keyword in AVR target
 //   KEYALTIVEC - This is a keyword in AltiVec
 //   KEYBORLAND - This is a keyword if Borland extensions are enabled
 //   BOOLSUPPORT - This is a keyword if 'bool' is a built-in type
@@ -465,6 +466,15 @@ KEYWORD(__vectorcall                , KEYALL)
 KEYWORD(__forceinline               , KEYMS)
 KEYWORD(__unaligned                 , KEYMS)
 KEYWORD(__super                     , KEYMS)
+
+// AVR Target named address spaces
+KEYWORD(__flash						, KEYALL)
+KEYWORD(__flash1					, KEYALL)
+KEYWORD(__flash2					, KEYALL)
+KEYWORD(__flash3					, KEYALL)
+KEYWORD(__flash4					, KEYALL)
+KEYWORD(__flash5					, KEYALL)
+KEYWORD(__memx						, KEYALL) 
 
 // OpenCL address space qualifiers
 KEYWORD(__global                    , KEYOPENCL)

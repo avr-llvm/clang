@@ -2097,7 +2097,9 @@ private:
   void ParseMicrosoftInheritanceClassAttributes(ParsedAttributes &attrs);
   void ParseBorlandTypeAttributes(ParsedAttributes &attrs);
   void ParseOpenCLAttributes(ParsedAttributes &attrs);
+  void ParseQualifiers(ParsedAttributes &Attrs);
   void ParseOpenCLQualifiers(ParsedAttributes &Attrs);
+  void ParseAVRQualifiers(ParsedAttributes &Attrs);
 
   VersionTuple ParseVersionTuple(SourceRange &Range);
   void ParseAvailabilityAttribute(IdentifierInfo &Availability,

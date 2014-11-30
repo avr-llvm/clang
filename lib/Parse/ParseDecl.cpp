@@ -634,11 +634,19 @@ void Parser::ParseOpenCLAttributes(ParsedAttributes &attrs) {
   }
 }
 
-void Parser::ParseOpenCLQualifiers(ParsedAttributes &Attrs) {
+void Parser::ParseQualifiers(ParsedAttributes &Attrs) {
   IdentifierInfo *AttrName = Tok.getIdentifierInfo();
   SourceLocation AttrNameLoc = Tok.getLocation();
   Attrs.addNew(AttrName, AttrNameLoc, nullptr, AttrNameLoc, nullptr, 0,
                AttributeList::AS_Keyword);
+}
+
+void Parser::ParseOpenCLQualifiers(ParsedAttributes &Attrs) {
+  ParseQualifiers(Attrs);
+}
+
+void Parser::ParseAVRQualifiers(ParsedAttributes &Attrs) {
+  ParseQualifiers(Attrs);
 }
 
 static bool VersionNumberSeparator(const char Separator) {
@@ -3261,6 +3269,17 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
       ParseOpenCLQualifiers(DS.getAttributes());
       break;
 
+    // AVR target qualifiers
+    case tok::kw___flash:
+    case tok::kw___flash1:
+    case tok::kw___flash2:
+    case tok::kw___flash3:
+    case tok::kw___flash4:
+    case tok::kw___flash5:
+    case tok::kw___memx:
+      ParseAVRQualifiers(DS.getAttributes()); // add to attributes as keyword
+      break;
+
     case tok::less:
       // GCC ObjC supports types like "<SomeProtocol>" as a synonym for
       // "id<SomeProtocol>".  This is hopelessly old fashioned and dangerous,
@@ -4007,6 +4026,17 @@ bool Parser::isTypeQualifier() const {
   case tok::kw___read_only:
   case tok::kw___read_write:
   case tok::kw___write_only:
+  
+  // AVR target qualifiers
+
+  // named address spaces
+  case tok::kw___flash:
+  case tok::kw___flash1:
+  case tok::kw___flash2:
+  case tok::kw___flash3:
+  case tok::kw___flash4:
+  case tok::kw___flash5:
+  case tok::kw___memx:
     return true;
   }
 }

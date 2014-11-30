@@ -156,6 +156,7 @@ LANGOPT(OpenCLVersion     , 32, 0, "OpenCL version")
 LANGOPT(NativeHalfType    , 1, 0, "Native half type support")
 LANGOPT(HalfArgsAndReturns, 1, 0, "half args and returns")
 LANGOPT(CUDA              , 1, 0, "CUDA")
+LANGOPT(AVR               , 1, 0, "AVR support")
 LANGOPT(OpenMP            , 1, 0, "OpenMP support")
 
 LANGOPT(AssumeSaneOperatorNew , 1, 1, "implicit __attribute__((malloc)) for C++'s new operators")

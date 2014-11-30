@@ -2348,9 +2348,9 @@ static void handleSectionAttr(Sema &S, Decl *D, const AttributeList &Attr) {
     D->addAttr(NewAttr);
 }
 
-static void handleProgmemAttr(Sema &S, Decl *D, const AttributeList &Attr) {
+static void handleProgmemAttr(Sema &S, Decl *D, const AttributeList &Attr, StringRef SectionName) {
   unsigned Index = Attr.getAttributeSpellingListIndex();
-  SectionAttr *NewAttr = S.mergeSectionAttr(D, Attr.getRange(), "progmem", Index);
+  SectionAttr *NewAttr = S.mergeSectionAttr(D, Attr.getRange(), SectionName, Index);
   if (NewAttr)
     D->addAttr(NewAttr);
 }
@@ -4477,7 +4477,28 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     handleSectionAttr(S, D, Attr);
     break;
   case AttributeList::AT_AVRProgmem: // should match with AT_ %AttrName%
-    handleProgmemAttr(S, D, Attr);
+    handleProgmemAttr(S, D, Attr, ".progmem");
+    break;
+  case AttributeList::AT_AVRFlash:
+    handleProgmemAttr(S, D, Attr, ".progmem.data");
+    break;
+  case AttributeList::AT_AVRFlash1:
+    handleProgmemAttr(S, D, Attr, ".progmem1.data");
+    break;
+  case AttributeList::AT_AVRFlash2:
+    handleProgmemAttr(S, D, Attr, ".progmem2.data");
+    break;
+  case AttributeList::AT_AVRFlash3:
+    handleProgmemAttr(S, D, Attr, ".progmem3.data");
+    break;
+  case AttributeList::AT_AVRFlash4:
+    handleProgmemAttr(S, D, Attr, ".progmem4.data");
+    break;
+  case AttributeList::AT_AVRFlash5:
+    handleProgmemAttr(S, D, Attr, ".progmem5.data");
+    break;
+  case AttributeList::AT_AVRMemx:
+    handleProgmemAttr(S, D, Attr, ".progmemx.data");
     break;
   case AttributeList::AT_Unavailable:
     handleAttrWithMessage<UnavailableAttr>(S, D, Attr);
