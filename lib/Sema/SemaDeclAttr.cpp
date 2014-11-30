@@ -2348,6 +2348,13 @@ static void handleSectionAttr(Sema &S, Decl *D, const AttributeList &Attr) {
     D->addAttr(NewAttr);
 }
 
+static void handleProgmemAttr(Sema &S, Decl *D, const AttributeList &Attr) {
+  unsigned Index = Attr.getAttributeSpellingListIndex();
+  SectionAttr *NewAttr = S.mergeSectionAttr(D, Attr.getRange(), "progmem", Index);
+  if (NewAttr)
+    D->addAttr(NewAttr);
+}
+
 
 static void handleCleanupAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   VarDecl *VD = cast<VarDecl>(D);
@@ -4468,6 +4475,9 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     break;
   case AttributeList::AT_Section:
     handleSectionAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_AVRProgmem: // should match with AT_ %AttrName%
+    handleProgmemAttr(S, D, Attr);
     break;
   case AttributeList::AT_Unavailable:
     handleAttrWithMessage<UnavailableAttr>(S, D, Attr);

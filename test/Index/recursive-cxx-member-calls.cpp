@@ -24,7 +24,7 @@ namespace       clang {
       AT_ns_returns_not_retained, AT_ns_returns_retained, AT_objc_gc, 
       AT_overloadable, AT_ownership_holds, AT_ownership_returns,
       AT_ownership_takes, AT_packed, AT_pascal, AT_pure, AT_regparm,
-      AT_section, AT_sentinel, AT_stdcall, AT_thiscall, AT_transparent_union,
+      AT_section, AT_avrprogmem, AT_sentinel, AT_stdcall, AT_thiscall, AT_transparent_union,
       AT_unavailable, AT_unused, AT_used, AT_vecreturn, AT_vector_size,
       AT_visibility, AT_warn_unused_result, AT_weak, AT_weakref,
       AT_weak_import, AT_reqd_wg_size, AT_init_priority,
@@ -129,6 +129,7 @@ AttributeList::Kind AttributeList::getKind(const IdentifierInfo * Name) {
     .Case("objc_gc", AT_objc_gc)
     .Case("regparm", AT_regparm)
     .Case("section", AT_section)
+    .Case("progmem", AT_avrprogmem)
     .Case("stdcall", AT_stdcall)
     .Case("annotate", AT_annotate)
     .Case("fastcall", AT_fastcall)

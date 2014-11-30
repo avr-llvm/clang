@@ -607,6 +607,15 @@ def OpenCLKernel : InheritableAttr {
   let Documentation = [Undocumented];
 }
 
+// AVR
+
+def AVRProgmem : InheritableAttr, TargetSpecificAttr<TargetAVR> {
+  let Spellings = [GCC<"progmem">];
+  let Subjects = SubjectList<[Function, GlobalVar], ErrorDiag,
+                             "ExpectedFunctionGlobalVarMethodOrProperty">;
+  let Documentation = [SectionDocs];
+}
+
 // This attribute is both a type attribute, and a declaration attribute (for
 // parameter variables).
 def OpenCLImageAccess : Attr {
