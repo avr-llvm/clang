@@ -585,7 +585,8 @@ def warn_atprotocol_protocol : Warning<
   "@protocol is using a forward protocol declaration of %0">, InGroup<AtProtocol>;
 def warn_readonly_property : Warning<
   "attribute 'readonly' of property %0 restricts attribute "
-  "'readwrite' of property inherited from %1">;
+  "'readwrite' of property inherited from %1">,
+  InGroup<PropertyAttr>;
 
 def warn_property_attribute : Warning<
   "'%1' attribute on property %0 does not match the property inherited from %2">,
@@ -2234,7 +2235,7 @@ def warn_attribute_wrong_decl_type : Warning<
   "%0 attribute only applies to %select{functions|unions|"
   "variables and functions|functions and methods|parameters|"
   "functions, methods and blocks|functions, methods, and classes|"
-  "functions, methods, and parameters|classes|variables|methods|"
+  "functions, methods, and parameters|classes|enums|variables|methods|"
   "variables, functions and labels|fields and global variables|structs|"
   "variables and typedefs|thread-local variables|"
   "variables and fields|variables, data members and tag types|"
@@ -2243,7 +2244,7 @@ def warn_attribute_wrong_decl_type : Warning<
   "Objective-C instance methods|init methods of interface or class extension declarations|"
   "variables, functions and classes|Objective-C protocols|"
   "functions and global variables|structs or typedefs|"
-  "interface or protocol declarations}1">,
+  "interface or protocol declarations|kernel functions}1">,
   InGroup<IgnoredAttributes>;
 def err_attribute_wrong_decl_type : Error<warn_attribute_wrong_decl_type.Text>;
 def warn_type_attribute_wrong_type : Warning<
@@ -4053,6 +4054,9 @@ def ext_enum_too_large : ExtWarn<
 def ext_enumerator_increment_too_large : ExtWarn<
   "incremented enumerator value %0 is not representable in the "
   "largest integer type">, InGroup<EnumTooLarge>;
+def warn_flag_enum_constant_out_of_range : Warning<
+  "enumeration value %0 is out of range of flags in enumeration type %1">,
+  InGroup<FlagEnum>;
   
 def warn_illegal_constant_array_size : Extension<
   "size of static array must be an integer constant expression">;
@@ -5283,7 +5287,7 @@ def err_bad_cxx_cast_member_pointer_size : Error<
   "cannot %select{||reinterpret_cast||C-style cast|}0 from member pointer "
   "type %1 to member pointer type %2 of different size">;
 def err_bad_reinterpret_cast_reference : Error<
-  "reinterpret_cast of a %0 to %1 needs its address which is not allowed">;
+  "reinterpret_cast of a %0 to %1 needs its address, which is not allowed">;
 def warn_undefined_reinterpret_cast : Warning<
   "reinterpret_cast from %0 to %1 has undefined behavior">,
   InGroup<UndefinedReinterpretCast>, DefaultIgnore;
@@ -6139,7 +6143,6 @@ def warn_cast_qual2 : Warning<"cast from %0 to %1 must have all intermediate "
 
 // inline asm.
 let CategoryName = "Inline Assembly Issue" in {
-  def err_asm_wide_character : Error<"wide string is invalid in 'asm'">;
   def err_asm_invalid_lvalue_in_output : Error<"invalid lvalue in asm output">;
   def err_asm_invalid_output_constraint : Error<
     "invalid output constraint '%0' in asm">;
@@ -6914,6 +6917,17 @@ def err_convertvector_non_vector_type : Error<
 def err_convertvector_incompatible_vector : Error<
   "first two arguments to __builtin_convertvector must have the same number of elements">;
 
+def err_first_argument_to_cwsc_not_call : Error<
+  "first argument to __builtin_call_with_static_chain must be a non-member call expression">;
+def err_first_argument_to_cwsc_block_call : Error<
+  "first argument to __builtin_call_with_static_chain must not be a block call">;
+def err_first_argument_to_cwsc_builtin_call : Error<
+  "first argument to __builtin_call_with_static_chain must not be a builtin call">;
+def err_first_argument_to_cwsc_pdtor_call : Error<
+  "first argument to __builtin_call_with_static_chain must not be a pseudo-destructor call">;
+def err_second_argument_to_cwsc_not_pointer : Error<
+  "second argument to __builtin_call_with_static_chain must be of pointer type">;
+
 def err_vector_incorrect_num_initializers : Error<
   "%select{too many|too few}0 elements in vector initialization (expected %1 elements, have %2)">;
 def err_altivec_empty_initializer : Error<"expected initializer">;
@@ -7354,11 +7368,11 @@ def err_omp_parallel_reduction_in_task_firstprivate : Error<
 def err_omp_atomic_read_not_expression_statement : Error<
   "the statement for 'atomic read' must be an expression statement of form 'v = x;',"
   " where v and x are both lvalue expressions with scalar type">;
-def note_omp_atomic_read: Note<
+def note_omp_atomic_read_write: Note<
   "%select{expected an expression statement|expected built-in assignment operator|expected expression of scalar type|expected lvalue expression}0">;
 def err_omp_atomic_write_not_expression_statement : Error<
   "the statement for 'atomic write' must be an expression statement of form 'x = expr;',"
-  " where x is an l-value expression with scalar type">;
+  " where x is a lvalue expression with scalar type">;
 def err_omp_atomic_update_not_expression_statement : Error<
   "the statement for 'atomic%select{| update}0' must be an expression statement of form '++x;', '--x;', 'x++;', 'x--;', 'x binop= expr;', 'x = x binop expr' or 'x = expr binop x',"
   " where x is an l-value expression with scalar type">;

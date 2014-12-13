@@ -5961,9 +5961,10 @@ static ExprResult attemptRecovery(Sema &SemaRef,
     NewSS = *SS;
 
   if (auto *ND = TC.getCorrectionDecl()) {
+    R.setLookupName(ND->getDeclName());
     R.addDecl(ND);
     if (ND->isCXXClassMember()) {
-      // Figure out the correct naming class to ad to the LookupResult.
+      // Figure out the correct naming class to add to the LookupResult.
       CXXRecordDecl *Record = nullptr;
       if (auto *NNS = TC.getCorrectionSpecifier())
         Record = NNS->getAsType()->getAsCXXRecordDecl();
@@ -6105,8 +6106,13 @@ public:
     auto Result = BaseTransform::RebuildCallExpr(Callee, LParenLoc, Args,
                                                  RParenLoc, ExecConfig);
     if (auto *OE = dyn_cast<OverloadExpr>(Callee)) {
-      if (!Result.isInvalid() && Result.get())
-        OverloadResolution[OE] = cast<CallExpr>(Result.get())->getCallee();
+      if (Result.isUsable()) {
+        Expr *ResultCall = Result.get();
+        if (auto *BE = dyn_cast<CXXBindTemporaryExpr>(ResultCall))
+          ResultCall = BE->getSubExpr();
+        if (auto *CE = dyn_cast<CallExpr>(ResultCall))
+          OverloadResolution[OE] = CE->getCallee();
+      }
     }
     return Result;
   }
@@ -6196,7 +6202,7 @@ ExprResult Sema::CorrectDelayedTyposInExpr(
   // If the current evaluation context indicates there are uncorrected typos
   // and the current expression isn't guaranteed to not have typos, try to
   // resolve any TypoExpr nodes that might be in the expression.
-  if (!ExprEvalContexts.empty() && ExprEvalContexts.back().NumTypos &&
+  if (E && !ExprEvalContexts.empty() && ExprEvalContexts.back().NumTypos &&
       (E->isTypeDependent() || E->isValueDependent() ||
        E->isInstantiationDependent())) {
     auto TyposResolved = DelayedTypos.size();

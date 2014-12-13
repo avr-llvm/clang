@@ -2646,6 +2646,8 @@ public:
                   bool AllowBuiltinCreation = false);
   bool LookupQualifiedName(LookupResult &R, DeclContext *LookupCtx,
                            bool InUnqualifiedLookup = false);
+  bool LookupQualifiedName(LookupResult &R, DeclContext *LookupCtx,
+                           CXXScopeSpec &SS);
   bool LookupParsedName(LookupResult &R, Scope *S, CXXScopeSpec *SS,
                         bool AllowBuiltinCreation = false,
                         bool EnteringContext = false);
@@ -7949,6 +7951,12 @@ public:
                                 QualType DstType, QualType SrcType,
                                 Expr *SrcExpr, AssignmentAction Action,
                                 bool *Complained = nullptr);
+
+  /// IsValueInFlagEnum - Determine if a value is allowed as part of a flag
+  /// enum. If AllowMask is true, then we also allow the complement of a valid
+  /// value, to be used as a mask.
+  bool IsValueInFlagEnum(const EnumDecl *ED, const llvm::APInt &Val,
+                         bool AllowMask) const;
 
   /// DiagnoseAssignmentEnum - Warn if assignment to enum is a constant
   /// integer not in the range of enum values.

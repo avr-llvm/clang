@@ -185,7 +185,8 @@ static llvm::Value *EmitOverflowIntrinsic(CodeGenFunction &CGF,
 }
 
 RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
-                                        unsigned BuiltinID, const CallExpr *E) {
+                                        unsigned BuiltinID, const CallExpr *E,
+                                        ReturnValueSlot ReturnValue) {
   // See if we can constant fold this builtin.  If so, don't emit it at all.
   Expr::EvalResult Result;
   if (E->EvaluateAsRValue(Result, CGM.getContext()) &&
@@ -1566,6 +1567,13 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
   case Builtin::BI__noop:
     // __noop always evaluates to an integer literal zero.
     return RValue::get(ConstantInt::get(IntTy, 0));
+  case Builtin::BI__builtin_call_with_static_chain: {
+    const CallExpr *Call = cast<CallExpr>(E->getArg(0));
+    const Expr *Chain = E->getArg(1);
+    return EmitCall(Call->getCallee()->getType(),
+                    EmitScalarExpr(Call->getCallee()), Call, ReturnValue,
+                    Call->getCalleeDecl(), EmitScalarExpr(Chain));
+  }
   case Builtin::BI_InterlockedExchange:
   case Builtin::BI_InterlockedExchangePointer:
     return EmitBinaryAtomic(*this, llvm::AtomicRMWInst::Xchg, E);
@@ -3122,40 +3130,40 @@ static Value *packTBLDVectorList(CodeGenFunction &CGF, ArrayRef<Value *> Ops,
   return CGF.EmitNeonCall(TblF, TblOps, Name);
 }
 
-Value *CodeGenFunction::EmitARMBuiltinExpr(unsigned BuiltinID,
-                                           const CallExpr *E) {
-  unsigned HintID = static_cast<unsigned>(-1);
+Value *CodeGenFunction::GetValueForARMHint(unsigned BuiltinID) {
   switch (BuiltinID) {
-  default: break;
+  default:
+    return nullptr;
   case ARM::BI__builtin_arm_nop:
-    HintID = 0;
-    break;
+    return Builder.CreateCall(CGM.getIntrinsic(Intrinsic::arm_hint),
+                              llvm::ConstantInt::get(Int32Ty, 0));
   case ARM::BI__builtin_arm_yield:
   case ARM::BI__yield:
-    HintID = 1;
-    break;
+    return Builder.CreateCall(CGM.getIntrinsic(Intrinsic::arm_hint),
+                              llvm::ConstantInt::get(Int32Ty, 1));
   case ARM::BI__builtin_arm_wfe:
   case ARM::BI__wfe:
-    HintID = 2;
-    break;
+    return Builder.CreateCall(CGM.getIntrinsic(Intrinsic::arm_hint),
+                              llvm::ConstantInt::get(Int32Ty, 2));
   case ARM::BI__builtin_arm_wfi:
   case ARM::BI__wfi:
-    HintID = 3;
-    break;
+    return Builder.CreateCall(CGM.getIntrinsic(Intrinsic::arm_hint),
+                              llvm::ConstantInt::get(Int32Ty, 3));
   case ARM::BI__builtin_arm_sev:
   case ARM::BI__sev:
-    HintID = 4;
-    break;
+    return Builder.CreateCall(CGM.getIntrinsic(Intrinsic::arm_hint),
+                              llvm::ConstantInt::get(Int32Ty, 4));
   case ARM::BI__builtin_arm_sevl:
   case ARM::BI__sevl:
-    HintID = 5;
-    break;
+    return Builder.CreateCall(CGM.getIntrinsic(Intrinsic::arm_hint),
+                              llvm::ConstantInt::get(Int32Ty, 5));
   }
+}
 
-  if (HintID != static_cast<unsigned>(-1)) {
-    Function *F = CGM.getIntrinsic(Intrinsic::arm_hint);
-    return Builder.CreateCall(F, llvm::ConstantInt::get(Int32Ty, HintID));
-  }
+Value *CodeGenFunction::EmitARMBuiltinExpr(unsigned BuiltinID,
+                                           const CallExpr *E) {
+  if (auto Hint = GetValueForARMHint(BuiltinID))
+    return Hint;
 
   if (BuiltinID == ARM::BI__builtin_arm_dbg) {
     Value *Option = EmitScalarExpr(E->getArg(0));
@@ -3257,7 +3265,7 @@ Value *CodeGenFunction::EmitARMBuiltinExpr(unsigned BuiltinID,
     Function *F = CGM.getIntrinsic(BuiltinID == ARM::BI__builtin_arm_stlex
                                        ? Intrinsic::arm_stlexd
                                        : Intrinsic::arm_strexd);
-    llvm::Type *STy = llvm::StructType::get(Int32Ty, Int32Ty, NULL);
+    llvm::Type *STy = llvm::StructType::get(Int32Ty, Int32Ty, nullptr);
 
     Value *Tmp = CreateMemTemp(E->getArg(0)->getType());
     Value *Val = EmitScalarExpr(E->getArg(0));
@@ -4028,7 +4036,7 @@ Value *CodeGenFunction::EmitAArch64BuiltinExpr(unsigned BuiltinID,
     Function *F = CGM.getIntrinsic(BuiltinID == AArch64::BI__builtin_arm_stlex
                                        ? Intrinsic::aarch64_stlxp
                                        : Intrinsic::aarch64_stxp);
-    llvm::Type *STy = llvm::StructType::get(Int64Ty, Int64Ty, NULL);
+    llvm::Type *STy = llvm::StructType::get(Int64Ty, Int64Ty, nullptr);
 
     Value *One = llvm::ConstantInt::get(Int32Ty, 1);
     Value *Tmp = Builder.CreateAlloca(ConvertType(E->getArg(0)->getType()),
@@ -5932,8 +5940,8 @@ Value *CodeGenFunction::EmitX86BuiltinExpr(unsigned BuiltinID,
   case X86::BI__builtin_ia32_movntdq256:
   case X86::BI__builtin_ia32_movnti:
   case X86::BI__builtin_ia32_movnti64: {
-    llvm::MDNode *Node = llvm::MDNode::get(getLLVMContext(),
-                                           Builder.getInt32(1));
+    llvm::MDNode *Node = llvm::MDNode::get(
+        getLLVMContext(), llvm::ConstantAsMetadata::get(Builder.getInt32(1)));
 
     // Convert the type of the pointer to a pointer to the stored type.
     Value *BC = Builder.CreateBitCast(Ops[0],
