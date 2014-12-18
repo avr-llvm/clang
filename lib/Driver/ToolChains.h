@@ -520,11 +520,11 @@ protected:
 
 };
 
-class LLVM_LIBRARY_VISIBILITY AvrToolchain : public Generic_GCC {
+class LLVM_LIBRARY_VISIBILITY AvrToolchain : public Generic_ELF {
 public:
     AvrToolchain(const Driver &D, const llvm::Triple &Triple,
             const llvm::opt::ArgList &Args)
-    : Generic_GCC(D, Triple, Args) {};
+    : Generic_ELF(D, Triple, Args) {};
     
     bool IsIntegratedAssemblerDefault() const override { return true; }
 };
