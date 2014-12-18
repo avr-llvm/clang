@@ -520,6 +520,14 @@ protected:
 
 };
 
+class LLVM_LIBRARY_VISIBILITY AvrToolchain : public Generic_GCC {
+public:
+    AvrToolchain(const Driver &D, const llvm::Triple &Triple,
+            const llvm::opt::ArgList &Args)
+    : Generic_GCC(D, Triple, Args) {};
+    
+    bool IsIntegratedAssemblerDefault() const override { return true; }
+};
 
 class LLVM_LIBRARY_VISIBILITY OpenBSD : public Generic_ELF {
 public:
