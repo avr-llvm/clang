@@ -903,6 +903,23 @@ static std::string getAArch64TargetCPU(const ArgList &Args) {
   return "generic";
 }
 
+static std::string getAvrTargetCPU(const ArgList &Args) {
+    Arg *A;
+    
+    std::string CPU;
+    // If we have -mcpu, use that.
+    if ((A = Args.getLastArg(options::OPT_mcpu_EQ))) {
+        StringRef Mcpu = A->getValue();
+        return Mcpu.split("+").first;
+    // If we have -mmcu (avr-gcc style)
+    } else if ((A = Args.getLastArg(options::OPT_mmcu_EQ))) {
+        StringRef Mcpu = A->getValue();
+        return Mcpu.split("+").first;
+    }
+    
+    return "generic";
+}
+
 void Clang::AddAArch64TargetArgs(const ArgList &Args,
                                  ArgStringList &CmdArgs) const {
   std::string TripleStr = getToolChain().ComputeEffectiveClangTriple(Args);
@@ -1462,6 +1479,8 @@ static std::string getCPUName(const ArgList &Args, const llvm::Triple &T) {
   default:
     return "";
 
+  case llvm::Triple::avr:
+    return getAvrTargetCPU(Args);
   case llvm::Triple::aarch64:
   case llvm::Triple::aarch64_be:
     return getAArch64TargetCPU(Args);
