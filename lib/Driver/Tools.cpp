@@ -917,7 +917,7 @@ static std::string getAvrTargetCPU(const ArgList &Args) {
         return Mcpu.split("+").first;
     }
     
-    return "generic";
+    return "";
 }
 
 void Clang::AddAArch64TargetArgs(const ArgList &Args,
