@@ -917,7 +917,8 @@ static std::string getAvrTargetCPU(const ArgList &Args) {
         return Mcpu.split("+").first;
     }
     
-    return "";
+    // AVR-GCC uses 'avr2' as the default mcu
+    return "avr2";
 }
 
 void Clang::AddAArch64TargetArgs(const ArgList &Args,

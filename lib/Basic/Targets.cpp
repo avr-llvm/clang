@@ -30,6 +30,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include <algorithm>
 #include <memory>
+
 using namespace clang;
 
 //===----------------------------------------------------------------------===//
@@ -949,7 +950,7 @@ bool PPCTargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
 
   return true;
 }
-
+    
 /// PPCTargetInfo::getTargetDefines - Return a set of the PowerPC-specific
 /// #defines that are not tied to a specific subtarget.
 void PPCTargetInfo::getTargetDefines(const LangOptions &Opts,
@@ -5487,6 +5488,7 @@ namespace {
       SigAtomicType = SignedLong;
       DescriptionString = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-n8";
     }
+      
     void getTargetDefines(const LangOptions &Opts,
                           MacroBuilder &Builder) const override {
       Builder.defineMacro("AVR");
@@ -5513,15 +5515,18 @@ namespace {
       // TODO : support other MCUs
         
     }
+      
     void getTargetBuiltins(const Builtin::Info *&Records,
                            unsigned &NumRecords) const override {
       // FIXME: Implement.
       Records = nullptr;
       NumRecords = 0;
     }
+      
     bool hasFeature(StringRef Feature) const override {
-      return Feature == "avr";
+        return Feature == "avr";
     }
+      
     void getGCCRegNames(const char * const *&Names,
                         unsigned &NumNames) const override;
     void getGCCRegAliases(const GCCRegAlias *&Aliases,
@@ -5550,7 +5555,21 @@ namespace {
    bool setCPU(const std::string &Name) override {
      // should be consistent with AVR.td
     bool CPUKnown = llvm::StringSwitch<bool>(Name)
-       .Case("generic", true)
+       
+       // Generic MCUs
+       .Case("avr1", true)
+       .Case("avr2", true)
+       .Case("avr25", true)
+       .Case("avr3", true)
+       .Case("avr31", true)
+       .Case("avr35", true)
+       .Case("avr4", true)
+       .Case("avr1", true)
+       .Case("avr5", true)
+       .Case("avr51", true)
+       .Case("avr6", true)
+       
+       // Specific MCUs
        .Case("avrxmega1", true)
        .Case("avrxmega2", true)
        .Case("avrxmega3", true)
