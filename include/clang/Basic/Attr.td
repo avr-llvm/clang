@@ -628,57 +628,57 @@ def AVRSignal : InheritableAttr, TargetSpecificAttr<TargetAVR> {
 
 def AVRProgmem : InheritableAttr, TargetSpecificAttr<TargetAVR> {
   let Spellings = [GCC<"progmem">];
-  let Subjects = SubjectList<[GlobalVar, TypedefName], ErrorDiag,
-                             "ExpectedGlobalVarOrTypedef">;
-  let Documentation = [SectionDocs];
+  let Subjects = SubjectList<[Var, GlobalVar, TypedefName], ErrorDiag,
+                             "ExpectedVarGlobalVarOrTypedef">;
+  let Documentation = [Undocumented];
 }
 
 def AVRFlash : InheritableAttr, TargetSpecificAttr<TargetAVR> {
   let Spellings = [Keyword<"__flash">];
-  let Subjects = SubjectList<[GlobalVar, TypedefName], ErrorDiag,
-                             "ExpectedGlobalVarOrTypedef">;
+  let Subjects = SubjectList<[Var, GlobalVar, TypedefName], ErrorDiag,
+                             "ExpectedVarGlobalVarOrTypedef">;
   let Documentation = [SectionDocs];
 }
 
 def AVRFlash1 : InheritableAttr, TargetSpecificAttr<TargetAVR> {
   let Spellings = [Keyword<"__flash1">];
-  let Subjects = SubjectList<[GlobalVar, TypedefName], ErrorDiag,
-                             "ExpectedGlobalVarOrTypedef">;
+  let Subjects = SubjectList<[Var, GlobalVar, TypedefName], ErrorDiag,
+                             "ExpectedVarGlobalVarOrTypedef">;
   let Documentation = [SectionDocs];
 }
 
 def AVRFlash2 : InheritableAttr, TargetSpecificAttr<TargetAVR> {
   let Spellings = [Keyword<"__flash2">];
-  let Subjects = SubjectList<[GlobalVar, TypedefName], ErrorDiag,
-                             "ExpectedGlobalVarOrTypedef">;
+  let Subjects = SubjectList<[Var, GlobalVar, TypedefName], ErrorDiag,
+                             "ExpectedVarGlobalVarOrTypedef">;
   let Documentation = [SectionDocs];
 }
 
 def AVRFlash3 : InheritableAttr, TargetSpecificAttr<TargetAVR> {
   let Spellings = [Keyword<"__flash3">];
-  let Subjects = SubjectList<[GlobalVar, TypedefName], ErrorDiag,
-                             "ExpectedGlobalVarOrTypedef">;
+  let Subjects = SubjectList<[Var, GlobalVar, TypedefName], ErrorDiag,
+                             "ExpectedVarGlobalVarOrTypedef">;
   let Documentation = [SectionDocs];
 }
 
 def AVRFlash4 : InheritableAttr, TargetSpecificAttr<TargetAVR> {
   let Spellings = [Keyword<"__flash4">];
-  let Subjects = SubjectList<[GlobalVar, TypedefName], ErrorDiag,
-                             "ExpectedGlobalVarOrTypedef">;
+  let Subjects = SubjectList<[Var, GlobalVar, TypedefName], ErrorDiag,
+                             "ExpectedVarGlobalVarOrTypedef">;
   let Documentation = [SectionDocs];
 }
 
 def AVRFlash5 : InheritableAttr, TargetSpecificAttr<TargetAVR> {
   let Spellings = [Keyword<"__flash5">];
-  let Subjects = SubjectList<[GlobalVar, TypedefName], ErrorDiag,
-                             "ExpectedGlobalVarOrTypedef">;
+  let Subjects = SubjectList<[Var, GlobalVar, TypedefName], ErrorDiag,
+                             "ExpectedVarGlobalVarOrTypedef">;
   let Documentation = [SectionDocs];
 }
 
 def AVRMemx : InheritableAttr, TargetSpecificAttr<TargetAVR> {
   let Spellings = [Keyword<"__memx">];
-  let Subjects = SubjectList<[GlobalVar, TypedefName], ErrorDiag,
-                             "ExpectedGlobalVarOrTypedef">;
+  let Subjects = SubjectList<[Var, GlobalVar, TypedefName], ErrorDiag,
+                             "ExpectedVarGlobalVarOrTypedef">;
   let Documentation = [SectionDocs];
 }
 
