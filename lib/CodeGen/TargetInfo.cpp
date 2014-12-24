@@ -5551,6 +5551,46 @@ void MSP430TargetCodeGenInfo::SetTargetAttributes(const Decl *D,
   }
 }
 
+
+//===----------------------------------------------------------------------===//
+// AVR ABI Implementation
+//===----------------------------------------------------------------------===//
+
+namespace {
+    
+    class AVRTargetCodeGenInfo : public TargetCodeGenInfo {
+    public:
+        AVRTargetCodeGenInfo(CodeGenTypes &CGT)
+        : TargetCodeGenInfo(new DefaultABIInfo(CGT)) {}
+        void SetTargetAttributes(const Decl *D, llvm::GlobalValue *GV,
+                                 CodeGen::CodeGenModule &M) const override;
+    };
+    
+}
+
+void AVRTargetCodeGenInfo::SetTargetAttributes(const Decl *D,
+                                                  llvm::GlobalValue *GV,
+                                                  CodeGen::CodeGenModule &M) const {
+    if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D)) {
+        if (const AVRSignalAttr *attr = FD->getAttr<AVRSignalAttr>()) {
+            // Handle 'interrupt' attribute:
+            llvm::Function *F = cast<llvm::Function>(GV);
+            
+            // Step 1: Set ISR calling convention.
+            F->setCallingConv(llvm::CallingConv::AVR_SIGNAL);
+            
+            // Step 2: Add attributes goodness.
+            F->addFnAttr(llvm::Attribute::NoInline);
+            
+            // TODO : need to create alias?
+            
+            // Step 3: Emit ISR vector alias.
+//            llvm::GlobalAlias::create(llvm::Function::ExternalLinkage,
+//                                      "__isr_" + F->getName(), F);
+        }
+    }
+}
+
 //===----------------------------------------------------------------------===//
 // MIPS ABI Implementation.  This works for both little-endian and
 // big-endian variants.
@@ -7151,6 +7191,9 @@ const TargetCodeGenInfo &CodeGenModule::getTargetCodeGenInfo() {
 
   case llvm::Triple::msp430:
     return *(TheTargetCodeGenInfo = new MSP430TargetCodeGenInfo(Types));
+          
+  case llvm::Triple::avr:
+    return *(TheTargetCodeGenInfo = new AVRTargetCodeGenInfo(Types));
 
   case llvm::Triple::systemz:
     return *(TheTargetCodeGenInfo = new SystemZTargetCodeGenInfo(Types));

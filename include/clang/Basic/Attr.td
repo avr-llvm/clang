@@ -615,6 +615,17 @@ def OpenCLKernel : InheritableAttr {
 
 // AVR
 
+def ExternallyVisible : InheritableAttr, TargetSpecificAttr<TargetAVR> {
+  let Spellings = [GCC<"externally_visible">];
+  let Documentation = [Undocumented];
+}
+
+def AVRSignal : InheritableAttr, TargetSpecificAttr<TargetAVR> {
+    let Spellings = [GCC<"signal">];
+    let Subjects = SubjectList<[Function], ErrorDiag>;
+    let Documentation = [Undocumented];
+}
+
 def AVRProgmem : InheritableAttr, TargetSpecificAttr<TargetAVR> {
   let Spellings = [GCC<"progmem">];
   let Subjects = SubjectList<[GlobalVar, TypedefName], ErrorDiag,

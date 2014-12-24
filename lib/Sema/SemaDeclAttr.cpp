@@ -1692,6 +1692,23 @@ static void handleUsedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
                       Attr.getAttributeSpellingListIndex()));
 }
 
+static void handleExternallyVisibleAttr(Sema &S, Decl *D, const AttributeList &Attr) {
+  if (const VarDecl *VD = dyn_cast<VarDecl>(D)) {
+    if (VD->hasLocalStorage()) {
+      S.Diag(Attr.getLoc(), diag::warn_attribute_ignored) << Attr.getName();
+      return;
+    }
+  } else if (!isFunctionOrMethod(D)) {
+    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
+      << Attr.getName() << ExpectedVariableOrFunction;
+    return;
+  }
+
+  D->addAttr(::new (S.Context)
+             ExternallyVisibleAttr(Attr.getRange(), S.Context,
+                      Attr.getAttributeSpellingListIndex()));
+}
+
 static void handleConstructorAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   uint32_t priority = ConstructorAttr::DefaultPriority;
   if (Attr.getNumArgs() &&
@@ -3951,6 +3968,15 @@ static void handleMSP430InterruptAttr(Sema &S, Decl *D,
   D->addAttr(UsedAttr::CreateImplicit(S.Context));
 }
 
+static void handleAVRSignalAttr(Sema &S, Decl *D,
+                                      const AttributeList &Attr) {
+    
+    D->addAttr(::new (S.Context)
+        AVRSignalAttr(Attr.getLoc(), S.Context, Attr.getAttributeSpellingListIndex()));
+    
+//    __attribute__ ((used)) should be set implicitly (in contrast to MSP430 it's assumed)
+}
+
 static void handleInterruptAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   // Dispatch the interrupt attribute based on the current target.
   if (S.Context.getTargetInfo().getTriple().getArch() == llvm::Triple::msp430)
@@ -4279,6 +4305,9 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
   case AttributeList::AT_Interrupt:
     handleInterruptAttr(S, D, Attr);
     break;
+  case AttributeList::AT_AVRSignal:
+    handleAVRSignalAttr(S, D,Attr);
+    break;
   case AttributeList::AT_X86ForceAlignArgPointer:
     handleX86ForceAlignArgPointerAttr(S, D, Attr);
     break;
@@ -4570,6 +4599,9 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     break;
   case AttributeList::AT_Used:
     handleUsedAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_ExternallyVisible:
+    handleExternallyVisibleAttr(S, D, Attr);
     break;
   case AttributeList::AT_Visibility:
     handleVisibilityAttr(S, D, Attr, false);
