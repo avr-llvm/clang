@@ -143,7 +143,8 @@ void Parser::ParseGNUAttributes(ParsedAttributes &attrs,
         continue;
 
       // Expect an identifier or declaration specifier (const, int, etc.)
-      if (Tok.isNot(tok::identifier) && !isDeclarationSpecifier())
+      if (Tok.isNot(tok::identifier) && !isTypeQualifier() &&
+          !isKnownToBeTypeSpecifier(Tok))
         break;
 
       IdentifierInfo *AttrName = Tok.getIdentifierInfo();
@@ -1474,7 +1475,7 @@ Parser::ParseSimpleDeclaration(unsigned Context,
   }
 
   DS.takeAttributesFrom(Attrs);
-  return ParseDeclGroup(DS, Context, /*FunctionDefs=*/ false, &DeclEnd, FRI);
+  return ParseDeclGroup(DS, Context, &DeclEnd, FRI);
 }
 
 /// Returns true if this might be the start of a declarator, or a common typo
@@ -1629,7 +1630,6 @@ void Parser::SkipMalformedDecl() {
 /// result.
 Parser::DeclGroupPtrTy Parser::ParseDeclGroup(ParsingDeclSpec &DS,
                                               unsigned Context,
-                                              bool AllowFunctionDefinitions,
                                               SourceLocation *DeclEnd,
                                               ForRangeInit *FRI) {
   // Parse the first declarator.
@@ -1677,7 +1677,10 @@ Parser::DeclGroupPtrTy Parser::ParseDeclGroup(ParsingDeclSpec &DS,
       // start of a function definition in GCC-extended K&R C.
       !isDeclarationAfterDeclarator()) {
 
-    if (AllowFunctionDefinitions) {
+    // Function definitions are only allowed at file scope and in C++ classes.
+    // The C++ inline method definition case is handled elsewhere, so we only
+    // need to handle the file scope definition case.
+    if (Context == Declarator::FileContext) {
       if (isStartOfFunctionDefinition(D)) {
         if (DS.getStorageClassSpec() == DeclSpec::SCS_typedef) {
           Diag(Tok, diag::err_function_declared_typedef);
@@ -4753,7 +4756,7 @@ void Parser::ParseDeclaratorInternal(Declarator &D,
       // Sema will have to catch (syntactically invalid) pointers into global
       // scope. It has to catch pointers into namespace scope anyway.
       D.AddTypeInfo(DeclaratorChunk::getMemberPointer(SS,DS.getTypeQualifiers(),
-                                                      Loc),
+                                                      DS.getLocEnd()),
                     DS.getAttributes(),
                     /* Don't replace range end. */SourceLocation());
       return;
@@ -5960,8 +5963,8 @@ void Parser::ParseTypeofSpecifier(DeclSpec &DS) {
   bool isCastExpr;
   ParsedType CastTy;
   SourceRange CastRange;
-  ExprResult Operand = ParseExprAfterUnaryExprOrTypeTrait(OpTok, isCastExpr,
-                                                          CastTy, CastRange);
+  ExprResult Operand = Actions.CorrectDelayedTyposInExpr(
+      ParseExprAfterUnaryExprOrTypeTrait(OpTok, isCastExpr, CastTy, CastRange));
   if (hasParens)
     DS.setTypeofParensRange(CastRange);
 

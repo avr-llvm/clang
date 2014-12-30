@@ -1290,6 +1290,13 @@ Sema::CreateGenericSelectionExpr(SourceLocation KeyLoc,
     ControllingExpr = result.get();
   }
 
+  // The controlling expression is an unevaluated operand, so side effects are
+  // likely unintended.
+  if (ActiveTemplateInstantiations.empty() &&
+      ControllingExpr->HasSideEffects(Context, false))
+    Diag(ControllingExpr->getExprLoc(),
+         diag::warn_side_effects_unevaluated_context);
+
   bool TypeErrorFound = false,
        IsResultDependent = ControllingExpr->isTypeDependent(),
        ContainsUnexpandedParameterPack
@@ -1590,22 +1597,19 @@ Sema::BuildDeclRefExpr(ValueDecl *D, QualType Ty, ExprValueKind VK,
   if (getLangOpts().CUDA)
     if (const FunctionDecl *Caller = dyn_cast<FunctionDecl>(CurContext))
       if (const FunctionDecl *Callee = dyn_cast<FunctionDecl>(D)) {
-        CUDAFunctionTarget CallerTarget = IdentifyCUDATarget(Caller),
-                           CalleeTarget = IdentifyCUDATarget(Callee);
-        if (CheckCUDATarget(CallerTarget, CalleeTarget)) {
+        if (CheckCUDATarget(Caller, Callee)) {
           Diag(NameInfo.getLoc(), diag::err_ref_bad_target)
-            << CalleeTarget << D->getIdentifier() << CallerTarget;
+            << IdentifyCUDATarget(Callee) << D->getIdentifier()
+            << IdentifyCUDATarget(Caller);
           Diag(D->getLocation(), diag::note_previous_decl)
             << D->getIdentifier();
           return ExprError();
         }
       }
 
-  bool refersToEnclosingScope =
-    (CurContext != D->getDeclContext() &&
-     D->getDeclContext()->isFunctionOrMethod()) ||
-    (isa<VarDecl>(D) &&
-     cast<VarDecl>(D)->isInitCapture());
+  bool RefersToCapturedVariable =
+      isa<VarDecl>(D) &&
+      NeedToCaptureVariable(cast<VarDecl>(D), NameInfo.getLoc());
 
   DeclRefExpr *E;
   if (isa<VarTemplateSpecializationDecl>(D)) {
@@ -1615,15 +1619,15 @@ Sema::BuildDeclRefExpr(ValueDecl *D, QualType Ty, ExprValueKind VK,
     E = DeclRefExpr::Create(
         Context,
         SS ? SS->getWithLocInContext(Context) : NestedNameSpecifierLoc(),
-        VarSpec->getTemplateKeywordLoc(), D, refersToEnclosingScope,
+        VarSpec->getTemplateKeywordLoc(), D, RefersToCapturedVariable,
         NameInfo.getLoc(), Ty, VK, FoundD, TemplateArgs);
   } else {
     assert(!TemplateArgs && "No template arguments for non-variable"
                             " template specialization references");
-    E = DeclRefExpr::Create(
-        Context,
-        SS ? SS->getWithLocInContext(Context) : NestedNameSpecifierLoc(),
-        SourceLocation(), D, refersToEnclosingScope, NameInfo, Ty, VK, FoundD);
+    E = DeclRefExpr::Create(Context, SS ? SS->getWithLocInContext(Context)
+                                        : NestedNameSpecifierLoc(),
+                            SourceLocation(), D, RefersToCapturedVariable,
+                            NameInfo, Ty, VK, FoundD);
   }
 
   MarkDeclRefReferenced(E);
@@ -3527,6 +3531,12 @@ bool Sema::CheckUnaryExprOrTypeTraitOperand(Expr *E,
       << ExprKind << E->getSourceRange();
     return true;
   }
+
+  // The operand for sizeof and alignof is in an unevaluated expression context,
+  // so side effects could result in unintended consequences.
+  if ((ExprKind == UETT_SizeOf || ExprKind == UETT_AlignOf) &&
+      ActiveTemplateInstantiations.empty() && E->HasSideEffects(Context, false))
+    Diag(E->getExprLoc(), diag::warn_side_effects_unevaluated_context);
 
   if (CheckObjCTraitOperandConstraints(*this, ExprTy, E->getExprLoc(),
                                        E->getSourceRange(), ExprKind))
@@ -7282,7 +7292,7 @@ static void diagnoseStringPlusInt(Sema &Self, SourceLocation OpLoc,
 
   bool IsStringPlusInt = StrExpr &&
       IndexExpr->getType()->isIntegralOrUnscopedEnumerationType();
-  if (!IsStringPlusInt)
+  if (!IsStringPlusInt || IndexExpr->isValueDependent())
     return;
 
   llvm::APSInt index;
@@ -7312,13 +7322,13 @@ static void diagnoseStringPlusInt(Sema &Self, SourceLocation OpLoc,
 /// \brief Emit a warning when adding a char literal to a string.
 static void diagnoseStringPlusChar(Sema &Self, SourceLocation OpLoc,
                                    Expr *LHSExpr, Expr *RHSExpr) {
-  const DeclRefExpr *StringRefExpr =
-      dyn_cast<DeclRefExpr>(LHSExpr->IgnoreImpCasts());
+  const Expr *StringRefExpr = LHSExpr;
   const CharacterLiteral *CharExpr =
       dyn_cast<CharacterLiteral>(RHSExpr->IgnoreImpCasts());
-  if (!StringRefExpr) {
-    StringRefExpr = dyn_cast<DeclRefExpr>(RHSExpr->IgnoreImpCasts());
+
+  if (!CharExpr) {
     CharExpr = dyn_cast<CharacterLiteral>(LHSExpr->IgnoreImpCasts());
+    StringRefExpr = RHSExpr;
   }
 
   if (!CharExpr || !StringRefExpr)
@@ -8588,7 +8598,7 @@ static NonConstCaptureKind isReferenceToNonConstCapture(Sema &S, Expr *E) {
   // Must be a reference to a declaration from an enclosing scope.
   DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(E);
   if (!DRE) return NCCK_None;
-  if (!DRE->refersToEnclosingLocal()) return NCCK_None;
+  if (!DRE->refersToCapturedVariable()) return NCCK_None;
 
   // The declaration must be a variable which is not declared 'const'.
   VarDecl *var = dyn_cast<VarDecl>(DRE->getDecl());
@@ -8620,19 +8630,19 @@ static bool CheckForModifiableLvalue(Expr *E, SourceLocation Loc, Sema &S) {
   if (IsLV == Expr::MLV_Valid)
     return false;
 
-  unsigned Diag = 0;
+  unsigned DiagID = 0;
   bool NeedType = false;
   switch (IsLV) { // C99 6.5.16p2
   case Expr::MLV_ConstQualified:
-    Diag = diag::err_typecheck_assign_const;
+    DiagID = diag::err_typecheck_assign_const;
 
     // Use a specialized diagnostic when we're assigning to an object
     // from an enclosing function or block.
     if (NonConstCaptureKind NCCK = isReferenceToNonConstCapture(S, E)) {
       if (NCCK == NCCK_Block)
-        Diag = diag::err_block_decl_ref_not_modifiable_lvalue;
+        DiagID = diag::err_block_decl_ref_not_modifiable_lvalue;
       else
-        Diag = diag::err_lambda_decl_ref_not_modifiable_lvalue;
+        DiagID = diag::err_lambda_decl_ref_not_modifiable_lvalue;
       break;
     }
 
@@ -8652,18 +8662,18 @@ static bool CheckForModifiableLvalue(Expr *E, SourceLocation Loc, Sema &S) {
           //  - self
           ObjCMethodDecl *method = S.getCurMethodDecl();
           if (method && var == method->getSelfDecl())
-            Diag = method->isClassMethod()
+            DiagID = method->isClassMethod()
               ? diag::err_typecheck_arc_assign_self_class_method
               : diag::err_typecheck_arc_assign_self;
 
           //  - fast enumeration variables
           else
-            Diag = diag::err_typecheck_arr_assign_enumeration;
+            DiagID = diag::err_typecheck_arr_assign_enumeration;
 
           SourceRange Assign;
           if (Loc != OrigLoc)
             Assign = SourceRange(OrigLoc, OrigLoc);
-          S.Diag(Loc, Diag) << E->getSourceRange() << Assign;
+          S.Diag(Loc, DiagID) << E->getSourceRange() << Assign;
           // We need to preserve the AST regardless, so migration tool 
           // can do its job.
           return false;
@@ -8674,37 +8684,37 @@ static bool CheckForModifiableLvalue(Expr *E, SourceLocation Loc, Sema &S) {
     break;
   case Expr::MLV_ArrayType:
   case Expr::MLV_ArrayTemporary:
-    Diag = diag::err_typecheck_array_not_modifiable_lvalue;
+    DiagID = diag::err_typecheck_array_not_modifiable_lvalue;
     NeedType = true;
     break;
   case Expr::MLV_NotObjectType:
-    Diag = diag::err_typecheck_non_object_not_modifiable_lvalue;
+    DiagID = diag::err_typecheck_non_object_not_modifiable_lvalue;
     NeedType = true;
     break;
   case Expr::MLV_LValueCast:
-    Diag = diag::err_typecheck_lvalue_casts_not_supported;
+    DiagID = diag::err_typecheck_lvalue_casts_not_supported;
     break;
   case Expr::MLV_Valid:
     llvm_unreachable("did not take early return for MLV_Valid");
   case Expr::MLV_InvalidExpression:
   case Expr::MLV_MemberFunction:
   case Expr::MLV_ClassTemporary:
-    Diag = diag::err_typecheck_expression_not_modifiable_lvalue;
+    DiagID = diag::err_typecheck_expression_not_modifiable_lvalue;
     break;
   case Expr::MLV_IncompleteType:
   case Expr::MLV_IncompleteVoidType:
     return S.RequireCompleteType(Loc, E->getType(),
              diag::err_typecheck_incomplete_type_not_modifiable_lvalue, E);
   case Expr::MLV_DuplicateVectorComponents:
-    Diag = diag::err_typecheck_duplicate_vector_components_not_mlvalue;
+    DiagID = diag::err_typecheck_duplicate_vector_components_not_mlvalue;
     break;
   case Expr::MLV_NoSetterProperty:
     llvm_unreachable("readonly properties should be processed differently");
   case Expr::MLV_InvalidMessageExpression:
-    Diag = diag::error_readonly_message_assignment;
+    DiagID = diag::error_readonly_message_assignment;
     break;
   case Expr::MLV_SubObjCPropertySetting:
-    Diag = diag::error_no_subobject_property_setting;
+    DiagID = diag::error_no_subobject_property_setting;
     break;
   }
 
@@ -8712,9 +8722,9 @@ static bool CheckForModifiableLvalue(Expr *E, SourceLocation Loc, Sema &S) {
   if (Loc != OrigLoc)
     Assign = SourceRange(OrigLoc, OrigLoc);
   if (NeedType)
-    S.Diag(Loc, Diag) << E->getType() << E->getSourceRange() << Assign;
+    S.Diag(Loc, DiagID) << E->getType() << E->getSourceRange() << Assign;
   else
-    S.Diag(Loc, Diag) << E->getSourceRange() << Assign;
+    S.Diag(Loc, DiagID) << E->getSourceRange() << Assign;
   return true;
 }
 
@@ -11799,7 +11809,7 @@ static DeclContext *getParentOfCapturingContextOrNull(DeclContext *DC, VarDecl *
                                  const bool Diagnose, Sema &S) {
   if (isa<BlockDecl>(DC) || isa<CapturedDecl>(DC) || isLambdaCallOperator(DC))
     return getLambdaAwareParentOfDeclContext(DC);
-  else {
+  else if (Var->hasLocalStorage()) {
     if (Diagnose)
        diagnoseUncapturableValueReference(S, Loc, Var, DC);
   }
@@ -11967,7 +11977,7 @@ static bool captureInCapturedRegion(CapturedRegionScopeInfo *RSI,
                                     const bool BuildAndDiagnose, 
                                     QualType &CaptureType,
                                     QualType &DeclRefType, 
-                                    const bool RefersToEnclosingLocal,
+                                    const bool RefersToCapturedVariable,
                                     Sema &S) {
   
   // By default, capture variables by reference.
@@ -11989,7 +11999,7 @@ static bool captureInCapturedRegion(CapturedRegionScopeInfo *RSI,
     Field->setAccess(AS_private);
     RD->addDecl(Field);
  
-    CopyExpr = new (S.Context) DeclRefExpr(Var, RefersToEnclosingLocal,
+    CopyExpr = new (S.Context) DeclRefExpr(Var, RefersToCapturedVariable,
                                             DeclRefType, VK_LValue, Loc);
     Var->setReferenced(true);
     Var->markUsed(S.Context);
@@ -11997,7 +12007,7 @@ static bool captureInCapturedRegion(CapturedRegionScopeInfo *RSI,
 
   // Actually capture the variable.
   if (BuildAndDiagnose)
-    RSI->addCapture(Var, /*isBlock*/false, ByRef, RefersToEnclosingLocal, Loc,
+    RSI->addCapture(Var, /*isBlock*/false, ByRef, RefersToCapturedVariable, Loc,
                     SourceLocation(), CaptureType, CopyExpr);
   
   
@@ -12011,7 +12021,7 @@ static ExprResult addAsFieldToClosureType(Sema &S,
                                   VarDecl *Var, QualType FieldType, 
                                   QualType DeclRefType,
                                   SourceLocation Loc,
-                                  bool RefersToEnclosingLocal) {
+                                  bool RefersToCapturedVariable) {
   CXXRecordDecl *Lambda = LSI->Lambda;
 
   // Build the non-static data member.
@@ -12040,7 +12050,7 @@ static ExprResult addAsFieldToClosureType(Sema &S,
   // C++ [expr.prim.labda]p12:
   //   An entity captured by a lambda-expression is odr-used (3.2) in
   //   the scope containing the lambda-expression.
-  Expr *Ref = new (S.Context) DeclRefExpr(Var, RefersToEnclosingLocal, 
+  Expr *Ref = new (S.Context) DeclRefExpr(Var, RefersToCapturedVariable, 
                                           DeclRefType, VK_LValue, Loc);
   Var->setReferenced(true);
   Var->markUsed(S.Context);
@@ -12134,7 +12144,7 @@ static bool captureInLambda(LambdaScopeInfo *LSI,
                             const bool BuildAndDiagnose, 
                             QualType &CaptureType,
                             QualType &DeclRefType, 
-                            const bool RefersToEnclosingLocal,
+                            const bool RefersToCapturedVariable,
                             const Sema::TryCaptureKind Kind, 
                             SourceLocation EllipsisLoc,
                             const bool IsTopScope,
@@ -12208,7 +12218,7 @@ static bool captureInLambda(LambdaScopeInfo *LSI,
   if (BuildAndDiagnose) {
     ExprResult Result = addAsFieldToClosureType(S, LSI, Var, 
                                         CaptureType, DeclRefType, Loc,
-                                        RefersToEnclosingLocal);
+                                        RefersToCapturedVariable);
     if (!Result.isInvalid())
       CopyExpr = Result.get();
   }
@@ -12229,7 +12239,7 @@ static bool captureInLambda(LambdaScopeInfo *LSI,
     
   // Add the capture.
   if (BuildAndDiagnose)
-    LSI->addCapture(Var, /*IsBlock=*/false, ByRef, RefersToEnclosingLocal, 
+    LSI->addCapture(Var, /*IsBlock=*/false, ByRef, RefersToCapturedVariable, 
                     Loc, EllipsisLoc, CaptureType, CopyExpr);
       
   return true;
@@ -12241,7 +12251,7 @@ bool Sema::tryCaptureVariable(VarDecl *Var, SourceLocation ExprLoc,
                               QualType &CaptureType,
                               QualType &DeclRefType,
 						                const unsigned *const FunctionScopeIndexToStopAt) {
-  bool Nested = false;
+  bool Nested = Var->isInitCapture();
   
   DeclContext *DC = CurContext;
   const unsigned MaxFunctionScopesIndex = FunctionScopeIndexToStopAt 
@@ -12259,8 +12269,13 @@ bool Sema::tryCaptureVariable(VarDecl *Var, SourceLocation ExprLoc,
   
   // If the variable is declared in the current context (and is not an 
   // init-capture), there is no need to capture it.
-  if (!Var->isInitCapture() && Var->getDeclContext() == DC) return true;
-  if (!Var->hasLocalStorage()) return true;
+  if (!Nested && Var->getDeclContext() == DC) return true;
+
+  // Capture global variables if it is required to use private copy of this
+  // variable.
+  bool IsGlobal = !Var->hasLocalStorage();
+  if (IsGlobal && !(LangOpts.OpenMP && IsOpenMPCapturedVar(Var)))
+    return true;
 
   // Walk up the stack to determine whether we can capture the variable,
   // performing the "simple" checks that don't depend on type. We stop when
@@ -12281,8 +12296,17 @@ bool Sema::tryCaptureVariable(VarDecl *Var, SourceLocation ExprLoc,
                                                               ExprLoc, 
                                                               BuildAndDiagnose,
                                                               *this);
-    if (!ParentDC) return true;
-    
+    // We need to check for the parent *first* because, if we *have*
+    // private-captured a global variable, we need to recursively capture it in
+    // intermediate blocks, lambdas, etc.
+    if (!ParentDC) {
+      if (IsGlobal) {
+        FunctionScopesIndex = MaxFunctionScopesIndex - 1;
+        break;
+      }
+      return true;
+    }
+
     FunctionScopeInfo  *FSI = FunctionScopes[FunctionScopesIndex];
     CapturingScopeInfo *CSI = cast<CapturingScopeInfo>(FSI);
 
@@ -12506,6 +12530,14 @@ bool Sema::tryCaptureVariable(VarDecl *Var, SourceLocation Loc,
   return tryCaptureVariable(Var, Loc, Kind, EllipsisLoc,
                             /*BuildAndDiagnose=*/true, CaptureType,
                             DeclRefType, nullptr);
+}
+
+bool Sema::NeedToCaptureVariable(VarDecl *Var, SourceLocation Loc) {
+  QualType CaptureType;
+  QualType DeclRefType;
+  return !tryCaptureVariable(Var, Loc, TryCapture_Implicit, SourceLocation(),
+                             /*BuildAndDiagnose=*/false, CaptureType,
+                             DeclRefType, nullptr);
 }
 
 QualType Sema::getCapturedDeclRefType(VarDecl *Var, SourceLocation Loc) {

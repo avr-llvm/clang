@@ -108,35 +108,37 @@ void Parser::CheckForLParenAfterColonColon() {
   if (!Tok.is(tok::l_paren))
     return;
 
-  SourceLocation l_parenLoc = ConsumeParen(), r_parenLoc;
-  Token Tok1 = getCurToken();
-  if (!Tok1.is(tok::identifier) && !Tok1.is(tok::star))
+  Token LParen = Tok;
+  Token NextTok = GetLookAheadToken(1);
+  Token StarTok = NextTok;
+  // Check for (identifier or (*identifier
+  Token IdentifierTok = StarTok.is(tok::star) ? GetLookAheadToken(2) : StarTok;
+  if (IdentifierTok.isNot(tok::identifier))
     return;
-
-  if (Tok1.is(tok::identifier)) {
-    Token Tok2 = GetLookAheadToken(1);
-    if (Tok2.is(tok::r_paren)) {
+  // Eat the '('.
+  ConsumeParen();
+  Token RParen;
+  // Do we have a ')' ?
+  NextTok = StarTok.is(tok::star) ? GetLookAheadToken(2) : GetLookAheadToken(1);
+  if (NextTok.is(tok::r_paren)) {
+    RParen = NextTok;
+    // Eat the '*' if it is present.
+    if (StarTok.is(tok::star))
       ConsumeToken();
-      PP.EnterToken(Tok1);
-      r_parenLoc = ConsumeParen();
-    }
-  } else if (Tok1.is(tok::star)) {
-    Token Tok2 = GetLookAheadToken(1);
-    if (Tok2.is(tok::identifier)) {
-      Token Tok3 = GetLookAheadToken(2);
-      if (Tok3.is(tok::r_paren)) {
-        ConsumeToken();
-        ConsumeToken();
-        PP.EnterToken(Tok2);
-        PP.EnterToken(Tok1);
-        r_parenLoc = ConsumeParen();
-      }
-    }
+    // Eat the identifier.
+    ConsumeToken();
+    // Add the identifier token back.
+    PP.EnterToken(IdentifierTok);
+    // Add the '*' back if it was present.
+    if (StarTok.is(tok::star))
+      PP.EnterToken(StarTok);
+    // Eat the ')'.
+    ConsumeParen();
   }
 
-  Diag(l_parenLoc, diag::err_paren_after_colon_colon)
-      << FixItHint::CreateRemoval(l_parenLoc)
-      << FixItHint::CreateRemoval(r_parenLoc);
+  Diag(LParen.getLocation(), diag::err_paren_after_colon_colon)
+      << FixItHint::CreateRemoval(LParen.getLocation())
+      << FixItHint::CreateRemoval(RParen.getLocation());
 }
 
 /// \brief Parse global scope or nested-name-specifier if present.
@@ -217,13 +219,19 @@ bool Parser::ParseOptionalCXXScopeSpecifier(CXXScopeSpec &SS,
     if (NextKind == tok::kw_new || NextKind == tok::kw_delete)
       return false;
 
-    // '::' - Global scope qualifier.
-    if (Actions.ActOnCXXGlobalScopeSpecifier(ConsumeToken(), SS))
-      return true;
+    if (NextKind == tok::l_brace) {
+      // It is invalid to have :: {, consume the scope qualifier and pretend
+      // like we never saw it.
+      Diag(ConsumeToken(), diag::err_expected) << tok::identifier;
+    } else {
+      // '::' - Global scope qualifier.
+      if (Actions.ActOnCXXGlobalScopeSpecifier(ConsumeToken(), SS))
+        return true;
 
-    CheckForLParenAfterColonColon();
+      CheckForLParenAfterColonColon();
 
-    HasScopeSpecifier = true;
+      HasScopeSpecifier = true;
+    }
   }
 
   if (Tok.is(tok::kw___super)) {
@@ -434,7 +442,18 @@ bool Parser::ParseOptionalCXXScopeSpecifier(CXXScopeSpec &SS,
         Next.setKind(tok::coloncolon);
       }
     }
-    
+
+    if (Next.is(tok::coloncolon) && GetLookAheadToken(2).is(tok::l_brace)) {
+      // It is invalid to have :: {, consume the scope qualifier and pretend
+      // like we never saw it.
+      Token Identifier = Tok; // Stash away the identifier.
+      ConsumeToken();         // Eat the identifier, current token is now '::'.
+      Diag(PP.getLocForEndOfToken(ConsumeToken()), diag::err_expected)
+          << tok::identifier;
+      UnconsumeToken(Identifier); // Stick the identifier back.
+      Next = NextToken();         // Point Next at the '{' token.
+    }
+
     if (Next.is(tok::coloncolon)) {
       if (CheckForDestructor && GetLookAheadToken(2).is(tok::tilde) &&
           !Actions.isNonTypeNestedNameSpecifier(

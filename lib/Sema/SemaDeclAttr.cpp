@@ -863,8 +863,14 @@ static void handleCallableWhenAttr(Sema &S, Decl *D,
     
     StringRef StateString;
     SourceLocation Loc;
-    if (!S.checkStringLiteralArgumentAttr(Attr, ArgIndex, StateString, &Loc))
-      return;
+    if (Attr.isArgIdent(ArgIndex)) {
+      IdentifierLoc *Ident = Attr.getArgAsIdent(ArgIndex);
+      StateString = Ident->Ident->getName();
+      Loc = Ident->Loc;
+    } else {
+      if (!S.checkStringLiteralArgumentAttr(Attr, ArgIndex, StateString, &Loc))
+        return;
+    }
 
     if (!CallableWhenAttr::ConvertStrToConsumedState(StateString,
                                                      CallableState)) {
@@ -3160,6 +3166,55 @@ static void handleNoDebugAttr(Sema &S, Decl *D, const AttributeList &Attr) {
                          Attr.getAttributeSpellingListIndex()));
 }
 
+AlwaysInlineAttr *Sema::mergeAlwaysInlineAttr(Decl *D, SourceRange Range,
+                                              unsigned AttrSpellingListIndex) {
+  if (OptimizeNoneAttr *Optnone = D->getAttr<OptimizeNoneAttr>()) {
+    Diag(Range.getBegin(), diag::warn_attribute_ignored) << "'always_inline'";
+    Diag(Optnone->getLocation(), diag::note_conflicting_attribute);
+    return nullptr;
+  }
+
+  if (D->hasAttr<AlwaysInlineAttr>())
+    return nullptr;
+
+  return ::new (Context) AlwaysInlineAttr(Range, Context,
+                                          AttrSpellingListIndex);
+}
+
+MinSizeAttr *Sema::mergeMinSizeAttr(Decl *D, SourceRange Range,
+                                    unsigned AttrSpellingListIndex) {
+  if (OptimizeNoneAttr *Optnone = D->getAttr<OptimizeNoneAttr>()) {
+    Diag(Range.getBegin(), diag::warn_attribute_ignored) << "'minsize'";
+    Diag(Optnone->getLocation(), diag::note_conflicting_attribute);
+    return nullptr;
+  }
+
+  if (D->hasAttr<MinSizeAttr>())
+    return nullptr;
+
+  return ::new (Context) MinSizeAttr(Range, Context, AttrSpellingListIndex);
+}
+
+OptimizeNoneAttr *Sema::mergeOptimizeNoneAttr(Decl *D, SourceRange Range,
+                                              unsigned AttrSpellingListIndex) {
+  if (AlwaysInlineAttr *Inline = D->getAttr<AlwaysInlineAttr>()) {
+    Diag(Inline->getLocation(), diag::warn_attribute_ignored) << Inline;
+    Diag(Range.getBegin(), diag::note_conflicting_attribute);
+    D->dropAttr<AlwaysInlineAttr>();
+  }
+  if (MinSizeAttr *MinSize = D->getAttr<MinSizeAttr>()) {
+    Diag(MinSize->getLocation(), diag::warn_attribute_ignored) << MinSize;
+    Diag(Range.getBegin(), diag::note_conflicting_attribute);
+    D->dropAttr<MinSizeAttr>();
+  }
+
+  if (D->hasAttr<OptimizeNoneAttr>())
+    return nullptr;
+
+  return ::new (Context) OptimizeNoneAttr(Range, Context,
+                                          AttrSpellingListIndex);
+}
+
 static void handleAlwaysInlineAttr(Sema &S, Decl *D,
                                    const AttributeList &Attr) {
   if (checkAttrMutualExclusion<OptimizeNoneAttr>(S, D, Attr))
@@ -4865,7 +4920,7 @@ bool Sema::ProcessAccessDeclAttributeList(AccessSpecDecl *ASDecl,
                                           const AttributeList *AttrList) {
   for (const AttributeList* l = AttrList; l; l = l->getNext()) {
     if (l->getKind() == AttributeList::AT_Annotate) {
-      handleAnnotateAttr(*this, ASDecl, *l);
+      ProcessDeclAttribute(*this, nullptr, ASDecl, *l, l->isCXX11Attribute());
     } else {
       Diag(l->getLoc(), diag::err_only_annotate_after_access_spec);
       return true;

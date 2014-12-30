@@ -182,6 +182,8 @@ public:
   /// \brief API for captured statement code generation.
   class CGCapturedStmtInfo {
   public:
+    explicit CGCapturedStmtInfo(CapturedRegionKind K = CR_Default)
+        : Kind(K), ThisValue(nullptr), CXXThisFieldDecl(nullptr) {}
     explicit CGCapturedStmtInfo(const CapturedStmt &S,
                                 CapturedRegionKind K = CR_Default)
       : Kind(K), ThisValue(nullptr), CXXThisFieldDecl(nullptr) {
@@ -614,7 +616,6 @@ public:
     addPrivate(const VarDecl *LocalVD,
                const std::function<llvm::Value *()> &PrivateGen) {
       assert(PerformCleanup && "adding private to dead scope");
-      assert(LocalVD->isLocalVarDecl() && "privatizing non-local variable");
       if (SavedLocals.count(LocalVD) > 0) return false;
       SavedLocals[LocalVD] = CGF.LocalDeclMap.lookup(LocalVD);
       CGF.LocalDeclMap.erase(LocalVD);
@@ -2043,12 +2044,17 @@ public:
   void EmitOMPTargetDirective(const OMPTargetDirective &S);
   void EmitOMPTeamsDirective(const OMPTeamsDirective &S);
 
-  /// Helpers for 'omp simd' directive.
+private:
+
+  /// Helpers for the OpenMP loop directives.
   void EmitOMPLoopBody(const OMPLoopDirective &Directive,
                        bool SeparateIter = false);
   void EmitOMPInnerLoop(const OMPLoopDirective &S, OMPPrivateScope &LoopScope,
                         bool SeparateIter = false);
   void EmitOMPSimdFinal(const OMPLoopDirective &S);
+  void EmitOMPWorksharingLoop(const OMPLoopDirective &S);
+
+public:
 
   //===--------------------------------------------------------------------===//
   //                         LValue Expression Emission
@@ -2100,6 +2106,12 @@ public:
                         AggValueSlot slot = AggValueSlot::ignored());
 
   void EmitAtomicStore(RValue rvalue, LValue lvalue, bool isInit);
+
+  std::pair<RValue, RValue> EmitAtomicCompareExchange(
+      LValue Obj, RValue Expected, RValue Desired, SourceLocation Loc,
+      llvm::AtomicOrdering Success = llvm::SequentiallyConsistent,
+      llvm::AtomicOrdering Failure = llvm::SequentiallyConsistent,
+      bool IsWeak = false, AggValueSlot Slot = AggValueSlot::ignored());
 
   /// EmitToMemory - Change a scalar value from its value
   /// representation to its in-memory representation.
@@ -2734,28 +2746,13 @@ public:
                 E = CallArgTypeInfo->param_type_end();
            I != E; ++I, ++Arg) {
         assert(Arg != ArgEnd && "Running over edge of argument list!");
-#ifndef NDEBUG
-        QualType ArgType = *I;
-        QualType ActualArgType = Arg->getType();
-        if (ArgType->isPointerType() && ActualArgType->isPointerType()) {
-          QualType ActualBaseType =
-              ActualArgType->getAs<PointerType>()->getPointeeType();
-          QualType ArgBaseType =
-              ArgType->getAs<PointerType>()->getPointeeType();
-          if (ArgBaseType->isVariableArrayType()) {
-            if (const VariableArrayType *VAT =
-                    getContext().getAsVariableArrayType(ActualBaseType)) {
-              if (!VAT->getSizeExpr())
-                ActualArgType = ArgType;
-            }
-          }
-        }
-        assert(getContext()
-                       .getCanonicalType(ArgType.getNonReferenceType())
-                       .getTypePtr() ==
-                   getContext().getCanonicalType(ActualArgType).getTypePtr() &&
-               "type mismatch in call argument!");
-#endif
+        assert(
+            ((*I)->isVariablyModifiedType() ||
+             getContext()
+                     .getCanonicalType((*I).getNonReferenceType())
+                     .getTypePtr() ==
+                 getContext().getCanonicalType(Arg->getType()).getTypePtr()) &&
+            "type mismatch in call argument!");
         ArgTypes.push_back(*I);
       }
     }

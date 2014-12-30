@@ -396,6 +396,7 @@ ExprResult Sema::BuildCXXTypeId(QualType TypeInfoType,
                                 SourceLocation TypeidLoc,
                                 Expr *E,
                                 SourceLocation RParenLoc) {
+  bool WasEvaluated = false;
   if (E && !E->isTypeDependent()) {
     if (E->getType()->isPlaceholderType()) {
       ExprResult result = CheckPlaceholderExpr(E);
@@ -425,6 +426,7 @@ ExprResult Sema::BuildCXXTypeId(QualType TypeInfoType,
 
         // We require a vtable to query the type at run time.
         MarkVTableUsed(TypeidLoc, RecordD);
+        WasEvaluated = true;
       }
     }
 
@@ -444,6 +446,14 @@ ExprResult Sema::BuildCXXTypeId(QualType TypeInfoType,
   if (E->getType()->isVariablyModifiedType())
     return ExprError(Diag(TypeidLoc, diag::err_variably_modified_typeid)
                      << E->getType());
+  else if (ActiveTemplateInstantiations.empty() &&
+           E->HasSideEffects(Context, WasEvaluated)) {
+    // The expression operand for typeid is in an unevaluated expression
+    // context, so side effects could result in unintended consequences.
+    Diag(E->getExprLoc(), WasEvaluated
+                              ? diag::warn_side_effects_typeid
+                              : diag::warn_side_effects_unevaluated_context);
+  }
 
   return new (Context) CXXTypeidExpr(TypeInfoType.withConst(), E,
                                      SourceRange(TypeidLoc, RParenLoc));
@@ -2749,15 +2759,19 @@ Sema::PerformImplicitConversion(Expr *From, QualType ToType,
   // Perform the first implicit conversion.
   switch (SCS.First) {
   case ICK_Identity:
-    // Nothing to do.
+    if (const AtomicType *FromAtomic = FromType->getAs<AtomicType>()) {
+      FromType = FromAtomic->getValueType().getUnqualifiedType();
+      From = ImplicitCastExpr::Create(Context, FromType, CK_AtomicToNonAtomic,
+                                      From, /*BasePath=*/nullptr, VK_RValue);
+    }
     break;
 
   case ICK_Lvalue_To_Rvalue: {
     assert(From->getObjectKind() != OK_ObjCProperty);
-    FromType = FromType.getUnqualifiedType();
     ExprResult FromRes = DefaultLvalueConversion(From);
     assert(!FromRes.isInvalid() && "Can't perform deduced conversion?!");
     From = FromRes.get();
+    FromType = From->getType();
     break;
   }
 
@@ -5622,7 +5636,8 @@ ExprResult Sema::ActOnPseudoDestructorExpr(Scope *S, Expr *Base,
   if (CheckArrow(*this, ObjectType, Base, OpKind, OpLoc))
     return ExprError();
 
-  QualType T = BuildDecltypeType(DS.getRepAsExpr(), DS.getTypeSpecTypeLoc());
+  QualType T = BuildDecltypeType(DS.getRepAsExpr(), DS.getTypeSpecTypeLoc(),
+                                 false);
 
   TypeLocBuilder TLB;
   DecltypeTypeLoc DecltypeTL = TLB.push<DecltypeTypeLoc>(T);
@@ -5690,6 +5705,13 @@ ExprResult Sema::BuildCXXMemberCallExpr(Expr *E, NamedDecl *FoundDecl,
 
 ExprResult Sema::BuildCXXNoexceptExpr(SourceLocation KeyLoc, Expr *Operand,
                                       SourceLocation RParen) {
+  if (ActiveTemplateInstantiations.empty() &&
+      Operand->HasSideEffects(Context, false)) {
+    // The expression operand for noexcept is in an unevaluated expression
+    // context, so side effects could result in unintended consequences.
+    Diag(Operand->getExprLoc(), diag::warn_side_effects_unevaluated_context);
+  }
+
   CanThrowResult CanThrow = canThrow(Operand);
   return new (Context)
       CXXNoexceptExpr(Context.BoolTy, Operand, CanThrow, KeyLoc, RParen);
@@ -6082,7 +6104,7 @@ class TransformTypos : public TreeTransform<TransformTypos> {
       return ME->getMemberDecl();
     // FIXME: Add any other expr types that could be be seen by the delayed typo
     // correction TreeTransform for which the corresponding TypoCorrection could
-    // contain multple decls.
+    // contain multiple decls.
     return nullptr;
   }
 
@@ -6208,10 +6230,11 @@ ExprResult Sema::CorrectDelayedTyposInExpr(
     auto TyposResolved = DelayedTypos.size();
     auto Result = TransformTypos(*this, Filter).Transform(E);
     TyposResolved -= DelayedTypos.size();
-    if (TyposResolved) {
+    if (Result.isInvalid() || Result.get() != E) {
       ExprEvalContexts.back().NumTypos -= TyposResolved;
       return Result;
     }
+    assert(TyposResolved == 0 && "Corrected typo but got same Expr back?");
   }
   return E;
 }
