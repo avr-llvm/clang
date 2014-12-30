@@ -5533,16 +5533,68 @@ namespace {
       Aliases = nullptr;
       NumAliases = 0;
     }
-    bool
-    validateAsmConstraint(const char *&Name,
-                          TargetInfo::ConstraintInfo &info) const override {
-      // No target constraints for now.
-      return false;
-    }
+
     const char *getClobbers() const override {
       // FIXME: Is this really right?
       return "";
     }
+
+    // AVR-specific constraint
+    bool
+      validateConstraint(ConstraintInfo &Info) const {
+      const char *Name = Info.ConstraintStr.c_str();
+
+      if (!*Name)
+        return false;
+
+      while (*Name) {
+        switch (*Name) {
+
+          // Various constant constraints with AVR-specific meanings.
+
+          // registers
+          case 'a':
+          case 'b':
+          case 'd':
+          case 'e':
+          case 'q':
+          case 't':
+          case 'w':
+          case 'x':
+          case 'y':
+          case 'z':
+          case 'l':
+            Info.setAllowsRegister();
+            break;
+
+          // constants
+          case 'G':
+          case 'I':
+          case 'J':
+          case 'K':
+          case 'L':
+          case 'M':
+          case 'N':
+          case 'O':
+          case 'P':
+          case 'R':
+          case 'Q':
+            Info.setAllowsMemory();
+            break;
+        }
+
+        Name++;
+      }
+
+      return true;
+    }
+      
+    bool
+      validateAsmConstraint(const char *&Name,
+                            TargetInfo::ConstraintInfo &info) const override {
+          return validateConstraint(info);
+    }
+
     BuiltinVaListKind getBuiltinVaListKind() const override {
       // FIXME: implement
       return TargetInfo::CharPtrBuiltinVaList;
