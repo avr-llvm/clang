@@ -232,6 +232,7 @@ def MicrosoftExt : LangOpt<"MicrosoftExt">;
 def Borland : LangOpt<"Borland">;
 def CUDA : LangOpt<"CUDA">;
 def COnly : LangOpt<"CPlusPlus", 1>;
+def AVR : LangOpt<"AVR">;
 
 // Defines targets for target-specific attributes. The list of strings should
 // specify architectures for which the target applies, based off the ArchType
@@ -635,6 +636,7 @@ def AVRProgmem : InheritableAttr, TargetSpecificAttr<TargetAVR> {
 
 def AVRFlash : InheritableAttr, TargetSpecificAttr<TargetAVR> {
   let Spellings = [Keyword<"__flash">];
+  let LangOpts = [AVR];
   let Subjects = SubjectList<[Var, GlobalVar, TypedefName], ErrorDiag,
                              "ExpectedVarGlobalVarOrTypedef">;
   let Documentation = [SectionDocs];
@@ -642,6 +644,7 @@ def AVRFlash : InheritableAttr, TargetSpecificAttr<TargetAVR> {
 
 def AVRFlash1 : InheritableAttr, TargetSpecificAttr<TargetAVR> {
   let Spellings = [Keyword<"__flash1">];
+  let LangOpts = [AVR];
   let Subjects = SubjectList<[Var, GlobalVar, TypedefName], ErrorDiag,
                              "ExpectedVarGlobalVarOrTypedef">;
   let Documentation = [SectionDocs];
@@ -649,6 +652,7 @@ def AVRFlash1 : InheritableAttr, TargetSpecificAttr<TargetAVR> {
 
 def AVRFlash2 : InheritableAttr, TargetSpecificAttr<TargetAVR> {
   let Spellings = [Keyword<"__flash2">];
+  let LangOpts = [AVR];
   let Subjects = SubjectList<[Var, GlobalVar, TypedefName], ErrorDiag,
                              "ExpectedVarGlobalVarOrTypedef">;
   let Documentation = [SectionDocs];
@@ -656,6 +660,7 @@ def AVRFlash2 : InheritableAttr, TargetSpecificAttr<TargetAVR> {
 
 def AVRFlash3 : InheritableAttr, TargetSpecificAttr<TargetAVR> {
   let Spellings = [Keyword<"__flash3">];
+  let LangOpts = [AVR];
   let Subjects = SubjectList<[Var, GlobalVar, TypedefName], ErrorDiag,
                              "ExpectedVarGlobalVarOrTypedef">;
   let Documentation = [SectionDocs];
@@ -663,6 +668,7 @@ def AVRFlash3 : InheritableAttr, TargetSpecificAttr<TargetAVR> {
 
 def AVRFlash4 : InheritableAttr, TargetSpecificAttr<TargetAVR> {
   let Spellings = [Keyword<"__flash4">];
+  let LangOpts = [AVR];
   let Subjects = SubjectList<[Var, GlobalVar, TypedefName], ErrorDiag,
                              "ExpectedVarGlobalVarOrTypedef">;
   let Documentation = [SectionDocs];
@@ -670,6 +676,7 @@ def AVRFlash4 : InheritableAttr, TargetSpecificAttr<TargetAVR> {
 
 def AVRFlash5 : InheritableAttr, TargetSpecificAttr<TargetAVR> {
   let Spellings = [Keyword<"__flash5">];
+  let LangOpts = [AVR];
   let Subjects = SubjectList<[Var, GlobalVar, TypedefName], ErrorDiag,
                              "ExpectedVarGlobalVarOrTypedef">;
   let Documentation = [SectionDocs];
@@ -677,6 +684,7 @@ def AVRFlash5 : InheritableAttr, TargetSpecificAttr<TargetAVR> {
 
 def AVRMemx : InheritableAttr, TargetSpecificAttr<TargetAVR> {
   let Spellings = [Keyword<"__memx">];
+  let LangOpts = [AVR];
   let Subjects = SubjectList<[Var, GlobalVar, TypedefName], ErrorDiag,
                              "ExpectedVarGlobalVarOrTypedef">;
   let Documentation = [SectionDocs];

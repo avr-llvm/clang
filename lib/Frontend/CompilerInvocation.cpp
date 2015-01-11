@@ -1353,6 +1353,13 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.GNUKeywords = Args.hasFlag(OPT_fgnu_keywords, OPT_fno_gnu_keywords,
                                   Opts.GNUKeywords);
 
+  // AVR Target?
+  if (Args.hasArg(OPT_triple)) {
+      Arg *arg = Args.getLastArg(OPT_triple);
+      StringRef value = arg->getValue();
+      Opts.AVR = (value == "avr");
+  }
+    
   if (Args.hasArg(OPT_fno_operator_names))
     Opts.CXXOperatorNames = 0;
 

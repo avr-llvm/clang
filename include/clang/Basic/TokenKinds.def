@@ -468,13 +468,13 @@ KEYWORD(__unaligned                 , KEYMS)
 KEYWORD(__super                     , KEYMS)
 
 // AVR Target named address spaces
-KEYWORD(__flash						, KEYALL)
-KEYWORD(__flash1					, KEYALL)
-KEYWORD(__flash2					, KEYALL)
-KEYWORD(__flash3					, KEYALL)
-KEYWORD(__flash4					, KEYALL)
-KEYWORD(__flash5					, KEYALL)
-KEYWORD(__memx						, KEYALL) 
+KEYWORD(__flash						, KEYAVR)
+KEYWORD(__flash1					, KEYAVR)
+KEYWORD(__flash2					, KEYAVR)
+KEYWORD(__flash3					, KEYAVR)
+KEYWORD(__flash4					, KEYAVR)
+KEYWORD(__flash5					, KEYAVR)
+KEYWORD(__memx						, KEYAVR)
 
 // OpenCL address space qualifiers
 KEYWORD(__global                    , KEYOPENCL)
