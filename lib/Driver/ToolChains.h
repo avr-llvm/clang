@@ -524,7 +524,7 @@ public:
     AvrToolchain(const Driver &D, const llvm::Triple &Triple,
             const llvm::opt::ArgList &Args)
     : Generic_ELF(D, Triple, Args) {};
-    
+
     bool IsIntegratedAssemblerDefault() const override { return true; }
 };
 

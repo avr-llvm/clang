@@ -4037,10 +4037,10 @@ static void handleMSP430InterruptAttr(Sema &S, Decl *D,
 
 static void handleAVRSignalAttr(Sema &S, Decl *D,
                                       const AttributeList &Attr) {
-    
+
     D->addAttr(::new (S.Context)
         AVRSignalAttr(Attr.getLoc(), S.Context, Attr.getAttributeSpellingListIndex()));
-    
+
 //    __attribute__ ((used)) should be set implicitly (in contrast to MSP430 it's assumed)
 }
 

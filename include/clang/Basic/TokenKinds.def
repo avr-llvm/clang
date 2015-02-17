@@ -228,7 +228,7 @@ PUNCTUATOR(greatergreatergreater, ">>>")
 //   KEYNOMS  - This is a keyword that must never be enabled under
 //              Microsoft mode
 //   KEYOPENCL  - This is a keyword in OpenCL
-//	 KEYAVR - This is keyword in AVR target
+//   KEYAVR - This is keyword in AVR target
 //   KEYALTIVEC - This is a keyword in AltiVec
 //   KEYBORLAND - This is a keyword if Borland extensions are enabled
 //   BOOLSUPPORT - This is a keyword if 'bool' is a built-in type

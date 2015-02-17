@@ -5575,14 +5575,14 @@ namespace {
       SigAtomicType = SignedLong;
       DescriptionString = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-n8";
     }
-      
+
     void getTargetDefines(const LangOptions &Opts,
                           MacroBuilder &Builder) const override {
       Builder.defineMacro("AVR");
       Builder.defineMacro("__AVR__");
-        
+
       // FIXME: defines for different 'flavours' of MCU
-        
+
       if (CPU == "atmega328") {
         Builder.defineMacro("__AVR_ATmega328__");
       } else if (CPU == "atmega328p") {
@@ -5598,22 +5598,22 @@ namespace {
       } else if (CPU == "atmega32u4") {
         Builder.defineMacro("__AVR_ATmega32U4__");
       }
-        
+
       // TODO : support other MCUs
-        
+
     }
-      
+
     void getTargetBuiltins(const Builtin::Info *&Records,
                            unsigned &NumRecords) const override {
       // FIXME: Implement.
       Records = nullptr;
       NumRecords = 0;
     }
-      
+
     bool hasFeature(StringRef Feature) const override {
         return Feature == "avr";
     }
-      
+
     void getGCCRegNames(const char * const *&Names,
                         unsigned &NumNames) const override;
     void getGCCRegAliases(const GCCRegAlias *&Aliases,
@@ -5677,24 +5677,23 @@ namespace {
 
       return true;
     }
-      
-    bool
-      validateAsmConstraint(const char *&Name,
-                            TargetInfo::ConstraintInfo &info) const override {
+
+    bool validateAsmConstraint(const char *&Name,
+                               TargetInfo::ConstraintInfo &info) const override {
           return validateConstraint(info);
     }
 
     BuiltinVaListKind getBuiltinVaListKind() const override {
       // FIXME: implement
       return TargetInfo::CharPtrBuiltinVaList;
-   }
-      
+    }
+
    const std::string& getCPU() const { return CPU; }
-      
+
    bool setCPU(const std::string &Name) override {
      // should be consistent with AVR.td
     bool CPUKnown = llvm::StringSwitch<bool>(Name)
-       
+
        // Generic MCUs
        .Case("avr1", true)
        .Case("avr2", true)
@@ -5707,7 +5706,7 @@ namespace {
        .Case("avr5", true)
        .Case("avr51", true)
        .Case("avr6", true)
-       
+
        // Specific MCUs
        .Case("avrxmega1", true)
        .Case("avrxmega2", true)
@@ -5955,10 +5954,10 @@ namespace {
        .Case("attiny20",           true)
        .Case("attiny40",           true)
        .Default(false);
-          
+
        if (CPUKnown)
            CPU = Name;
-          
+
         return CPUKnown;
       }
 

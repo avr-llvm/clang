@@ -911,7 +911,7 @@ static std::string getAArch64TargetCPU(const ArgList &Args) {
 
 static std::string getAvrTargetCPU(const ArgList &Args) {
     Arg *A;
-    
+
     std::string CPU;
     // If we have -mcpu, use that.
     if ((A = Args.getLastArg(options::OPT_mcpu_EQ))) {
@@ -922,7 +922,7 @@ static std::string getAvrTargetCPU(const ArgList &Args) {
         StringRef Mcpu = A->getValue();
         return Mcpu.split("+").first;
     }
-    
+
     // AVR-GCC uses 'avr2' as the default mcu
     return "avr2";
 }

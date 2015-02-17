@@ -5551,7 +5551,7 @@ void MSP430TargetCodeGenInfo::SetTargetAttributes(const Decl *D,
 //===----------------------------------------------------------------------===//
 
 namespace {
-    
+
     class AVRTargetCodeGenInfo : public TargetCodeGenInfo {
     public:
         AVRTargetCodeGenInfo(CodeGenTypes &CGT)
@@ -5559,7 +5559,7 @@ namespace {
         void SetTargetAttributes(const Decl *D, llvm::GlobalValue *GV,
                                  CodeGen::CodeGenModule &M) const override;
     };
-    
+
 }
 
 void AVRTargetCodeGenInfo::SetTargetAttributes(const Decl *D,
@@ -5569,18 +5569,18 @@ void AVRTargetCodeGenInfo::SetTargetAttributes(const Decl *D,
         if (const AVRSignalAttr *attr = FD->getAttr<AVRSignalAttr>()) {
             // Handle 'interrupt' attribute:
             llvm::Function *F = cast<llvm::Function>(GV);
-            
+
             // Step 1: Set ISR calling convention.
             F->setCallingConv(llvm::CallingConv::AVR_SIGNAL);
-            
+
             // Step 2: Add attributes goodness.
             F->addFnAttr(llvm::Attribute::NoInline);
-            
+
             // TODO : need to create alias?
-            
+
             // Step 3: Emit ISR vector alias.
-//            llvm::GlobalAlias::create(llvm::Function::ExternalLinkage,
-//                                      "__isr_" + F->getName(), F);
+            // llvm::GlobalAlias::create(llvm::Function::ExternalLinkage,
+            // "__isr_" + F->getName(), F);
         }
     }
 }
@@ -7188,7 +7188,7 @@ const TargetCodeGenInfo &CodeGenModule::getTargetCodeGenInfo() {
 
   case llvm::Triple::msp430:
     return *(TheTargetCodeGenInfo = new MSP430TargetCodeGenInfo(Types));
-          
+
   case llvm::Triple::avr:
     return *(TheTargetCodeGenInfo = new AVRTargetCodeGenInfo(Types));
 

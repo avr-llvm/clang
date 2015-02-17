@@ -1393,7 +1393,7 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
       StringRef value = arg->getValue();
       Opts.AVR = (value == "avr");
   }
-    
+
   if (Args.hasArg(OPT_fno_operator_names))
     Opts.CXXOperatorNames = 0;
 
