@@ -14,8 +14,8 @@
 #ifndef LLVM_CLANG_LIB_CODEGEN_CGOPENMPRUNTIME_H
 #define LLVM_CLANG_LIB_CODEGEN_CGOPENMPRUNTIME_H
 
-#include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/OpenMPKinds.h"
+#include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringMap.h"
@@ -88,6 +88,13 @@ private:
     OMPRTL__kmpc_master,
     // Call to void __kmpc_end_master(ident_t *, kmp_int32 global_tid);
     OMPRTL__kmpc_end_master,
+    // Call to kmp_int32 __kmpc_omp_taskyield(ident_t *, kmp_int32 global_tid,
+    // int end_part);
+    OMPRTL__kmpc_omp_taskyield,
+    // Call to kmp_int32 __kmpc_single(ident_t *, kmp_int32 global_tid);
+    OMPRTL__kmpc_single,
+    // Call to void __kmpc_end_single(ident_t *, kmp_int32 global_tid);
+    OMPRTL__kmpc_end_single,
   };
 
   /// \brief Values for bit flags used in the ident_t to describe the fields.
@@ -306,6 +313,16 @@ public:
                                    const std::function<void()> &MasterOpGen,
                                    SourceLocation Loc);
 
+  /// \brief Emits code for a taskyield directive.
+  virtual void EmitOMPTaskyieldCall(CodeGenFunction &CGF, SourceLocation Loc);
+
+  /// \brief Emits a single region.
+  /// \param SingleOpGen Generator for the statement associated with the given
+  /// single region.
+  virtual void EmitOMPSingleRegion(CodeGenFunction &CGF,
+                                   const std::function<void()> &SingleOpGen,
+                                   SourceLocation Loc);
+
   /// \brief Emits explicit barrier for OpenMP threads.
   /// \param IsExplicit true, if it is explicitly specified barrier.
   ///
@@ -319,6 +336,12 @@ public:
   ///
   virtual bool isStaticNonchunked(OpenMPScheduleClauseKind ScheduleKind,
                                   bool Chunked) const;
+
+  /// \brief Check if the specified \a ScheduleKind is dynamic.
+  /// This kind of worksharing directive is emitted without outer loop.
+  /// \param ScheduleKind Schedule Kind specified in the 'schedule' clause.
+  ///
+  virtual bool isDynamic(OpenMPScheduleClauseKind ScheduleKind) const;
 
   /// \brief Call the appropriate runtime routine to initialize it before start
   /// of loop.

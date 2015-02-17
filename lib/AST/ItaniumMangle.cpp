@@ -156,6 +156,8 @@ public:
   void mangleDynamicInitializer(const VarDecl *D, raw_ostream &Out) override;
   void mangleDynamicAtExitDestructor(const VarDecl *D,
                                      raw_ostream &Out) override;
+  void mangleSEHFilterExpression(const NamedDecl *EnclosingDecl,
+                                 raw_ostream &Out) override;
   void mangleItaniumThreadLocalInit(const VarDecl *D, raw_ostream &) override;
   void mangleItaniumThreadLocalWrapper(const VarDecl *D,
                                        raw_ostream &) override;
@@ -370,12 +372,14 @@ private:
   void mangleAArch64NeonVectorType(const VectorType *T);
 
   void mangleIntegerLiteral(QualType T, const llvm::APSInt &Value);
+  void mangleMemberExprBase(const Expr *base, bool isArrow);
   void mangleMemberExpr(const Expr *base, bool isArrow,
                         NestedNameSpecifier *qualifier,
                         NamedDecl *firstQualifierLookup,
                         DeclarationName name,
                         unsigned knownArity);
   void mangleCastExpression(const Expr *E, StringRef CastEncoding);
+  void mangleInitListElements(const InitListExpr *InitList);
   void mangleExpression(const Expr *E, unsigned Arity = UnknownArity);
   void mangleCXXCtorType(CXXCtorType T);
   void mangleCXXDtorType(CXXDtorType T);
@@ -1047,6 +1051,27 @@ void CXXNameMangler::mangleUnresolvedName(NestedNameSpecifier *qualifier,
                                           DeclarationName name,
                                           unsigned knownArity) {
   if (qualifier) mangleUnresolvedPrefix(qualifier, firstQualifierLookup);
+  switch (name.getNameKind()) {
+    // <base-unresolved-name> ::= <simple-id>
+    case DeclarationName::Identifier:
+      break;
+    // <base-unresolved-name> ::= on <operator-name>
+    case DeclarationName::CXXConversionFunctionName:
+    case DeclarationName::CXXLiteralOperatorName:
+    case DeclarationName::CXXOperatorName:
+      Out << "on";
+      break;
+    case DeclarationName::CXXDestructorName:
+      llvm_unreachable("Can't mangle a constructor name!");
+    case DeclarationName::CXXConstructorName:
+      llvm_unreachable("Can't mangle a constructor name!");
+    case DeclarationName::CXXUsingDirective:
+      llvm_unreachable("Can't mangle a using directive name!");
+    case DeclarationName::ObjCMultiArgSelector:
+    case DeclarationName::ObjCOneArgSelector:
+    case DeclarationName::ObjCZeroArgSelector:
+      llvm_unreachable("Can't mangle Objective-C selector names here!");
+  }
   mangleUnqualifiedName(nullptr, name, knownArity);
 }
 
@@ -1529,7 +1554,8 @@ void CXXNameMangler::mangleTemplatePrefix(TemplateName Template) {
    
   DependentTemplateName *Dependent = Template.getAsDependentTemplateName();
   assert(Dependent && "Unknown template name kind?");
-  manglePrefix(Dependent->getQualifier());
+  if (NestedNameSpecifier *Qualifier = Dependent->getQualifier())
+    manglePrefix(Qualifier);
   mangleUnscopedTemplateName(Template);
 }
 
@@ -2519,6 +2545,29 @@ void CXXNameMangler::mangleIntegerLiteral(QualType T,
 
 }
 
+void CXXNameMangler::mangleMemberExprBase(const Expr *Base, bool IsArrow) {
+  // Ignore member expressions involving anonymous unions.
+  while (const auto *RT = Base->getType()->getAs<RecordType>()) {
+    if (!RT->getDecl()->isAnonymousStructOrUnion())
+      break;
+    const auto *ME = dyn_cast<MemberExpr>(Base);
+    if (!ME)
+      break;
+    Base = ME->getBase();
+    IsArrow = ME->isArrow();
+  }
+
+  if (Base->isImplicitCXXThis()) {
+    // Note: GCC mangles member expressions to the implicit 'this' as
+    // *this., whereas we represent them as this->. The Itanium C++ ABI
+    // does not specify anything here, so we follow GCC.
+    Out << "dtdefpT";
+  } else {
+    Out << (IsArrow ? "pt" : "dt");
+    mangleExpression(Base);
+  }
+}
+
 /// Mangles a member expression.
 void CXXNameMangler::mangleMemberExpr(const Expr *base,
                                       bool isArrow,
@@ -2528,29 +2577,8 @@ void CXXNameMangler::mangleMemberExpr(const Expr *base,
                                       unsigned arity) {
   // <expression> ::= dt <expression> <unresolved-name>
   //              ::= pt <expression> <unresolved-name>
-  if (base) {
-
-    // Ignore member expressions involving anonymous unions.
-    while (const auto *RT = base->getType()->getAs<RecordType>()) {
-      if (!RT->getDecl()->isAnonymousStructOrUnion())
-        break;
-      const auto *ME = dyn_cast<MemberExpr>(base);
-      if (!ME)
-        break;
-      base = ME->getBase();
-      isArrow = ME->isArrow();
-    }
-
-    if (base->isImplicitCXXThis()) {
-      // Note: GCC mangles member expressions to the implicit 'this' as
-      // *this., whereas we represent them as this->. The Itanium C++ ABI
-      // does not specify anything here, so we follow GCC.
-      Out << "dtdefpT";
-    } else {
-      Out << (isArrow ? "pt" : "dt");
-      mangleExpression(base);
-    }
-  }
+  if (base)
+    mangleMemberExprBase(base, isArrow);
   mangleUnresolvedName(qualifier, firstQualifierLookup, member, arity);
 }
 
@@ -2590,6 +2618,13 @@ void CXXNameMangler::mangleCastExpression(const Expr *E, StringRef CastEncoding)
   Out << CastEncoding;
   mangleType(ECE->getType());
   mangleExpression(ECE->getSubExpr());
+}
+
+void CXXNameMangler::mangleInitListElements(const InitListExpr *InitList) {
+  if (auto *Syntactic = InitList->getSyntacticForm())
+    InitList = Syntactic;
+  for (unsigned i = 0, e = InitList->getNumInits(); i != e; ++i)
+    mangleExpression(InitList->getInit(i));
 }
 
 void CXXNameMangler::mangleExpression(const Expr *E, unsigned Arity) {
@@ -2641,7 +2676,6 @@ recurse:
 
   // FIXME: invent manglings for all these.
   case Expr::BlockExprClass:
-  case Expr::CXXPseudoDestructorExprClass:
   case Expr::ChooseExprClass:
   case Expr::CompoundLiteralExprClass:
   case Expr::ExtVectorElementExprClass:
@@ -2713,9 +2747,7 @@ recurse:
 
   case Expr::InitListExprClass: {
     Out << "il";
-    const InitListExpr *InitList = cast<InitListExpr>(E);
-    for (unsigned i = 0, e = InitList->getNumInits(); i != e; ++i)
-      mangleExpression(InitList->getInit(i));
+    mangleInitListElements(cast<InitListExpr>(E));
     Out << "E";
     break;
   }
@@ -2793,13 +2825,25 @@ recurse:
       } else if (New->getInitializationStyle() == CXXNewExpr::ListInit &&
                  isa<InitListExpr>(Init)) {
         // Only take InitListExprs apart for list-initialization.
-        const InitListExpr *InitList = cast<InitListExpr>(Init);
-        for (unsigned i = 0, e = InitList->getNumInits(); i != e; ++i)
-          mangleExpression(InitList->getInit(i));
+        mangleInitListElements(cast<InitListExpr>(Init));
       } else
         mangleExpression(Init);
     }
     Out << 'E';
+    break;
+  }
+
+  case Expr::CXXPseudoDestructorExprClass: {
+    const auto *PDE = cast<CXXPseudoDestructorExpr>(E);
+    if (const Expr *Base = PDE->getBase())
+      mangleMemberExprBase(Base, PDE->isArrow());
+    if (NestedNameSpecifier *Qualifier = PDE->getQualifier())
+      mangleUnresolvedPrefix(Qualifier, /*FirstQualifierLookup=*/nullptr);
+    // <base-unresolved-name> ::= dn <destructor-name>
+    Out << "dn";
+    // <destructor-name> ::= <unresolved-type>
+    //                   ::= <simple-id>
+    manglePrefix(PDE->getDestroyedType());
     break;
   }
 
@@ -2856,26 +2900,55 @@ recurse:
     break;
   }
 
-  case Expr::CXXTemporaryObjectExprClass:
   case Expr::CXXConstructExprClass: {
-    const CXXConstructExpr *CE = cast<CXXConstructExpr>(E);
-    unsigned N = CE->getNumArgs();
+    const auto *CE = cast<CXXConstructExpr>(E);
+    if (!CE->isListInitialization() || CE->isStdInitListInitialization()) {
+      assert(
+          CE->getNumArgs() >= 1 &&
+          (CE->getNumArgs() == 1 || isa<CXXDefaultArgExpr>(CE->getArg(1))) &&
+          "implicit CXXConstructExpr must have one argument");
+      return mangleExpression(cast<CXXConstructExpr>(E)->getArg(0));
+    }
+    Out << "il";
+    for (auto *E : CE->arguments())
+      mangleExpression(E);
+    Out << "E";
+    break;
+  }
 
-    if (CE->isListInitialization())
+  case Expr::CXXTemporaryObjectExprClass: {
+    const auto *CE = cast<CXXTemporaryObjectExpr>(E);
+    unsigned N = CE->getNumArgs();
+    bool List = CE->isListInitialization();
+
+    if (List)
       Out << "tl";
     else
       Out << "cv";
     mangleType(CE->getType());
-    if (N != 1) Out << '_';
-    for (unsigned I = 0; I != N; ++I) mangleExpression(CE->getArg(I));
-    if (N != 1) Out << 'E';
+    if (!List && N != 1)
+      Out << '_';
+    if (CE->isStdInitListInitialization()) {
+      // We implicitly created a std::initializer_list<T> for the first argument
+      // of a constructor of type U in an expression of the form U{a, b, c}.
+      // Strip all the semantic gunk off the initializer list.
+      auto *SILE =
+          cast<CXXStdInitializerListExpr>(CE->getArg(0)->IgnoreImplicit());
+      auto *ILE = cast<InitListExpr>(SILE->getSubExpr()->IgnoreImplicit());
+      mangleInitListElements(ILE);
+    } else {
+      for (auto *E : CE->arguments())
+        mangleExpression(E);
+    }
+    if (List || N != 1)
+      Out << 'E';
     break;
   }
 
   case Expr::CXXScalarValueInitExprClass:
-    Out <<"cv";
+    Out << "cv";
     mangleType(E->getType());
-    Out <<"_E";
+    Out << "_E";
     break;
 
   case Expr::CXXNoexceptExprClass:
@@ -3020,9 +3093,27 @@ recurse:
   // Fall through to mangle the cast itself.
       
   case Expr::CStyleCastExprClass:
-  case Expr::CXXFunctionalCastExprClass:
     mangleCastExpression(E, "cv");
     break;
+
+  case Expr::CXXFunctionalCastExprClass: {
+    auto *Sub = cast<ExplicitCastExpr>(E)->getSubExpr()->IgnoreImplicit();
+    // FIXME: Add isImplicit to CXXConstructExpr.
+    if (auto *CCE = dyn_cast<CXXConstructExpr>(Sub))
+      if (CCE->getParenOrBraceRange().isInvalid())
+        Sub = CCE->getArg(0)->IgnoreImplicit();
+    if (auto *StdInitList = dyn_cast<CXXStdInitializerListExpr>(Sub))
+      Sub = StdInitList->getSubExpr()->IgnoreImplicit();
+    if (auto *IL = dyn_cast<InitListExpr>(Sub)) {
+      Out << "tl";
+      mangleType(E->getType());
+      mangleInitListElements(IL);
+      Out << "E";
+    } else {
+      mangleCastExpression(E, "cv");
+    }
+    break;
+  }
 
   case Expr::CXXStaticCastExprClass:
     mangleCastExpression(E, "sc");
@@ -3843,6 +3934,16 @@ void ItaniumMangleContextImpl::mangleDynamicAtExitDestructor(const VarDecl *D,
     Mangler.mangle(D);
   else
     Mangler.getStream() << D->getName();
+}
+
+void ItaniumMangleContextImpl::mangleSEHFilterExpression(
+    const NamedDecl *EnclosingDecl, raw_ostream &Out) {
+  CXXNameMangler Mangler(*this, Out);
+  Mangler.getStream() << "__filt_";
+  if (shouldMangleDeclName(EnclosingDecl))
+    Mangler.mangle(EnclosingDecl);
+  else
+    Mangler.getStream() << EnclosingDecl->getName();
 }
 
 void ItaniumMangleContextImpl::mangleItaniumThreadLocalInit(const VarDecl *D,

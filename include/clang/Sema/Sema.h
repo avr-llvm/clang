@@ -199,6 +199,11 @@ namespace sema {
   class TemplateDeductionInfo;
 }
 
+namespace threadSafety {
+  class BeforeSet;
+  void threadSafetyCleanup(BeforeSet* Cache);
+}
+
 // FIXME: No way to easily map from TemplateTypeParmTypes to
 // TemplateTypeParmDecls, so we have this horrible PointerUnion.
 typedef std::pair<llvm::PointerUnion<const TemplateTypeParmType*, NamedDecl*>,
@@ -206,8 +211,8 @@ typedef std::pair<llvm::PointerUnion<const TemplateTypeParmType*, NamedDecl*>,
 
 /// Sema - This implements semantic analysis and AST building for C.
 class Sema {
-  Sema(const Sema &) LLVM_DELETED_FUNCTION;
-  void operator=(const Sema &) LLVM_DELETED_FUNCTION;
+  Sema(const Sema &) = delete;
+  void operator=(const Sema &) = delete;
 
   ///\brief Source of additional semantic information.
   ExternalSemaSource *ExternalSource;
@@ -2009,6 +2014,7 @@ public:
   SectionAttr *mergeSectionAttr(Decl *D, SourceRange Range, StringRef Name,
                                 unsigned AttrSpellingListIndex);
   AlwaysInlineAttr *mergeAlwaysInlineAttr(Decl *D, SourceRange Range,
+                                          IdentifierInfo *Ident,
                                           unsigned AttrSpellingListIndex);
   MinSizeAttr *mergeMinSizeAttr(Decl *D, SourceRange Range,
                                 unsigned AttrSpellingListIndex);
@@ -2278,8 +2284,9 @@ public:
   void AddFunctionCandidates(const UnresolvedSetImpl &Functions,
                       ArrayRef<Expr *> Args,
                       OverloadCandidateSet &CandidateSet,
+                      TemplateArgumentListInfo *ExplicitTemplateArgs = nullptr,
                       bool SuppressUserConversions = false,
-                      TemplateArgumentListInfo *ExplicitTemplateArgs = nullptr);
+                      bool PartialOverloading = false);
   void AddMethodCandidate(DeclAccessPair FoundDecl,
                           QualType ObjectType,
                           Expr::Classification ObjectClassification,
@@ -2292,7 +2299,8 @@ public:
                           Expr::Classification ObjectClassification,
                           ArrayRef<Expr *> Args,
                           OverloadCandidateSet& CandidateSet,
-                          bool SuppressUserConversions = false);
+                          bool SuppressUserConversions = false,
+                          bool PartialOverloading = false);
   void AddMethodTemplateCandidate(FunctionTemplateDecl *MethodTmpl,
                                   DeclAccessPair FoundDecl,
                                   CXXRecordDecl *ActingContext,
@@ -2301,13 +2309,15 @@ public:
                                   Expr::Classification ObjectClassification,
                                   ArrayRef<Expr *> Args,
                                   OverloadCandidateSet& CandidateSet,
-                                  bool SuppressUserConversions = false);
+                                  bool SuppressUserConversions = false,
+                                  bool PartialOverloading = false);
   void AddTemplateOverloadCandidate(FunctionTemplateDecl *FunctionTemplate,
                                     DeclAccessPair FoundDecl,
                                  TemplateArgumentListInfo *ExplicitTemplateArgs,
                                     ArrayRef<Expr *> Args,
                                     OverloadCandidateSet& CandidateSet,
-                                    bool SuppressUserConversions = false);
+                                    bool SuppressUserConversions = false,
+                                    bool PartialOverloading = false);
   void AddConversionCandidate(CXXConversionDecl *Conversion,
                               DeclAccessPair FoundDecl,
                               CXXRecordDecl *ActingContext,
@@ -3325,6 +3335,10 @@ public:
   /// \p PossibleBody, has a suspicious null statement as a body.
   void DiagnoseEmptyLoopBody(const Stmt *S,
                              const Stmt *PossibleBody);
+
+  /// Warn if a value is moved to itself.
+  void DiagnoseSelfMove(const Expr *LHSExpr, const Expr *RHSExpr,
+                        SourceLocation OpLoc);
 
   ParsingDeclState PushParsingDeclaration(sema::DelayedDiagnosticPool &pool) {
     return DelayedDiagnostics.push(pool);
@@ -4484,7 +4498,7 @@ public:
   void DeclareGlobalAllocationFunction(DeclarationName Name, QualType Return,
                                        QualType Param1,
                                        QualType Param2 = QualType(),
-                                       bool addMallocAttr = false);
+                                       bool addRestrictAttr = false);
 
   bool FindDeallocationFunction(SourceLocation StartLoc, CXXRecordDecl *RD,
                                 DeclarationName Name, FunctionDecl* &Operator,
@@ -4627,7 +4641,8 @@ public:
   bool ActOnSuperScopeSpecifier(SourceLocation SuperLoc,
                                 SourceLocation ColonColonLoc, CXXScopeSpec &SS);
 
-  bool isAcceptableNestedNameSpecifier(const NamedDecl *SD);
+  bool isAcceptableNestedNameSpecifier(const NamedDecl *SD,
+                                       bool *CanCorrect = nullptr);
   NamedDecl *FindFirstQualifierInScope(Scope *S, NestedNameSpecifier *NNS);
 
   bool isNonTypeNestedNameSpecifier(Scope *S, CXXScopeSpec &SS,
@@ -5171,8 +5186,6 @@ public:
 
   // FIXME: I don't like this name.
   void BuildBasePathArray(const CXXBasePaths &Paths, CXXCastPath &BasePath);
-
-  bool BasePathInvolvesVirtualBase(const CXXCastPath &BasePath);
 
   bool CheckDerivedToBaseConversion(QualType Derived, QualType Base,
                                     SourceLocation Loc, SourceRange Range,
@@ -6176,14 +6189,16 @@ public:
                                   unsigned NumExplicitlySpecified,
                                   FunctionDecl *&Specialization,
                                   sema::TemplateDeductionInfo &Info,
-           SmallVectorImpl<OriginalCallArg> const *OriginalCallArgs = nullptr);
+           SmallVectorImpl<OriginalCallArg> const *OriginalCallArgs = nullptr,
+                                  bool PartialOverloading = false);
 
   TemplateDeductionResult
   DeduceTemplateArguments(FunctionTemplateDecl *FunctionTemplate,
                           TemplateArgumentListInfo *ExplicitTemplateArgs,
                           ArrayRef<Expr *> Args,
                           FunctionDecl *&Specialization,
-                          sema::TemplateDeductionInfo &Info);
+                          sema::TemplateDeductionInfo &Info,
+                          bool PartialOverloading = false);
 
   TemplateDeductionResult
   DeduceTemplateArguments(FunctionTemplateDecl *FunctionTemplate,
@@ -6597,10 +6612,10 @@ public:
         ArrayRef<TemplateArgument> TemplateArgs = ArrayRef<TemplateArgument>(),
         sema::TemplateDeductionInfo *DeductionInfo = nullptr);
 
-    InstantiatingTemplate(const InstantiatingTemplate&) LLVM_DELETED_FUNCTION;
+    InstantiatingTemplate(const InstantiatingTemplate&) = delete;
 
     InstantiatingTemplate&
-    operator=(const InstantiatingTemplate&) LLVM_DELETED_FUNCTION;
+    operator=(const InstantiatingTemplate&) = delete;
   };
 
   void PrintInstantiationStack();
@@ -6698,6 +6713,7 @@ public:
 
   /// \brief Worker object for performing CFG-based warnings.
   sema::AnalysisBasedWarnings AnalysisWarnings;
+  threadSafety::BeforeSet *ThreadSafetyDeclCache;
 
   /// \brief An entity for which implicit template instantiation is required.
   ///
@@ -6715,12 +6731,17 @@ public:
 
   class SavePendingInstantiationsAndVTableUsesRAII {
   public:
-    SavePendingInstantiationsAndVTableUsesRAII(Sema &S): S(S) {
+    SavePendingInstantiationsAndVTableUsesRAII(Sema &S, bool Enabled)
+        : S(S), Enabled(Enabled) {
+      if (!Enabled) return;
+
       SavedPendingInstantiations.swap(S.PendingInstantiations);
       SavedVTableUses.swap(S.VTableUses);
     }
 
     ~SavePendingInstantiationsAndVTableUsesRAII() {
+      if (!Enabled) return;
+
       // Restore the set of pending vtables.
       assert(S.VTableUses.empty() &&
              "VTableUses should be empty before it is discarded.");
@@ -6736,6 +6757,7 @@ public:
     Sema &S;
     SmallVector<VTableUse, 16> SavedVTableUses;
     std::deque<PendingImplicitInstantiation> SavedPendingInstantiations;
+    bool Enabled;
   };
 
   /// \brief The queue of implicit template instantiations that are required
@@ -8399,6 +8421,8 @@ public:
   void CodeCompleteTypeQualifiers(DeclSpec &DS);
   void CodeCompleteCase(Scope *S);
   void CodeCompleteCall(Scope *S, Expr *Fn, ArrayRef<Expr *> Args);
+  void CodeCompleteConstructor(Scope *S, QualType Type, SourceLocation Loc,
+                               ArrayRef<Expr *> Args);
   void CodeCompleteInitializer(Scope *S, Decl *D);
   void CodeCompleteReturn(Scope *S);
   void CodeCompleteAfterIf(Scope *S);
@@ -8716,6 +8740,16 @@ public:
     if (const ObjCCategoryDecl *CatD = dyn_cast<ObjCCategoryDecl>(DC))
       DC = CatD->getClassInterface();
     return DC;
+  }
+
+  /// \brief To be used for checking whether the arguments being passed to
+  /// function exceeds the number of parameters expected for it.
+  static bool TooManyArguments(size_t NumParams, size_t NumArgs,
+                               bool PartialOverloading = false) {
+    // We check whether we're just after a comma in code-completion.
+    if (NumArgs > 0 && PartialOverloading)
+      return NumArgs + 1 > NumParams; // If so, we view as an extra argument.
+    return NumArgs > NumParams;
   }
 };
 

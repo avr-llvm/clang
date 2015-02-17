@@ -113,6 +113,9 @@ ParsedType Sema::getDestructorName(SourceLocation TildeLoc,
   bool isDependent = false;
   bool LookInScope = false;
 
+  if (SS.isInvalid())
+    return ParsedType();
+
   // If we have an object type, it's because we are in a
   // pseudo-destructor-expression or a member access expression, and
   // we know what type we're looking for.
@@ -982,18 +985,21 @@ Sema::BuildCXXTypeConstructExpr(TypeSourceInfo *TInfo,
   Expr *Inner = Result.get();
   if (CXXBindTemporaryExpr *BTE = dyn_cast_or_null<CXXBindTemporaryExpr>(Inner))
     Inner = BTE->getSubExpr();
-  if (isa<InitListExpr>(Inner)) {
-    // If the list-initialization doesn't involve a constructor call, we'll get
-    // the initializer-list (with corrected type) back, but that's not what we
-    // want, since it will be treated as an initializer list in further
-    // processing. Explicitly insert a cast here.
+  if (!isa<CXXTemporaryObjectExpr>(Inner)) {
+    // If we created a CXXTemporaryObjectExpr, that node also represents the
+    // functional cast. Otherwise, create an explicit cast to represent
+    // the syntactic form of a functional-style cast that was used here.
+    //
+    // FIXME: Creating a CXXFunctionalCastExpr around a CXXConstructExpr
+    // would give a more consistent AST representation than using a
+    // CXXTemporaryObjectExpr. It's also weird that the functional cast
+    // is sometimes handled by initialization and sometimes not.
     QualType ResultType = Result.get()->getType();
     Result = CXXFunctionalCastExpr::Create(
         Context, ResultType, Expr::getValueKindForType(TInfo->getType()), TInfo,
         CK_NoOp, Result.get(), /*Path=*/nullptr, LParenLoc, RParenLoc);
   }
 
-  // FIXME: Improve AST representation?
   return Result;
 }
 
@@ -2048,7 +2054,7 @@ void Sema::DeclareGlobalNewDelete() {
 void Sema::DeclareGlobalAllocationFunction(DeclarationName Name,
                                            QualType Return,
                                            QualType Param1, QualType Param2,
-                                           bool AddMallocAttr) {
+                                           bool AddRestrictAttr) {
   DeclContext *GlobalCtx = Context.getTranslationUnitDecl();
   unsigned NumParams = Param2.isNull() ? 1 : 2;
 
@@ -2071,8 +2077,9 @@ void Sema::DeclareGlobalAllocationFunction(DeclarationName Name,
         // FIXME: Do we need to check for default arguments here?
         if (InitialParam1Type == Param1 &&
             (NumParams == 1 || InitialParam2Type == Param2)) {
-          if (AddMallocAttr && !Func->hasAttr<MallocAttr>())
-            Func->addAttr(MallocAttr::CreateImplicit(Context));
+          if (AddRestrictAttr && !Func->hasAttr<RestrictAttr>())
+            Func->addAttr(RestrictAttr::CreateImplicit(
+                Context, RestrictAttr::GNU_malloc));
           // Make the function visible to name lookup, even if we found it in
           // an unimported module. It either is an implicitly-declared global
           // allocation function, or is suppressing that function.
@@ -2110,9 +2117,14 @@ void Sema::DeclareGlobalAllocationFunction(DeclarationName Name,
                          SourceLocation(), Name,
                          FnType, /*TInfo=*/nullptr, SC_None, false, true);
   Alloc->setImplicit();
+  
+  // Implicit sized deallocation functions always have default visibility.
+  Alloc->addAttr(VisibilityAttr::CreateImplicit(Context,
+                                                VisibilityAttr::Default));
 
-  if (AddMallocAttr)
-    Alloc->addAttr(MallocAttr::CreateImplicit(Context));
+  if (AddRestrictAttr)
+    Alloc->addAttr(
+        RestrictAttr::CreateImplicit(Context, RestrictAttr::GNU_malloc));
 
   ParmVarDecl *ParamDecls[2];
   for (unsigned I = 0; I != NumParams; ++I) {
@@ -5202,10 +5214,11 @@ static void noteOperatorArrows(Sema &S,
   }
 }
 
-ExprResult
-Sema::ActOnStartCXXMemberReference(Scope *S, Expr *Base, SourceLocation OpLoc,
-                                   tok::TokenKind OpKind, ParsedType &ObjectType,
-                                   bool &MayBePseudoDestructor) {
+ExprResult Sema::ActOnStartCXXMemberReference(Scope *S, Expr *Base,
+                                              SourceLocation OpLoc,
+                                              tok::TokenKind OpKind,
+                                              ParsedType &ObjectType,
+                                              bool &MayBePseudoDestructor) {
   // Since this might be a postfix expression, get rid of ParenListExprs.
   ExprResult Result = MaybeConvertParenListExprToParenExpr(S, Base);
   if (Result.isInvalid()) return ExprError();
@@ -5991,8 +6004,10 @@ static ExprResult attemptRecovery(Sema &SemaRef,
       if (auto *NNS = TC.getCorrectionSpecifier())
         Record = NNS->getAsType()->getAsCXXRecordDecl();
       if (!Record)
-        Record = cast<CXXRecordDecl>(ND->getDeclContext()->getRedeclContext());
-      R.setNamingClass(Record);
+        Record =
+            dyn_cast<CXXRecordDecl>(ND->getDeclContext()->getRedeclContext());
+      if (Record)
+        R.setNamingClass(Record);
 
       // Detect and handle the case where the decl might be an implicit
       // member.
@@ -6160,15 +6175,18 @@ public:
     while (!AmbiguousTypoExprs.empty()) {
       auto TE  = AmbiguousTypoExprs.back();
       auto Cached = TransformCache[TE];
-      AmbiguousTypoExprs.pop_back();
+      auto &State = SemaRef.getTypoExprState(TE);
+      State.Consumer->saveCurrentPosition();
       TransformCache.erase(TE);
       if (!TryTransform(E).isInvalid()) {
-        SemaRef.getTypoExprState(TE).Consumer->resetCorrectionStream();
+        State.Consumer->resetCorrectionStream();
         TransformCache.erase(TE);
         Res = ExprError();
         break;
-      } else
-        TransformCache[TE] = Cached;
+      }
+      AmbiguousTypoExprs.remove(TE);
+      State.Consumer->restoreSavedPosition();
+      TransformCache[TE] = Cached;
     }
 
     // Ensure that all of the TypoExprs within the current Expr have been found.
@@ -6227,8 +6245,12 @@ ExprResult Sema::CorrectDelayedTyposInExpr(
   if (E && !ExprEvalContexts.empty() && ExprEvalContexts.back().NumTypos &&
       (E->isTypeDependent() || E->isValueDependent() ||
        E->isInstantiationDependent())) {
+    auto TyposInContext = ExprEvalContexts.back().NumTypos;
+    assert(TyposInContext < ~0U && "Recursive call of CorrectDelayedTyposInExpr");
+    ExprEvalContexts.back().NumTypos = ~0U;
     auto TyposResolved = DelayedTypos.size();
     auto Result = TransformTypos(*this, Filter).Transform(E);
+    ExprEvalContexts.back().NumTypos = TyposInContext;
     TyposResolved -= DelayedTypos.size();
     if (Result.isInvalid() || Result.get() != E) {
       ExprEvalContexts.back().NumTypos -= TyposResolved;

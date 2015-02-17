@@ -322,7 +322,7 @@ void DeclRefExpr::computeDependence(const ASTContext &Ctx) {
 DeclRefExpr::DeclRefExpr(const ASTContext &Ctx,
                          NestedNameSpecifierLoc QualifierLoc,
                          SourceLocation TemplateKWLoc,
-                         ValueDecl *D, bool RefersToCapturedVariable,
+                         ValueDecl *D, bool RefersToEnclosingVariableOrCapture,
                          const DeclarationNameInfo &NameInfo,
                          NamedDecl *FoundD,
                          const TemplateArgumentListInfo *TemplateArgs,
@@ -343,7 +343,8 @@ DeclRefExpr::DeclRefExpr(const ASTContext &Ctx,
     getInternalFoundDecl() = FoundD;
   DeclRefExprBits.HasTemplateKWAndArgsInfo
     = (TemplateArgs || TemplateKWLoc.isValid()) ? 1 : 0;
-  DeclRefExprBits.RefersToCapturedVariable = RefersToCapturedVariable;
+  DeclRefExprBits.RefersToEnclosingVariableOrCapture =
+      RefersToEnclosingVariableOrCapture;
   if (TemplateArgs) {
     bool Dependent = false;
     bool InstantiationDependent = false;
@@ -367,14 +368,14 @@ DeclRefExpr *DeclRefExpr::Create(const ASTContext &Context,
                                  NestedNameSpecifierLoc QualifierLoc,
                                  SourceLocation TemplateKWLoc,
                                  ValueDecl *D,
-                                 bool RefersToCapturedVariable,
+                                 bool RefersToEnclosingVariableOrCapture,
                                  SourceLocation NameLoc,
                                  QualType T,
                                  ExprValueKind VK,
                                  NamedDecl *FoundD,
                                  const TemplateArgumentListInfo *TemplateArgs) {
   return Create(Context, QualifierLoc, TemplateKWLoc, D,
-                RefersToCapturedVariable,
+                RefersToEnclosingVariableOrCapture,
                 DeclarationNameInfo(D->getDeclName(), NameLoc),
                 T, VK, FoundD, TemplateArgs);
 }
@@ -383,7 +384,7 @@ DeclRefExpr *DeclRefExpr::Create(const ASTContext &Context,
                                  NestedNameSpecifierLoc QualifierLoc,
                                  SourceLocation TemplateKWLoc,
                                  ValueDecl *D,
-                                 bool RefersToCapturedVariable,
+                                 bool RefersToEnclosingVariableOrCapture,
                                  const DeclarationNameInfo &NameInfo,
                                  QualType T,
                                  ExprValueKind VK,
@@ -405,7 +406,7 @@ DeclRefExpr *DeclRefExpr::Create(const ASTContext &Context,
 
   void *Mem = Context.Allocate(Size, llvm::alignOf<DeclRefExpr>());
   return new (Mem) DeclRefExpr(Context, QualifierLoc, TemplateKWLoc, D,
-                               RefersToCapturedVariable,
+                               RefersToEnclosingVariableOrCapture,
                                NameInfo, FoundD, TemplateArgs, T, VK);
 }
 
@@ -1359,6 +1360,44 @@ IdentifierInfo *OffsetOfExpr::OffsetOfNode::getFieldName() const {
   return reinterpret_cast<IdentifierInfo *> (Data & ~(uintptr_t)Mask);
 }
 
+UnaryExprOrTypeTraitExpr::UnaryExprOrTypeTraitExpr(
+    UnaryExprOrTypeTrait ExprKind, Expr *E, QualType resultType,
+    SourceLocation op, SourceLocation rp)
+    : Expr(UnaryExprOrTypeTraitExprClass, resultType, VK_RValue, OK_Ordinary,
+           false, // Never type-dependent (C++ [temp.dep.expr]p3).
+           // Value-dependent if the argument is type-dependent.
+           E->isTypeDependent(), E->isInstantiationDependent(),
+           E->containsUnexpandedParameterPack()),
+      OpLoc(op), RParenLoc(rp) {
+  UnaryExprOrTypeTraitExprBits.Kind = ExprKind;
+  UnaryExprOrTypeTraitExprBits.IsType = false;
+  Argument.Ex = E;
+
+  // Check to see if we are in the situation where alignof(decl) should be
+  // dependent because decl's alignment is dependent.
+  if (ExprKind == UETT_AlignOf) {
+    if (!isValueDependent() || !isInstantiationDependent()) {
+      E = E->IgnoreParens();
+
+      const ValueDecl *D = nullptr;
+      if (const auto *DRE = dyn_cast<DeclRefExpr>(E))
+        D = DRE->getDecl();
+      else if (const auto *ME = dyn_cast<MemberExpr>(E))
+        D = ME->getMemberDecl();
+
+      if (D) {
+        for (const auto *I : D->specific_attrs<AlignedAttr>()) {
+          if (I->isAlignmentDependent()) {
+            setValueDependent(true);
+            setInstantiationDependent(true);
+            break;
+          }
+        }
+      }
+    }
+  }
+}
+
 MemberExpr *MemberExpr::Create(const ASTContext &C, Expr *base, bool isarrow,
                                NestedNameSpecifierLoc QualifierLoc,
                                SourceLocation TemplateKWLoc,
@@ -2199,9 +2238,7 @@ bool Expr::isUnusedResultAWarning(const Expr *&WarnE, SourceLocation &Loc,
     }
 
     if (const ObjCMethodDecl *MD = ME->getMethodDecl())
-      if (MD->hasAttr<WarnUnusedResultAttr>() ||
-          (MD->isPropertyAccessor() && !MD->getReturnType()->isVoidType() &&
-           !ME->getReceiverType()->isObjCIdType())) {
+      if (MD->hasAttr<WarnUnusedResultAttr>()) {
         WarnE = this;
         Loc = getExprLoc();
         return true;
@@ -3021,6 +3058,13 @@ bool Expr::HasSideEffects(const ASTContext &Ctx,
   case CXXReinterpretCastExprClass:
   case CXXConstCastExprClass:
   case CXXFunctionalCastExprClass: {
+    // While volatile reads are side-effecting in both C and C++, we treat them
+    // as having possible (not definite) side-effects. This allows idiomatic
+    // code to behave without warning, such as sizeof(*v) for a volatile-
+    // qualified pointer.
+    if (!IncludePossibleEffects)
+      break;
+
     const CastExpr *CE = cast<CastExpr>(this);
     if (CE->getCastKind() == CK_LValueToRValue &&
         CE->getSubExpr()->getType().isVolatileQualified())
@@ -3820,7 +3864,7 @@ DesignatedInitExpr::DesignatedInitExpr(const ASTContext &C, QualType Ty,
       // Compute type- and value-dependence.
       Expr *Index = IndexExprs[IndexIdx];
       if (Index->isTypeDependent() || Index->isValueDependent())
-        ExprBits.ValueDependent = true;
+        ExprBits.TypeDependent = ExprBits.ValueDependent = true;
       if (Index->isInstantiationDependent())
         ExprBits.InstantiationDependent = true;
       // Propagate unexpanded parameter packs.
@@ -3835,7 +3879,7 @@ DesignatedInitExpr::DesignatedInitExpr(const ASTContext &C, QualType Ty,
       Expr *End = IndexExprs[IndexIdx + 1];
       if (Start->isTypeDependent() || Start->isValueDependent() ||
           End->isTypeDependent() || End->isValueDependent()) {
-        ExprBits.ValueDependent = true;
+        ExprBits.TypeDependent = ExprBits.ValueDependent = true;
         ExprBits.InstantiationDependent = true;
       } else if (Start->isInstantiationDependent() || 
                  End->isInstantiationDependent()) {

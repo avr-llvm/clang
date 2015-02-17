@@ -45,9 +45,9 @@
 #ifndef LLVM_CLANG_ASTMATCHERS_ASTMATCHERS_H
 #define LLVM_CLANG_ASTMATCHERS_ASTMATCHERS_H
 
+#include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclFriend.h"
 #include "clang/AST/DeclTemplate.h"
-#include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchersInternal.h"
 #include "clang/ASTMatchers/ASTMatchersMacros.h"
 #include "llvm/ADT/Twine.h"
@@ -142,6 +142,20 @@ typedef internal::Matcher<NestedNameSpecifierLoc> NestedNameSpecifierLocMatcher;
 ///
 /// Usable as: Any Matcher
 inline internal::TrueMatcher anything() { return internal::TrueMatcher(); }
+
+/// \brief Matches the top declaration context.
+///
+/// Given
+/// \code
+///   int X;
+///   namespace NS {
+///   int Y;
+///   }  // namespace NS
+/// \endcode
+/// decl(hasDeclContext(translationUnitDecl()))
+///   matches "int X", but not "int Y".
+const internal::VariadicDynCastAllOfMatcher<Decl, TranslationUnitDecl>
+    translationUnitDecl;
 
 /// \brief Matches typedef declarations.
 ///
@@ -1774,7 +1788,7 @@ AST_MATCHER_P(CXXRecordDecl, isDerivedFrom,
 }
 
 /// \brief Overloaded method as shortcut for \c isDerivedFrom(hasName(...)).
-AST_MATCHER_P_OVERLOAD(CXXRecordDecl, isDerivedFrom, StringRef, BaseName, 1) {
+AST_MATCHER_P_OVERLOAD(CXXRecordDecl, isDerivedFrom, std::string, BaseName, 1) {
   assert(!BaseName.empty());
   return isDerivedFrom(hasName(BaseName)).matches(Node, Finder, Builder);
 }
@@ -1789,8 +1803,8 @@ AST_MATCHER_P_OVERLOAD(CXXRecordDecl, isSameOrDerivedFrom,
 
 /// \brief Overloaded method as shortcut for
 /// \c isSameOrDerivedFrom(hasName(...)).
-AST_MATCHER_P_OVERLOAD(CXXRecordDecl, isSameOrDerivedFrom, StringRef, BaseName,
-                       1) {
+AST_MATCHER_P_OVERLOAD(CXXRecordDecl, isSameOrDerivedFrom, std::string,
+                       BaseName, 1) {
   assert(!BaseName.empty());
   return isSameOrDerivedFrom(hasName(BaseName)).matches(Node, Finder, Builder);
 }

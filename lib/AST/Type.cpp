@@ -1089,7 +1089,7 @@ bool QualType::isTrivialType(ASTContext &Context) const {
 
 bool QualType::isTriviallyCopyableType(ASTContext &Context) const {
   if ((*this)->isArrayType())
-    return Context.getBaseElementType(*this).isTrivialType(Context);
+    return Context.getBaseElementType(*this).isTriviallyCopyableType(Context);
 
   if (Context.getLangOpts().ObjCAutoRefCount) {
     switch (getObjCLifetime()) {
@@ -1586,8 +1586,9 @@ StringRef FunctionType::getNameForCallConv(CallingConv CC) {
   case CC_X86_64SysV: return "sysv_abi";
   case CC_AAPCS: return "aapcs";
   case CC_AAPCS_VFP: return "aapcs-vfp";
-  case CC_PnaclCall: return "pnaclcall";
   case CC_IntelOclBicc: return "intel_ocl_bicc";
+  case CC_SpirFunction: return "spir_function";
+  case CC_SpirKernel: return "spir_kernel";
   }
 
   llvm_unreachable("Invalid calling convention.");
@@ -1936,7 +1937,6 @@ bool AttributedType::isCallingConv() const {
   case attr_pascal:
   case attr_ms_abi:
   case attr_sysv_abi:
-  case attr_pnaclcall:
   case attr_inteloclbicc:
     return true;
   }

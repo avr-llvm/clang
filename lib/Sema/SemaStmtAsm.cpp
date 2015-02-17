@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Sema/SemaInternal.h"
+#include "clang/AST/ExprCXX.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/Basic/TargetInfo.h"
@@ -86,6 +87,11 @@ static bool CheckNakedParmReference(Expr *E, Sema &S) {
   WorkList.push_back(E);
   while (WorkList.size()) {
     Expr *E = WorkList.pop_back_val();
+    if (isa<CXXThisExpr>(E)) {
+      S.Diag(E->getLocStart(), diag::err_asm_naked_this_ref);
+      S.Diag(Func->getAttr<NakedAttr>()->getLocation(), diag::note_attribute);
+      return true;
+    }
     if (DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(E)) {
       if (isa<ParmVarDecl>(DRE->getDecl())) {
         S.Diag(DRE->getLocStart(), diag::err_asm_naked_parm_ref);
@@ -226,6 +232,19 @@ StmtResult Sema::ActOnGCCAsmStmt(SourceLocation AsmLoc, bool IsSimple,
                               diag::err_asm_invalid_lvalue_in_input)
                          << Info.getConstraintStr()
                          << InputExpr->getSourceRange());
+    } else if (Info.requiresImmediateConstant() && !Info.allowsRegister()) {
+      llvm::APSInt Result;
+      if (!InputExpr->EvaluateAsInt(Result, Context))
+        return StmtError(
+            Diag(InputExpr->getLocStart(), diag::err_asm_immediate_expected)
+            << Info.getConstraintStr() << InputExpr->getSourceRange());
+      if (Result.slt(Info.getImmConstantMin()) ||
+          Result.sgt(Info.getImmConstantMax()))
+        return StmtError(Diag(InputExpr->getLocStart(),
+                              diag::err_invalid_asm_value_for_constraint)
+                         << Result.toString(10) << Info.getConstraintStr()
+                         << InputExpr->getSourceRange());
+
     } else {
       ExprResult Result = DefaultFunctionArrayLvalueConversion(Exprs[i]);
       if (Result.isInvalid())
@@ -294,32 +313,22 @@ StmtResult Sema::ActOnGCCAsmStmt(SourceLocation AsmLoc, bool IsSimple,
     if (!Piece.isOperand()) continue;
 
     // Look for the correct constraint index.
-    unsigned Idx = 0;
-    unsigned ConstraintIdx = 0;
-    for (unsigned i = 0, e = NS->getNumOutputs(); i != e; ++i, ++ConstraintIdx) {
-      TargetInfo::ConstraintInfo &Info = OutputConstraintInfos[i];
-      if (Idx == Piece.getOperandNo())
-        break;
-      ++Idx;
+    unsigned ConstraintIdx = Piece.getOperandNo();
+    unsigned NumOperands = NS->getNumOutputs() + NS->getNumInputs();
 
-      if (Info.isReadWrite()) {
-        if (Idx == Piece.getOperandNo())
+    // Look for the (ConstraintIdx - NumOperands + 1)th constraint with
+    // modifier '+'.
+    if (ConstraintIdx >= NumOperands) {
+      unsigned I = 0, E = NS->getNumOutputs();
+
+      for (unsigned Cnt = ConstraintIdx - NumOperands; I != E; ++I)
+        if (OutputConstraintInfos[I].isReadWrite() && Cnt-- == 0) {
+          ConstraintIdx = I;
           break;
-        ++Idx;
-      }
-    }
+        }
 
-    for (unsigned i = 0, e = NS->getNumInputs(); i != e; ++i, ++ConstraintIdx) {
-      TargetInfo::ConstraintInfo &Info = InputConstraintInfos[i];
-      if (Idx == Piece.getOperandNo())
-        break;
-      ++Idx;
-
-      if (Info.isReadWrite()) {
-        if (Idx == Piece.getOperandNo())
-          break;
-        ++Idx;
-      }
+      assert(I != E && "Invalid operand number should have been caught in "
+                       " AnalyzeAsmString");
     }
 
     // Now that we have the right indexes go ahead and check.

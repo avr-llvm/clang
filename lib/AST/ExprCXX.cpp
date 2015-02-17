@@ -208,8 +208,9 @@ void CXXNewExpr::AllocateArgsArray(const ASTContext &C, bool isArray,
 }
 
 bool CXXNewExpr::shouldNullCheckAllocation(const ASTContext &Ctx) const {
-  return getOperatorNew()->getType()->
-    castAs<FunctionProtoType>()->isNothrow(Ctx);
+  return getOperatorNew()->getType()->castAs<FunctionProtoType>()->isNothrow(
+             Ctx) &&
+         !getOperatorNew()->isReservedGlobalPlacementOperator();
 }
 
 // CXXDeleteExpr
@@ -359,8 +360,7 @@ OverloadExpr::OverloadExpr(StmtClass K, const ASTContext &C,
     Results = static_cast<DeclAccessPair *>(
                                 C.Allocate(sizeof(DeclAccessPair) * NumResults, 
                                            llvm::alignOf<DeclAccessPair>()));
-    memcpy(Results, &*Begin.getIterator(), 
-           NumResults * sizeof(DeclAccessPair));
+    memcpy(Results, Begin.I, NumResults * sizeof(DeclAccessPair));
   }
 
   // If we have explicit template arguments, check for dependent
@@ -401,8 +401,7 @@ void OverloadExpr::initializeResults(const ASTContext &C,
                                C.Allocate(sizeof(DeclAccessPair) * NumResults,
  
                                           llvm::alignOf<DeclAccessPair>()));
-     memcpy(Results, &*Begin.getIterator(), 
-            NumResults * sizeof(DeclAccessPair));
+     memcpy(Results, Begin.I, NumResults * sizeof(DeclAccessPair));
   }
 }
 

@@ -745,8 +745,8 @@ public:
   /// the parser will exit the scope.
   class ParseScope {
     Parser *Self;
-    ParseScope(const ParseScope &) LLVM_DELETED_FUNCTION;
-    void operator=(const ParseScope &) LLVM_DELETED_FUNCTION;
+    ParseScope(const ParseScope &) = delete;
+    void operator=(const ParseScope &) = delete;
 
   public:
     // ParseScope - Construct a new object to manage a scope in the
@@ -790,8 +790,8 @@ private:
   class ParseScopeFlags {
     Scope *CurScope;
     unsigned OldFlags;
-    ParseScopeFlags(const ParseScopeFlags &) LLVM_DELETED_FUNCTION;
-    void operator=(const ParseScopeFlags &) LLVM_DELETED_FUNCTION;
+    ParseScopeFlags(const ParseScopeFlags &) = delete;
+    void operator=(const ParseScopeFlags &) = delete;
 
   public:
     ParseScopeFlags(Parser *Self, unsigned ScopeFlags, bool ManageFlags = true);
@@ -1362,12 +1362,9 @@ private:
   typedef SmallVector<SourceLocation, 20> CommaLocsTy;
 
   /// ParseExpressionList - Used for C/C++ (argument-)expression-list.
-  bool
-  ParseExpressionList(SmallVectorImpl<Expr *> &Exprs,
-                      SmallVectorImpl<SourceLocation> &CommaLocs,
-                      void (Sema::*Completer)(Scope *S, Expr *Data,
-                                              ArrayRef<Expr *> Args) = nullptr,
-                      Expr *Data = nullptr);
+  bool ParseExpressionList(SmallVectorImpl<Expr *> &Exprs,
+                           SmallVectorImpl<SourceLocation> &CommaLocs,
+                           std::function<void()> Completer = nullptr);
 
   /// ParseSimpleExpressionList - A simple comma-separated list of expressions,
   /// used for misc language extensions.
@@ -2296,7 +2293,7 @@ private:
                                    Decl *TagDecl);
   ExprResult ParseCXXMemberInitializer(Decl *D, bool IsFunction,
                                        SourceLocation &EqualLoc);
-  void ParseCXXMemberDeclaratorBeforeInitializer(Declarator &DeclaratorInfo,
+  bool ParseCXXMemberDeclaratorBeforeInitializer(Declarator &DeclaratorInfo,
                                                  VirtSpecifiers &VS,
                                                  ExprResult &BitfieldSize,
                                                  LateParsedAttrList &LateAttrs);

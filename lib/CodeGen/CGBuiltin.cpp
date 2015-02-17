@@ -21,6 +21,7 @@
 #include "clang/Basic/TargetInfo.h"
 #include "clang/CodeGen/CGFunctionInfo.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/IR/CallSite.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Intrinsics.h"
@@ -389,9 +390,14 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     Value *ArgValue = EmitScalarExpr(E->getArg(0));
     llvm::Type *ArgType = ArgValue->getType();
 
-    Value *FnExpect = CGM.getIntrinsic(Intrinsic::expect, ArgType);
     Value *ExpectedValue = EmitScalarExpr(E->getArg(1));
+    // Don't generate llvm.expect on -O0 as the backend won't use it for
+    // anything.
+    // Note, we still IRGen ExpectedValue because it could have side-effects.
+    if (CGM.getCodeGenOpts().OptimizationLevel == 0)
+      return RValue::get(ArgValue);
 
+    Value *FnExpect = CGM.getIntrinsic(Intrinsic::expect, ArgType);
     Value *Result = Builder.CreateCall2(FnExpect, ArgValue, ExpectedValue,
                                         "expval");
     return RValue::get(Result);
@@ -1357,6 +1363,9 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
     return RValue::get(Builder.CreateCall(F, Arg0));
   }
 
+  case Builtin::BI__builtin_pow:
+  case Builtin::BI__builtin_powf:
+  case Builtin::BI__builtin_powl:
   case Builtin::BIpow:
   case Builtin::BIpowf:
   case Builtin::BIpowl: {
@@ -1650,6 +1659,67 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
         Builder.CreateAlignedLoad(IntToPtr, /*Align=*/4, /*isVolatile=*/true);
     return RValue::get(Load);
   }
+
+  case Builtin::BI__exception_code:
+  case Builtin::BI_exception_code:
+    return RValue::get(EmitSEHExceptionCode());
+  case Builtin::BI__exception_info:
+  case Builtin::BI_exception_info:
+    return RValue::get(EmitSEHExceptionInfo());
+  case Builtin::BI__abnormal_termination:
+  case Builtin::BI_abnormal_termination:
+    return RValue::get(EmitSEHAbnormalTermination());
+  case Builtin::BI_setjmpex: {
+    if (getTarget().getTriple().isOSMSVCRT()) {
+      llvm::Type *ArgTypes[] = {Int8PtrTy, Int8PtrTy};
+      llvm::AttributeSet ReturnsTwiceAttr =
+          AttributeSet::get(getLLVMContext(), llvm::AttributeSet::FunctionIndex,
+                            llvm::Attribute::ReturnsTwice);
+      llvm::Constant *SetJmpEx = CGM.CreateRuntimeFunction(
+          llvm::FunctionType::get(IntTy, ArgTypes, /*isVarArg=*/false),
+          "_setjmpex", ReturnsTwiceAttr);
+      llvm::Value *Buf =
+          Builder.CreateBitCast(EmitScalarExpr(E->getArg(0)), Int8PtrTy);
+      llvm::Value *FrameAddr =
+          Builder.CreateCall(CGM.getIntrinsic(Intrinsic::frameaddress),
+                             ConstantInt::get(Int32Ty, 0));
+      llvm::Value *Args[] = {Buf, FrameAddr};
+      llvm::CallSite CS = EmitRuntimeCallOrInvoke(SetJmpEx, Args);
+      CS.setAttributes(ReturnsTwiceAttr);
+      return RValue::get(CS.getInstruction());
+    }
+  }
+  case Builtin::BI_setjmp: {
+    if (getTarget().getTriple().isOSMSVCRT()) {
+      llvm::AttributeSet ReturnsTwiceAttr =
+          AttributeSet::get(getLLVMContext(), llvm::AttributeSet::FunctionIndex,
+                            llvm::Attribute::ReturnsTwice);
+      llvm::Value *Buf =
+          Builder.CreateBitCast(EmitScalarExpr(E->getArg(0)), Int8PtrTy);
+      llvm::CallSite CS;
+      if (getTarget().getTriple().getArch() == llvm::Triple::x86) {
+        llvm::Type *ArgTypes[] = {Int8PtrTy, IntTy};
+        llvm::Constant *SetJmp3 = CGM.CreateRuntimeFunction(
+            llvm::FunctionType::get(IntTy, ArgTypes, /*isVarArg=*/true),
+            "_setjmp3", ReturnsTwiceAttr);
+        llvm::Value *Count = ConstantInt::get(IntTy, 0);
+        llvm::Value *Args[] = {Buf, Count};
+        CS = EmitRuntimeCallOrInvoke(SetJmp3, Args);
+      } else {
+        llvm::Type *ArgTypes[] = {Int8PtrTy, Int8PtrTy};
+        llvm::Constant *SetJmp = CGM.CreateRuntimeFunction(
+            llvm::FunctionType::get(IntTy, ArgTypes, /*isVarArg=*/false),
+            "_setjmp", ReturnsTwiceAttr);
+        llvm::Value *FrameAddr =
+            Builder.CreateCall(CGM.getIntrinsic(Intrinsic::frameaddress),
+                               ConstantInt::get(Int32Ty, 0));
+        llvm::Value *Args[] = {Buf, FrameAddr};
+        CS = EmitRuntimeCallOrInvoke(SetJmp, Args);
+      }
+      CS.setAttributes(ReturnsTwiceAttr);
+      return RValue::get(CS.getInstruction());
+    }
+  }
   }
 
   // If this is an alias for a lib function (e.g. __builtin_sin), emit
@@ -1762,6 +1832,7 @@ Value *CodeGenFunction::EmitTargetBuiltinExpr(unsigned BuiltinID,
   case llvm::Triple::ppc64le:
     return EmitPPCBuiltinExpr(BuiltinID, E);
   case llvm::Triple::r600:
+  case llvm::Triple::amdgcn:
     return EmitR600BuiltinExpr(BuiltinID, E);
   default:
     return nullptr;
@@ -5954,6 +6025,60 @@ Value *CodeGenFunction::EmitX86BuiltinExpr(unsigned BuiltinID,
     // If palignr is shifting the pair of vectors more than 32 bytes, emit zero.
     return llvm::Constant::getNullValue(ConvertType(E->getType()));
   }
+  case X86::BI__builtin_ia32_pslldqi256: {
+    // Shift value is in bits so divide by 8.
+    unsigned shiftVal = cast<llvm::ConstantInt>(Ops[1])->getZExtValue() >> 3;
+
+    // If pslldq is shifting the vector more than 15 bytes, emit zero.
+    if (shiftVal >= 16)
+      return llvm::Constant::getNullValue(ConvertType(E->getType()));
+
+    SmallVector<llvm::Constant*, 32> Indices;
+    // 256-bit pslldq operates on 128-bit lanes so we need to handle that
+    for (unsigned l = 0; l != 32; l += 16) {
+      for (unsigned i = 0; i != 16; ++i) {
+        unsigned Idx = 32 + i - shiftVal;
+        if (Idx < 32) Idx -= 16; // end of lane, switch operand.
+        Indices.push_back(llvm::ConstantInt::get(Int32Ty, Idx + l));
+      }
+    }
+
+    llvm::Type *VecTy = llvm::VectorType::get(Int8Ty, 32);
+    Ops[0] = Builder.CreateBitCast(Ops[0], VecTy, "cast");
+    Value *Zero = llvm::Constant::getNullValue(VecTy);
+
+    Value *SV = llvm::ConstantVector::get(Indices);
+    SV = Builder.CreateShuffleVector(Zero, Ops[0], SV, "pslldq");
+    llvm::Type *ResultType = ConvertType(E->getType());
+    return Builder.CreateBitCast(SV, ResultType, "cast");
+  }
+  case X86::BI__builtin_ia32_psrldqi256: {
+    // Shift value is in bits so divide by 8.
+    unsigned shiftVal = cast<llvm::ConstantInt>(Ops[1])->getZExtValue() >> 3;
+
+    // If psrldq is shifting the vector more than 15 bytes, emit zero.
+    if (shiftVal >= 16)
+      return llvm::Constant::getNullValue(ConvertType(E->getType()));
+
+    SmallVector<llvm::Constant*, 32> Indices;
+    // 256-bit psrldq operates on 128-bit lanes so we need to handle that
+    for (unsigned l = 0; l != 32; l += 16) {
+      for (unsigned i = 0; i != 16; ++i) {
+        unsigned Idx = i + shiftVal;
+        if (Idx >= 16) Idx += 16; // end of lane, switch operand.
+        Indices.push_back(llvm::ConstantInt::get(Int32Ty, Idx + l));
+      }
+    }
+
+    llvm::Type *VecTy = llvm::VectorType::get(Int8Ty, 32);
+    Ops[0] = Builder.CreateBitCast(Ops[0], VecTy, "cast");
+    Value *Zero = llvm::Constant::getNullValue(VecTy);
+
+    Value *SV = llvm::ConstantVector::get(Indices);
+    SV = Builder.CreateShuffleVector(Ops[0], Zero, SV, "psrldq");
+    llvm::Type *ResultType = ConvertType(E->getType());
+    return Builder.CreateBitCast(SV, ResultType, "cast");
+  }
   case X86::BI__builtin_ia32_movntps:
   case X86::BI__builtin_ia32_movntps256:
   case X86::BI__builtin_ia32_movntpd:
@@ -5986,20 +6111,10 @@ Value *CodeGenFunction::EmitX86BuiltinExpr(unsigned BuiltinID,
   // 3DNow!
   case X86::BI__builtin_ia32_pswapdsf:
   case X86::BI__builtin_ia32_pswapdsi: {
-    const char *name;
-    Intrinsic::ID ID;
-    switch(BuiltinID) {
-    default: llvm_unreachable("Unsupported intrinsic!");
-    case X86::BI__builtin_ia32_pswapdsf:
-    case X86::BI__builtin_ia32_pswapdsi:
-      name = "pswapd";
-      ID = Intrinsic::x86_3dnowa_pswapd;
-      break;
-    }
     llvm::Type *MMXTy = llvm::Type::getX86_MMXTy(getLLVMContext());
     Ops[0] = Builder.CreateBitCast(Ops[0], MMXTy, "cast");
-    llvm::Function *F = CGM.getIntrinsic(ID);
-    return Builder.CreateCall(F, Ops, name);
+    llvm::Function *F = CGM.getIntrinsic(Intrinsic::x86_3dnowa_pswapd);
+    return Builder.CreateCall(F, Ops, "pswapd");
   }
   case X86::BI__builtin_ia32_rdrand16_step:
   case X86::BI__builtin_ia32_rdrand32_step:
@@ -6392,6 +6507,9 @@ Value *CodeGenFunction::EmitR600BuiltinExpr(unsigned BuiltinID,
   case R600::BI__builtin_amdgpu_ldexp:
   case R600::BI__builtin_amdgpu_ldexpf:
     return emitFPIntBuiltin(*this, E, Intrinsic::AMDGPU_ldexp);
+  case R600::BI__builtin_amdgpu_class:
+  case R600::BI__builtin_amdgpu_classf:
+    return emitFPIntBuiltin(*this, E, Intrinsic::AMDGPU_class);
    default:
     return nullptr;
   }

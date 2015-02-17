@@ -2173,7 +2173,7 @@ struct CompleteObject {
     assert(Value && "missing value for complete object");
   }
 
-  LLVM_EXPLICIT operator bool() const { return Value; }
+  explicit operator bool() const { return Value; }
 };
 
 /// Find the designated sub-object of an rvalue.
@@ -6834,7 +6834,7 @@ void DataRecursiveIntBinOpEvaluator::process(EvalResult &Result) {
 }
 
 bool IntExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
-  if (E->isAssignmentOp())
+  if (!Info.keepEvaluatingAfterFailure() && E->isAssignmentOp())
     return Error(E);
 
   if (DataRecursiveIntBinOpEvaluator::shouldEnqueue(E))
@@ -6846,7 +6846,11 @@ bool IntExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
   if (LHSTy->isAnyComplexType() || RHSTy->isAnyComplexType()) {
     ComplexValue LHS, RHS;
     bool LHSOK;
-    if (E->getLHS()->getType()->isRealFloatingType()) {
+    if (E->isAssignmentOp()) {
+      LValue LV;
+      EvaluateLValue(E->getLHS(), LV, Info);
+      LHSOK = false;
+    } else if (LHSTy->isRealFloatingType()) {
       LHSOK = EvaluateFloat(E->getLHS(), LHS.FloatReal, Info);
       if (LHSOK) {
         LHS.makeComplexFloat();

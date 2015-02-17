@@ -43,7 +43,11 @@ ID = ALIAS, ID##Group = 1 << SO_##ID##Group,
   NeedsUbsanRt = Undefined | Integer,
   NotAllowedWithTrap = Vptr,
   RequiresPIE = Memory | DataFlow,
-  NeedsUnwindTables = Address | Thread | Memory | DataFlow
+  NeedsUnwindTables = Address | Thread | Memory | DataFlow,
+  SupportsCoverage = Address | Memory | Leak | Undefined | Integer,
+  RecoverableByDefault = Undefined | Integer,
+  Unrecoverable = Address | Unreachable | Return,
+  LegacyFsanitizeRecoverMask = Undefined | Integer
 };
 }
 
@@ -116,9 +120,11 @@ static unsigned getToolchainUnsupportedKinds(const ToolChain &TC) {
   bool IsLinux = TC.getTriple().getOS() == llvm::Triple::Linux;
   bool IsX86 = TC.getTriple().getArch() == llvm::Triple::x86;
   bool IsX86_64 = TC.getTriple().getArch() == llvm::Triple::x86_64;
+  bool IsMIPS64 = TC.getTriple().getArch() == llvm::Triple::mips64 ||
+                  TC.getTriple().getArch() == llvm::Triple::mips64el;
 
   unsigned Unsupported = 0;
-  if (!(IsLinux && IsX86_64)) {
+  if (!(IsLinux && (IsX86_64 || IsMIPS64))) {
     Unsupported |= Memory | DataFlow;
   }
   if (!((IsLinux || IsFreeBSD) && IsX86_64)) {
@@ -144,8 +150,8 @@ bool SanitizerArgs::needsUnwindTables() const {
 
 void SanitizerArgs::clear() {
   Sanitizers.clear();
-  SanitizeRecover = false;
-  BlacklistFile = "";
+  RecoverableSanitizers.clear();
+  BlacklistFiles.clear();
   SanitizeCoverage = 0;
   MsanTrackOrigins = 0;
   AsanFieldPadding = 0;
@@ -203,8 +209,40 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
   }
   addAllOf(Sanitizers, Kinds);
 
-  SanitizeRecover = Args.hasFlag(options::OPT_fsanitize_recover,
-                                 options::OPT_fno_sanitize_recover, true);
+  // Parse -f(no-)?sanitize-recover flags.
+  unsigned RecoverableKinds = RecoverableByDefault;
+  unsigned DiagnosedUnrecoverableKinds = 0;
+  for (const auto *Arg : Args) {
+    if (Arg->getOption().matches(options::OPT_fsanitize_recover)) {
+      // FIXME: Add deprecation notice, and then remove this flag.
+      RecoverableKinds |= expandGroups(LegacyFsanitizeRecoverMask);
+      Arg->claim();
+    } else if (Arg->getOption().matches(options::OPT_fno_sanitize_recover)) {
+      // FIXME: Add deprecation notice, and then remove this flag.
+      RecoverableKinds &= ~expandGroups(LegacyFsanitizeRecoverMask);
+      Arg->claim();
+    } else if (Arg->getOption().matches(options::OPT_fsanitize_recover_EQ)) {
+      unsigned Add = parseArgValues(D, Arg, true);
+      // Report error if user explicitly tries to recover from unrecoverable
+      // sanitizer.
+      if (unsigned KindsToDiagnose =
+              Add & Unrecoverable & ~DiagnosedUnrecoverableKinds) {
+        SanitizerSet SetToDiagnose;
+        addAllOf(SetToDiagnose, KindsToDiagnose);
+        D.Diag(diag::err_drv_unsupported_option_argument)
+            << Arg->getOption().getName() << toString(SetToDiagnose);
+        DiagnosedUnrecoverableKinds |= KindsToDiagnose;
+      }
+      RecoverableKinds |= expandGroups(Add);
+      Arg->claim();
+    } else if (Arg->getOption().matches(options::OPT_fno_sanitize_recover_EQ)) {
+      RecoverableKinds &= ~expandGroups(parseArgValues(D, Arg, true));
+      Arg->claim();
+    }
+  }
+  RecoverableKinds &= Kinds;
+  RecoverableKinds &= ~Unrecoverable;
+  addAllOf(RecoverableSanitizers, RecoverableKinds);
 
   UbsanTrapOnError =
     Args.hasFlag(options::OPT_fsanitize_undefined_trap_on_error,
@@ -247,30 +285,34 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
   // -f(-no)sanitize=leak should change whether leak detection is enabled by
   // default in ASan?
 
-  // Parse -f(no-)sanitize-blacklist options.
-  if (Arg *BLArg = Args.getLastArg(options::OPT_fsanitize_blacklist,
-                                   options::OPT_fno_sanitize_blacklist)) {
-    if (BLArg->getOption().matches(options::OPT_fsanitize_blacklist)) {
-      std::string BLPath = BLArg->getValue();
-      if (llvm::sys::fs::exists(BLPath)) {
-        // Validate the blacklist format.
-        std::string BLError;
-        std::unique_ptr<llvm::SpecialCaseList> SCL(
-            llvm::SpecialCaseList::create(BLPath, BLError));
-        if (!SCL.get())
-          D.Diag(clang::diag::err_drv_malformed_sanitizer_blacklist) << BLError;
-        else
-          BlacklistFile = BLPath;
-      } else {
-        D.Diag(clang::diag::err_drv_no_such_file) << BLPath;
-      }
-    }
-  } else {
-    // If no -fsanitize-blacklist option is specified, try to look up for
-    // blacklist in the resource directory.
+  // Setup blacklist files.
+  // Add default blacklist from resource directory.
+  {
     std::string BLPath;
     if (getDefaultBlacklist(D, BLPath) && llvm::sys::fs::exists(BLPath))
-      BlacklistFile = BLPath;
+      BlacklistFiles.push_back(BLPath);
+  }
+  // Parse -f(no-)sanitize-blacklist options.
+  for (const auto *Arg : Args) {
+    if (Arg->getOption().matches(options::OPT_fsanitize_blacklist)) {
+      Arg->claim();
+      std::string BLPath = Arg->getValue();
+      if (llvm::sys::fs::exists(BLPath))
+        BlacklistFiles.push_back(BLPath);
+      else
+        D.Diag(clang::diag::err_drv_no_such_file) << BLPath;
+    } else if (Arg->getOption().matches(options::OPT_fno_sanitize_blacklist)) {
+      Arg->claim();
+      BlacklistFiles.clear();
+    }
+  }
+  // Validate blacklists format.
+  {
+    std::string BLError;
+    std::unique_ptr<llvm::SpecialCaseList> SCL(
+        llvm::SpecialCaseList::create(BlacklistFiles, BLError));
+    if (!SCL.get())
+      D.Diag(clang::diag::err_drv_malformed_sanitizer_blacklist) << BLError;
   }
 
   // Parse -f[no-]sanitize-memory-track-origins[=level] options.
@@ -295,7 +337,7 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
   }
 
   // Parse -fsanitize-coverage=N. Currently one of asan/msan/lsan is required.
-  if (NeedsAsan || NeedsMsan || NeedsLsan) {
+  if (hasOneOf(Sanitizers, SupportsCoverage)) {
     if (Arg *A = Args.getLastArg(options::OPT_fsanitize_coverage)) {
       StringRef S = A->getValue();
       // Legal values are 0..4.
@@ -360,15 +402,16 @@ void SanitizerArgs::addArgs(const llvm::opt::ArgList &Args,
     return;
   CmdArgs.push_back(Args.MakeArgString("-fsanitize=" + toString(Sanitizers)));
 
-  if (!SanitizeRecover)
-    CmdArgs.push_back("-fno-sanitize-recover");
+  if (!RecoverableSanitizers.empty())
+    CmdArgs.push_back(Args.MakeArgString("-fsanitize-recover=" +
+                                         toString(RecoverableSanitizers)));
 
   if (UbsanTrapOnError)
     CmdArgs.push_back("-fsanitize-undefined-trap-on-error");
 
-  if (!BlacklistFile.empty()) {
+  for (const auto &BLPath : BlacklistFiles) {
     SmallString<64> BlacklistOpt("-fsanitize-blacklist=");
-    BlacklistOpt += BlacklistFile;
+    BlacklistOpt += BLPath;
     CmdArgs.push_back(Args.MakeArgString(BlacklistOpt));
   }
 
@@ -425,7 +468,9 @@ unsigned expandGroups(unsigned Kinds) {
 unsigned parseArgValues(const Driver &D, const llvm::opt::Arg *A,
                         bool DiagnoseErrors) {
   assert((A->getOption().matches(options::OPT_fsanitize_EQ) ||
-          A->getOption().matches(options::OPT_fno_sanitize_EQ)) &&
+          A->getOption().matches(options::OPT_fno_sanitize_EQ) ||
+          A->getOption().matches(options::OPT_fsanitize_recover_EQ) ||
+          A->getOption().matches(options::OPT_fno_sanitize_recover_EQ)) &&
          "Invalid argument in parseArgValues!");
   unsigned Kinds = 0;
   for (unsigned I = 0, N = A->getNumValues(); I != N; ++I) {

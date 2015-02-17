@@ -42,6 +42,13 @@
 // RUN: %clang_cl /Gy /Gy- -### -- %s 2>&1 | FileCheck -check-prefix=Gy_ %s
 // Gy_-NOT: -ffunction-sections
 
+// RUN: %clang_cl /Gs -### -- %s 2>&1 | FileCheck -check-prefix=Gs %s
+// Gs: "-mstack-probe-size=0"
+// RUN: %clang_cl /Gs0 -### -- %s 2>&1 | FileCheck -check-prefix=Gs0 %s
+// Gs0: "-mstack-probe-size=0"
+// RUN: %clang_cl /Gs4096 -### -- %s 2>&1 | FileCheck -check-prefix=Gs4096 %s
+// Gs4096: "-mstack-probe-size=4096"
+
 // RUN: %clang_cl /Gw -### -- %s 2>&1 | FileCheck -check-prefix=Gw %s
 // Gw: -fdata-sections
 
@@ -115,6 +122,12 @@
 
 // RUN: %clang_cl /vmg /vmm /vms -### -- %s 2>&1 | FileCheck -check-prefix=VMX %s
 // VMX: '/vms' not allowed with '/vmm'
+
+// RUN: %clang_cl /volatile:iso -### -- %s 2>&1 | FileCheck -check-prefix=VOLATILE-ISO %s
+// VOLATILE-ISO-NOT: "-fms-volatile"
+
+// RUN: %clang_cl /volatile:ms -### -- %s 2>&1 | FileCheck -check-prefix=VOLATILE-MS %s
+// VOLATILE-MS: "-fms-volatile"
 
 // RUN: %clang_cl /W0 -### -- %s 2>&1 | FileCheck -check-prefix=W0 %s
 // W0: -w
@@ -245,7 +258,6 @@
 // RUN:     /Gm- \
 // RUN:     /Gr \
 // RUN:     /GS \
-// RUN:     /Gs1000 \
 // RUN:     /GT \
 // RUN:     /GX \
 // RUN:     /Gv \

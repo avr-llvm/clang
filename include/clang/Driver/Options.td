@@ -394,6 +394,8 @@ def fasm_blocks : Flag<["-"], "fasm-blocks">, Group<f_Group>, Flags<[CC1Option]>
 def fno_asm_blocks : Flag<["-"], "fno-asm-blocks">, Group<f_Group>;
 
 def fassume_sane_operator_new : Flag<["-"], "fassume-sane-operator-new">, Group<f_Group>;
+def fdef_sized_delete: Flag<["-"], "fdef-sized-delete">, Group<f_Group>,
+  HelpText<"Allow compiler-generated definition of sized deallocation function">, Flags<[CC1Option]>;
 def fastcp : Flag<["-"], "fastcp">, Group<f_Group>;
 def fastf : Flag<["-"], "fastf">, Group<f_Group>;
 def fast : Flag<["-"], "fast">, Group<f_Group>;
@@ -403,6 +405,11 @@ def fautolink : Flag <["-"], "fautolink">, Group<f_Group>;
 def fno_autolink : Flag <["-"], "fno-autolink">, Group<f_Group>,
   Flags<[DriverOption, CC1Option]>,
   HelpText<"Disable generation of linker directives for automatic library linking">;
+
+def fgnu_inline_asm : Flag<["-"], "fgnu-inline-asm">, Group<f_Group>, Flags<[DriverOption]>;
+def fno_gnu_inline_asm : Flag<["-"], "fno-gnu-inline-asm">, Group<f_Group>,
+  Flags<[DriverOption, CC1Option]>,
+  HelpText<"Disable GNU style inline asm">;
 
 def fprofile_sample_use_EQ : Joined<["-"], "fprofile-sample-use=">,
     Group<f_Group>, Flags<[DriverOption, CC1Option]>,
@@ -509,9 +516,8 @@ def fsignaling_math : Flag<["-"], "fsignaling-math">, Group<f_Group>;
 def fno_signaling_math : Flag<["-"], "fno-signaling-math">, Group<f_Group>;
 def fsanitize_EQ : CommaJoined<["-"], "fsanitize=">, Group<f_clang_Group>,
                    Flags<[CC1Option, CoreOption]>, MetaVarName<"<check>">,
-                   HelpText<"Enable runtime instrumentation for bug detection: "
-                            "address (memory errors) | thread (race detection) | "
-                            "undefined (miscellaneous undefined behavior)">;
+                   HelpText<"Turn on runtime checks for various forms of undefined "
+                            "or suspicious behavior. See user manual for available checks ">;
 def fno_sanitize_EQ : CommaJoined<["-"], "fno-sanitize=">, Group<f_clang_Group>;
 def fsanitize_blacklist : Joined<["-"], "fsanitize-blacklist=">,
                           Group<f_clang_Group>, Flags<[CC1Option, CoreOption]>,
@@ -534,11 +540,17 @@ def fno_sanitize_memory_track_origins : Flag<["-"], "fno-sanitize-memory-track-o
 def fsanitize_address_field_padding : Joined<["-"], "fsanitize-address-field-padding=">,
                                         Group<f_clang_Group>, Flags<[CC1Option]>,
                                         HelpText<"Level of field padding for AddressSanitizer">;
-def fsanitize_recover : Flag<["-"], "fsanitize-recover">,
-                        Group<f_clang_Group>;
+def fsanitize_recover : Flag<["-"], "fsanitize-recover">, Group<f_clang_Group>;
 def fno_sanitize_recover : Flag<["-"], "fno-sanitize-recover">,
-                           Group<f_clang_Group>, Flags<[CC1Option]>,
-                           HelpText<"Disable sanitizer check recovery">;
+                           Group<f_clang_Group>;
+def fsanitize_recover_EQ : CommaJoined<["-"], "fsanitize-recover=">,
+                           Group<f_clang_Group>,
+                           Flags<[CC1Option]>,
+                           HelpText<"Enable recovery for specified sanitizers">;
+def fno_sanitize_recover_EQ
+    : CommaJoined<["-"], "fno-sanitize-recover=">,
+      Group<f_clang_Group>,
+      HelpText<"Disable recovery for specified sanitizers">;
 def fsanitize_undefined_trap_on_error : Flag<["-"], "fsanitize-undefined-trap-on-error">,
                                         Group<f_clang_Group>, Flags<[CC1Option]>;
 def fno_sanitize_undefined_trap_on_error : Flag<["-"], "fno-sanitize-undefined-trap-on-error">,
@@ -556,7 +568,9 @@ def fno_reciprocal_math : Flag<["-"], "fno-reciprocal-math">, Group<f_Group>;
 def ffinite_math_only : Flag<["-"], "ffinite-math-only">, Group<f_Group>, Flags<[CC1Option]>;
 def fno_finite_math_only : Flag<["-"], "fno-finite-math-only">, Group<f_Group>;
 def fsigned_zeros : Flag<["-"], "fsigned-zeros">, Group<f_Group>;
-def fno_signed_zeros : Flag<["-"], "fno-signed-zeros">, Group<f_Group>;
+def fno_signed_zeros :
+  Flag<["-"], "fno-signed-zeros">, Group<f_Group>, Flags<[CC1Option]>,
+  HelpText<"Allow optimizations that ignore the sign of floating point zeros">;
 def fhonor_nans : Flag<["-"], "fhonor-nans">, Group<f_Group>;
 def fno_honor_nans : Flag<["-"], "fno-honor-nans">, Group<f_Group>;
 def fhonor_infinities : Flag<["-"], "fhonor-infinities">, Group<f_Group>;
@@ -576,6 +590,13 @@ def fno_for_scope : Flag<["-"], "fno-for-scope">, Group<f_Group>;
 def frewrite_includes : Flag<["-"], "frewrite-includes">, Group<f_Group>,
   Flags<[CC1Option]>;
 def fno_rewrite_includes : Flag<["-"], "fno-rewrite-includes">, Group<f_Group>;
+
+def frewrite_map_file : Separate<["-"], "frewrite-map-file">,
+                        Group<f_Group>,
+                        Flags<[ DriverOption, CC1Option ]>;
+def frewrite_map_file_EQ : Joined<["-"], "frewrite-map-file=">,
+                           Group<f_Group>,
+                           Flags<[DriverOption]>;
 
 def ffreestanding : Flag<["-"], "ffreestanding">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Assert that the compilation takes place in a freestanding environment">;
@@ -609,6 +630,7 @@ def fms_extensions : Flag<["-"], "fms-extensions">, Group<f_Group>, Flags<[CC1Op
   HelpText<"Accept some non-standard constructs supported by the Microsoft compiler">;
 def fms_compatibility : Flag<["-"], "fms-compatibility">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Enable full Microsoft Visual C++ compatibility">;
+def fms_volatile : Joined<["-"], "fms-volatile">, Group<f_Group>, Flags<[CC1Option]>;
 def fmsc_version : Joined<["-"], "fmsc-version=">, Group<f_Group>, Flags<[DriverOption, CoreOption]>,
   HelpText<"Microsoft compiler version number to report in _MSC_VER (0 = don't define it (default))">;
 def fms_compatibility_version
@@ -1097,20 +1119,24 @@ def mhwdiv_EQ : Joined<["-"], "mhwdiv=">, Group<m_Group>;
 def mglobal_merge : Flag<["-"], "mglobal-merge">, Group<m_Group>;
 def mhard_float : Flag<["-"], "mhard-float">, Group<m_Group>;
 def miphoneos_version_min_EQ : Joined<["-"], "miphoneos-version-min=">, Group<m_Group>;
-def mios_version_min_EQ : Joined<["-"], "mios-version-min=">, Alias<miphoneos_version_min_EQ>;
+def mios_version_min_EQ : Joined<["-"], "mios-version-min=">,
+  Alias<miphoneos_version_min_EQ>, HelpText<"Set iOS deployment target">;
 def mios_simulator_version_min_EQ : Joined<["-"], "mios-simulator-version-min=">, Alias<miphoneos_version_min_EQ>;
 def mkernel : Flag<["-"], "mkernel">, Group<m_Group>;
 def mlinker_version_EQ : Joined<["-"], "mlinker-version=">,
   Flags<[DriverOption]>;
 def mllvm : Separate<["-"], "mllvm">, Flags<[CC1Option,CC1AsOption,CoreOption]>,
   HelpText<"Additional arguments to forward to LLVM's option processing">;
-def mmacosx_version_min_EQ : Joined<["-"], "mmacosx-version-min=">, Group<m_Group>;
+def mmacosx_version_min_EQ : Joined<["-"], "mmacosx-version-min=">,
+  Group<m_Group>, HelpText<"Set Mac OS X deployment target">;
 def mms_bitfields : Flag<["-"], "mms-bitfields">, Group<m_Group>, Flags<[CC1Option]>,
   HelpText<"Set the default structure layout to be compatible with the Microsoft compiler standard">;
 def mstackrealign : Flag<["-"], "mstackrealign">, Group<m_Group>, Flags<[CC1Option]>,
   HelpText<"Force realign the stack at entry to every function">;
 def mstack_alignment : Joined<["-"], "mstack-alignment=">, Group<m_Group>, Flags<[CC1Option]>,
   HelpText<"Set the stack alignment">;
+def mstack_probe_size : Joined<["-"], "mstack-probe-size=">, Group<m_Group>, Flags<[CC1Option]>,
+  HelpText<"Set the stack probe size">;
 def mthread_model : Separate<["-"], "mthread-model">, Group<m_Group>, Flags<[CC1Option]>,
   HelpText<"The thread model to use, e.g. posix, single (posix by default)">;
 
@@ -1196,6 +1222,8 @@ def mfix_cortex_a53_835769 : Flag<["-"], "mfix-cortex-a53-835769">,
 def mno_fix_cortex_a53_835769 : Flag<["-"], "mno-fix-cortex-a53-835769">,
   Group<m_aarch64_Features_Group>,
   HelpText<"Don't workaround Cortex-A53 erratum 835769 (AArch64 only)">;
+def ffixed_x18 : Flag<["-"], "ffixed-x18">, Group<m_aarch64_Features_Group>,
+  HelpText<"Reserve the x18 register (AArch64 only)">;
 
 def mvsx : Flag<["-"], "mvsx">, Group<m_ppc_Features_Group>;
 def mno_vsx : Flag<["-"], "mno-vsx">, Group<m_ppc_Features_Group>;
@@ -1205,6 +1233,8 @@ def mno_power8_vector : Flag<["-"], "mno-power8-vector">,
     Group<m_ppc_Features_Group>;
 def mfprnd : Flag<["-"], "mfprnd">, Group<m_ppc_Features_Group>;
 def mno_fprnd : Flag<["-"], "mno-fprnd">, Group<m_ppc_Features_Group>;
+def mcmpb : Flag<["-"], "mcmpb">, Group<m_ppc_Features_Group>;
+def mno_cmpb : Flag<["-"], "mno-cmpb">, Group<m_ppc_Features_Group>;
 def mmfcrf : Flag<["-"], "mmfcrf">, Group<m_ppc_Features_Group>;
 def mno_mfcrf : Flag<["-"], "mno-mfcrf">, Group<m_ppc_Features_Group>;
 def mpopcntd : Flag<["-"], "mpopcntd">, Group<m_ppc_Features_Group>;
@@ -1213,6 +1243,11 @@ def mqpx : Flag<["-"], "mqpx">, Group<m_ppc_Features_Group>;
 def mno_qpx : Flag<["-"], "mno-qpx">, Group<m_ppc_Features_Group>;
 def mcrbits : Flag<["-"], "mcrbits">, Group<m_ppc_Features_Group>;
 def mno_crbits : Flag<["-"], "mno-crbits">, Group<m_ppc_Features_Group>;
+def minvariant_function_descriptors :
+  Flag<["-"], "minvariant-function-descriptors">, Group<m_ppc_Features_Group>;
+def mno_invariant_function_descriptors :
+  Flag<["-"], "mno-invariant-function-descriptors">,
+  Group<m_ppc_Features_Group>;
 
 def faltivec : Flag<["-"], "faltivec">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Enable AltiVec vector initializer syntax">;
@@ -1423,7 +1458,10 @@ def resource_dir_EQ : Joined<["-"], "resource-dir=">, Flags<[DriverOption]>,
 def rpath : Separate<["-"], "rpath">, Flags<[LinkerInput]>;
 def rtlib_EQ : Joined<["-", "--"], "rtlib=">;
 def r : Flag<["-"], "r">;
+def save_temps_EQ : Joined<["-", "--"], "save-temps=">, Flags<[DriverOption]>,
+  HelpText<"Save intermediate compilation results.">;
 def save_temps : Flag<["-", "--"], "save-temps">, Flags<[DriverOption]>,
+  Alias<save_temps_EQ>, AliasArgs<["cwd"]>,
   HelpText<"Save intermediate compilation results">;
 def via_file_asm : Flag<["-", "--"], "via-file-asm">, InternalDebugOpt,
   HelpText<"Write assembly to file for input to assemble jobs">;

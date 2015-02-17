@@ -466,14 +466,21 @@ StmtResult Parser::ParseSEHExceptBlock(SourceLocation ExceptLoc) {
   if (ExpectAndConsume(tok::l_paren))
     return StmtError();
 
-  ParseScope ExpectScope(this, Scope::DeclScope | Scope::ControlScope);
+  ParseScope ExpectScope(this, Scope::DeclScope | Scope::ControlScope |
+                                   Scope::SEHExceptScope);
 
   if (getLangOpts().Borland) {
     Ident__exception_info->setIsPoisoned(false);
     Ident___exception_info->setIsPoisoned(false);
     Ident_GetExceptionInfo->setIsPoisoned(false);
   }
-  ExprResult FilterExpr(ParseExpression());
+
+  ExprResult FilterExpr;
+  {
+    ParseScopeFlags FilterScope(this, getCurScope()->getFlags() |
+                                          Scope::SEHFilterScope);
+    FilterExpr = ParseExpression();
+  }
 
   if (getLangOpts().Borland) {
     Ident__exception_info->setIsPoisoned(true);
@@ -1801,7 +1808,7 @@ StmtResult Parser::ParseReturnStatement() {
              diag::ext_generalized_initializer_lists)
           << R.get()->getSourceRange();
     } else
-        R = ParseExpression();
+      R = ParseExpression();
     if (R.isInvalid()) {
       SkipUntil(tok::r_brace, StopAtSemi | StopBeforeMatch);
       return StmtError();

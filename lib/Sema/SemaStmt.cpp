@@ -265,10 +265,6 @@ void Sema::DiagnoseUnusedExprResult(const Stmt *S) {
         Diag(Loc, diag::warn_unused_result) << R1 << R2;
         return;
       }
-      if (MD->isPropertyAccessor()) {
-        Diag(Loc, diag::warn_unused_property_expr);
-        return;
-      }
     }
   } else if (const PseudoObjectExpr *POE = dyn_cast<PseudoObjectExpr>(E)) {
     const Expr *Source = POE->getSyntacticForm();
@@ -2484,7 +2480,7 @@ VarDecl *Sema::getCopyElisionCandidate(QualType ReturnType,
   // - in a return statement in a function [where] ...
   // ... the expression is the name of a non-volatile automatic object ...
   DeclRefExpr *DR = dyn_cast<DeclRefExpr>(E->IgnoreParens());
-  if (!DR || DR->refersToCapturedVariable())
+  if (!DR || DR->refersToEnclosingVariableOrCapture())
     return nullptr;
   VarDecl *VD = dyn_cast<VarDecl>(DR->getDecl());
   if (!VD)
@@ -3303,6 +3299,14 @@ StmtResult Sema::ActOnCXXTryBlock(SourceLocation TryLoc, Stmt *TryBlock,
   if (getCurScope() && getCurScope()->isOpenMPSimdDirectiveScope())
     Diag(TryLoc, diag::err_omp_simd_region_cannot_use_stmt) << "try";
 
+  sema::FunctionScopeInfo *FSI = getCurFunction();
+
+  // C++ try is incompatible with SEH __try.
+  if (!getLangOpts().Borland && FSI->FirstSEHTryLoc.isValid()) {
+    Diag(TryLoc, diag::err_mixing_cxx_try_seh_try);
+    Diag(FSI->FirstSEHTryLoc, diag::note_conflicting_try_here) << "'__try'";
+  }
+
   const unsigned NumHandlers = Handlers.size();
   assert(NumHandlers > 0 &&
          "The parser shouldn't call this if there are no handlers.");
@@ -3345,7 +3349,7 @@ StmtResult Sema::ActOnCXXTryBlock(SourceLocation TryLoc, Stmt *TryBlock,
     }
   }
 
-  getCurFunction()->setHasBranchProtectedScope();
+  FSI->setHasCXXTry(TryLoc);
 
   // FIXME: We should detect handlers that cannot catch anything because an
   // earlier handler catches a superclass. Need to find a method that is not
@@ -3356,16 +3360,35 @@ StmtResult Sema::ActOnCXXTryBlock(SourceLocation TryLoc, Stmt *TryBlock,
   return CXXTryStmt::Create(Context, TryLoc, TryBlock, Handlers);
 }
 
-StmtResult
-Sema::ActOnSEHTryBlock(bool IsCXXTry,
-                       SourceLocation TryLoc,
-                       Stmt *TryBlock,
-                       Stmt *Handler) {
+StmtResult Sema::ActOnSEHTryBlock(bool IsCXXTry, SourceLocation TryLoc,
+                                  Stmt *TryBlock, Stmt *Handler) {
   assert(TryBlock && Handler);
 
-  getCurFunction()->setHasBranchProtectedScope();
+  sema::FunctionScopeInfo *FSI = getCurFunction();
 
-  return SEHTryStmt::Create(Context,IsCXXTry,TryLoc,TryBlock,Handler);
+  // SEH __try is incompatible with C++ try. Borland appears to support this,
+  // however.
+  if (!getLangOpts().Borland) {
+    if (FSI->FirstCXXTryLoc.isValid()) {
+      Diag(TryLoc, diag::err_mixing_cxx_try_seh_try);
+      Diag(FSI->FirstCXXTryLoc, diag::note_conflicting_try_here) << "'try'";
+    }
+  }
+
+  FSI->setHasSEHTry(TryLoc);
+
+  // Reject __try in Obj-C methods, blocks, and captured decls, since we don't
+  // track if they use SEH.
+  DeclContext *DC = CurContext;
+  while (DC && !DC->isFunctionOrMethod())
+    DC = DC->getParent();
+  FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(DC);
+  if (FD)
+    FD->setUsesSEHTry(true);
+  else
+    Diag(TryLoc, diag::err_seh_try_outside_functions);
+
+  return SEHTryStmt::Create(Context, IsCXXTry, TryLoc, TryBlock, Handler);
 }
 
 StmtResult

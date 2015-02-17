@@ -89,7 +89,9 @@ ModuleMap::ModuleMap(SourceManager &SourceMgr, DiagnosticsEngine &Diags,
                      HeaderSearch &HeaderInfo)
     : SourceMgr(SourceMgr), Diags(Diags), LangOpts(LangOpts), Target(Target),
       HeaderInfo(HeaderInfo), BuiltinIncludeDir(nullptr),
-      CompilingModule(nullptr), SourceModule(nullptr) {}
+      CompilingModule(nullptr), SourceModule(nullptr) {
+  MMapLangOpts.LineComment = true;
+}
 
 ModuleMap::~ModuleMap() {
   for (llvm::StringMap<Module *>::iterator I = Modules.begin(), 
@@ -314,6 +316,22 @@ void ModuleMap::diagnoseHeaderInclusion(Module *RequestingModule,
   }
 }
 
+static bool isBetterKnownHeader(const ModuleMap::KnownHeader &New,
+                                const ModuleMap::KnownHeader &Old) {
+  // Prefer a public header over a private header.
+  if ((New.getRole() & ModuleMap::PrivateHeader) !=
+      (Old.getRole() & ModuleMap::PrivateHeader))
+    return !(New.getRole() & ModuleMap::PrivateHeader);
+
+  // Prefer a non-textual header over a textual header.
+  if ((New.getRole() & ModuleMap::TextualHeader) !=
+      (Old.getRole() & ModuleMap::TextualHeader))
+    return !(New.getRole() & ModuleMap::TextualHeader);
+
+  // Don't have a reason to choose between these. Just keep the first one.
+  return false;
+}
+
 ModuleMap::KnownHeader
 ModuleMap::findModuleForHeader(const FileEntry *File,
                                Module *RequestingModule,
@@ -348,8 +366,7 @@ ModuleMap::findModuleForHeader(const FileEntry *File,
           !directlyUses(RequestingModule, I->getModule()))
         continue;
 
-      // Prefer a public header over a private header.
-      if (!Result || (Result.getRole() & ModuleMap::PrivateHeader))
+      if (!Result || isBetterKnownHeader(*I, Result))
         Result = *I;
     }
     return MakeResult(Result);
@@ -563,30 +580,6 @@ ModuleMap::findOrCreateModule(StringRef Name, Module *Parent, bool IsFramework,
   return std::make_pair(Result, true);
 }
 
-bool ModuleMap::canInferFrameworkModule(const DirectoryEntry *ParentDir,
-                                        StringRef Name, bool &IsSystem) const {
-  // Check whether we have already looked into the parent directory
-  // for a module map.
-  llvm::DenseMap<const DirectoryEntry *, InferredDirectory>::const_iterator
-    inferred = InferredDirectories.find(ParentDir);
-  if (inferred == InferredDirectories.end())
-    return false;
-
-  if (!inferred->second.InferModules)
-    return false;
-
-  // We're allowed to infer for this directory, but make sure it's okay
-  // to infer this particular module.
-  bool canInfer = std::find(inferred->second.ExcludedModules.begin(),
-                            inferred->second.ExcludedModules.end(),
-                            Name) == inferred->second.ExcludedModules.end();
-
-  if (canInfer && inferred->second.InferSystemModules)
-    IsSystem = true;
-
-  return canInfer;
-}
-
 /// \brief For a framework module, infer the framework against which we
 /// should link.
 static void inferFrameworkLink(Module *Mod, const DirectoryEntry *FrameworkDir,
@@ -609,6 +602,15 @@ ModuleMap::inferFrameworkModule(StringRef ModuleName,
                                 const DirectoryEntry *FrameworkDir,
                                 bool IsSystem,
                                 Module *Parent) {
+  Attributes Attrs;
+  Attrs.IsSystem = IsSystem;
+  return inferFrameworkModule(ModuleName, FrameworkDir, Attrs, Parent);
+}
+
+Module *ModuleMap::inferFrameworkModule(StringRef ModuleName,
+                                        const DirectoryEntry *FrameworkDir,
+                                        Attributes Attrs, Module *Parent) {
+
   // Check whether we've already found this module.
   if (Module *Mod = lookupModuleQualified(ModuleName, Parent))
     return Mod;
@@ -649,7 +651,7 @@ ModuleMap::inferFrameworkModule(StringRef ModuleName,
           bool IsFrameworkDir = Parent.endswith(".framework");
           if (const FileEntry *ModMapFile =
                 HeaderInfo.lookupModuleMapFile(ParentDir, IsFrameworkDir)) {
-            parseModuleMapFile(ModMapFile, IsSystem, ParentDir);
+            parseModuleMapFile(ModMapFile, Attrs.IsSystem, ParentDir);
             inferred = InferredDirectories.find(ParentDir);
           }
 
@@ -666,8 +668,9 @@ ModuleMap::inferFrameworkModule(StringRef ModuleName,
                                inferred->second.ExcludedModules.end(),
                                Name) == inferred->second.ExcludedModules.end();
 
-          if (inferred->second.InferSystemModules)
-            IsSystem = true;
+          Attrs.IsSystem |= inferred->second.Attrs.IsSystem;
+          Attrs.IsExternC |= inferred->second.Attrs.IsExternC;
+          Attrs.IsExhaustive |= inferred->second.Attrs.IsExhaustive;
           ModuleMapFile = inferred->second.ModuleMapFile;
         }
       }
@@ -699,9 +702,11 @@ ModuleMap::inferFrameworkModule(StringRef ModuleName,
     SourceModule = Result;
     SourceModuleName = ModuleName;
   }
-  if (IsSystem)
-    Result->IsSystem = IsSystem;
-  
+
+  Result->IsSystem |= Attrs.IsSystem;
+  Result->IsExternC |= Attrs.IsExternC;
+  Result->ConfigMacrosExhaustive |= Attrs.IsExhaustive;
+
   if (!Parent)
     Modules[ModuleName] = Result;
   
@@ -756,8 +761,8 @@ ModuleMap::inferFrameworkModule(StringRef ModuleName,
       // FIXME: Do we want to warn about subframeworks without umbrella headers?
       SmallString<32> NameBuf;
       inferFrameworkModule(sanitizeFilenameAsIdentifier(
-                             llvm::sys::path::stem(Dir->path()), NameBuf),
-                           SubframeworkDir, IsSystem, Result);
+                               llvm::sys::path::stem(Dir->path()), NameBuf),
+                           SubframeworkDir, Attrs, Result);
     }
   }
 
@@ -996,21 +1001,6 @@ namespace clang {
     }
   };
 
-  /// \brief The set of attributes that can be attached to a module.
-  struct Attributes {
-    Attributes() : IsSystem(), IsExternC(), IsExhaustive() { }
-
-    /// \brief Whether this is a system module.
-    unsigned IsSystem : 1;
-
-    /// \brief Whether this is an extern "C" module.
-    unsigned IsExternC : 1;
-
-    /// \brief Whether this is an exhaustive set of configuration macros.
-    unsigned IsExhaustive : 1;
-  };
-  
-
   class ModuleMapParser {
     Lexer &L;
     SourceManager &SourceMgr;
@@ -1069,6 +1059,8 @@ namespace clang {
     void parseConfigMacros();
     void parseConflict();
     void parseInferredModuleDecl(bool Framework, bool Explicit);
+
+    typedef ModuleMap::Attributes Attributes;
     bool parseOptionalAttributes(Attributes &Attrs);
     
   public:
@@ -2141,7 +2133,7 @@ void ModuleMapParser::parseInferredModuleDecl(bool Framework, bool Explicit) {
   } else {
     // We'll be inferring framework modules for this directory.
     Map.InferredDirectories[Directory].InferModules = true;
-    Map.InferredDirectories[Directory].InferSystemModules = Attrs.IsSystem;
+    Map.InferredDirectories[Directory].Attrs = Attrs;
     Map.InferredDirectories[Directory].ModuleMapFile = ModuleMapFile;
     // FIXME: Handle the 'framework' keyword.
   }
