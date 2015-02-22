@@ -339,6 +339,9 @@ CodeGen::CGCXXABI *CodeGen::CreateItaniumCXXABI(CodeGenModule &CGM) {
     return new ItaniumCXXABI(CGM, /* UseARMMethodPtrABI = */ true,
                              /* UseARMGuardVarABI = */ true);
 
+  case TargetCXXABI::GenericMIPS:
+    return new ItaniumCXXABI(CGM, /* UseARMMethodPtrABI = */ true);
+
   case TargetCXXABI::GenericItanium:
     if (CGM.getContext().getTargetInfo().getTriple().getArch()
         == llvm::Triple::le32) {
@@ -1278,6 +1281,8 @@ void ItaniumCXXABI::emitVTableDefinitions(CodeGenVTables &CGVT,
       cast<NamespaceDecl>(DC)->getIdentifier()->isStr("__cxxabiv1") &&
       DC->getParent()->isTranslationUnit())
     EmitFundamentalRTTIDescriptors();
+
+  CGM.EmitVTableBitSetEntries(VTable, VTLayout);
 }
 
 llvm::Value *ItaniumCXXABI::getVTableAddressPointInStructor(
@@ -1368,6 +1373,8 @@ llvm::Value *ItaniumCXXABI::getVirtualFunctionPointer(CodeGenFunction &CGF,
   GD = GD.getCanonicalDecl();
   Ty = Ty->getPointerTo()->getPointerTo();
   llvm::Value *VTable = CGF.GetVTablePtr(This, Ty);
+
+  CGF.EmitVTablePtrCheckForCall(cast<CXXMethodDecl>(GD.getDecl()), VTable);
 
   uint64_t VTableIndex = CGM.getItaniumVTableContext().getMethodVTableIndex(GD);
   llvm::Value *VFuncPtr =

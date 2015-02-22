@@ -31,8 +31,10 @@
 // CHECK-UNDEFINED-TRAP-ON-ERROR-VPTR: '-fsanitize=vptr' not allowed with '-fsanitize-undefined-trap-on-error'
 
 // RUN: %clang -target x86_64-linux-gnu -fsanitize=vptr -fno-rtti %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-VPTR-NO-RTTI
-// RUN: %clang -target x86_64-linux-gnu -fsanitize=undefined -fno-rtti %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-VPTR-NO-RTTI
 // CHECK-VPTR-NO-RTTI: '-fsanitize=vptr' not allowed with '-fno-rtti'
+
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=undefined -fno-rtti %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-UNDEFINED-NO-RTTI
+// CHECK-UNDEFINED-NO-RTTI-NOT: vptr
 
 // RUN: %clang -target x86_64-linux-gnu -fsanitize=address,thread -fno-rtti %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-SANA-SANT
 // CHECK-SANA-SANT: '-fsanitize=address' not allowed with '-fsanitize=thread'
@@ -157,6 +159,8 @@
 
 // RUN: %clang -target x86_64-linux-gnu -fsanitize=memory %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-MSAN
 // CHECK-MSAN: "-fno-assume-sane-operator-new"
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=address %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-ASAN
+// CHECK-ASAN: "-fno-assume-sane-operator-new"
 
 // RUN: %clang -target x86_64-linux-gnu -fsanitize=zzz %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-DIAG1
 // CHECK-DIAG1: unsupported argument 'zzz' to option 'fsanitize='
@@ -185,6 +189,10 @@
 
 // RUN: %clang -target x86_64-apple-darwin10 -fsanitize=function -fsanitize=undefined %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-FSAN-UBSAN-DARWIN
 // CHECK-FSAN-UBSAN-DARWIN: unsupported option '-fsanitize=function' for target 'x86_64-apple-darwin10'
+
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=cfi -c %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-CFI
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=cfi-vptr -c %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-CFI
+// CHECK-CFI: -emit-llvm-bc{{.*}}-fsanitize=cfi-vptr
 
 // RUN: %clang_cl -fsanitize=address -c -MDd -### -- %s 2>&1 | FileCheck %s -check-prefix=CHECK-ASAN-DEBUGRTL
 // RUN: %clang_cl -fsanitize=address -c -MTd -### -- %s 2>&1 | FileCheck %s -check-prefix=CHECK-ASAN-DEBUGRTL

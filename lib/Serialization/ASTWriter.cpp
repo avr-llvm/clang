@@ -1216,7 +1216,6 @@ void ASTWriter::WriteControlBlock(Preprocessor &PP, ASTContext &Context,
       Record.push_back(0);
     }
 
-    Record.push_back(WritingModule->IsSystem);
     Stream.EmitRecord(MODULE_MAP_FILE, Record);
   }
 
@@ -1344,6 +1343,8 @@ void ASTWriter::WriteControlBlock(Preprocessor &PP, ASTContext &Context,
   Record.push_back(HSOpts.UseStandardSystemIncludes);
   Record.push_back(HSOpts.UseStandardCXXIncludes);
   Record.push_back(HSOpts.UseLibcxx);
+  // Write out the specific module cache path that contains the module files.
+  AddString(PP.getHeaderSearchInfo().getModuleCachePath(), Record);
   Stream.EmitRecord(HEADER_SEARCH_OPTIONS, Record);
 
   // Preprocessor options.
@@ -2108,8 +2109,7 @@ void ASTWriter::WritePreprocessor(const Preprocessor &PP, bool IsModule) {
       if (MD->isImported()) {
         auto Overrides = MD->getOverriddenModules();
         Record.push_back(Overrides.size());
-        for (auto Override : Overrides)
-          Record.push_back(Override);
+        Record.append(Overrides.begin(), Overrides.end());
       }
     }
     if (Record.empty())
@@ -3699,7 +3699,7 @@ void ASTWriter::AddUpdatedDeclContext(const DeclContext *DC) {
     // Ensure we emit all the visible declarations.
     visitLocalLookupResults(DC, DC->NeedToReconcileExternalVisibleStorage,
                             [&](DeclarationName Name,
-                                DeclContext::lookup_const_result Result) {
+                                DeclContext::lookup_result Result) {
       for (auto *Decl : Result)
         GetDeclRef(getDeclForLocalLookup(getLangOpts(), Decl));
     });
@@ -3756,16 +3756,14 @@ ASTWriter::GenerateNameLookupTable(const DeclContext *DC,
   // Add the constructors.
   if (!ConstructorDecls.empty()) {
     Generator.insert(ConstructorName,
-                     DeclContext::lookup_result(ConstructorDecls.begin(),
-                                                ConstructorDecls.end()),
+                     DeclContext::lookup_result(ConstructorDecls),
                      Trait);
   }
 
   // Add the conversion functions.
   if (!ConversionDecls.empty()) {
     Generator.insert(ConversionName,
-                     DeclContext::lookup_result(ConversionDecls.begin(),
-                                                ConversionDecls.end()),
+                     DeclContext::lookup_result(ConversionDecls),
                      Trait);
   }
 

@@ -4762,8 +4762,9 @@ TEST_F(FormatTest, AlignsPipes) {
                "}");
 
   // Handle 'endl'.
-  verifyFormat("llvm::errs() << aaaa << endl\n"
-               "             << bbbb << endl;");
+  verifyFormat("llvm::errs() << aaaaaaaaaaaaaaaaaaaaaa << endl\n"
+               "             << bbbbbbbbbbbbbbbbbbbbbb << endl;");
+  verifyFormat("llvm::errs() << endl << bbbbbbbbbbbbbbbbbbbbbb << endl;");
 }
 
 TEST_F(FormatTest, UnderstandsEquals) {
@@ -5818,6 +5819,7 @@ TEST_F(FormatTest, IncorrectAccessSpecifier) {
 TEST_F(FormatTest, IncorrectCodeUnbalancedBraces) {
   verifyFormat("{");
   verifyFormat("#})");
+  verifyNoCrash("(/**/[:!] ?[).");
 }
 
 TEST_F(FormatTest, IncorrectCodeDoNoWhile) {
@@ -9733,6 +9735,28 @@ TEST_F(FormatTest, SpacesInAngles) {
 
   Spaces.SpacesInAngles = false;
   verifyFormat("A<A<int>>();", Spaces);
+}
+
+TEST_F(FormatTest, TripleAngleBrackets) {
+  verifyFormat("f<<<1, 1>>>();");
+  verifyFormat("f<<<1, 1, 1, s>>>();");
+  verifyFormat("f<<<a, b, c, d>>>();");
+  EXPECT_EQ("f<<<1, 1>>>();",
+            format("f <<< 1, 1 >>> ();"));
+  verifyFormat("f<param><<<1, 1>>>();");
+  verifyFormat("f<1><<<1, 1>>>();");
+  EXPECT_EQ("f<param><<<1, 1>>>();",
+            format("f< param > <<< 1, 1 >>> ();"));
+  verifyFormat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+               "aaaaaaaaaaa<<<\n    1, 1>>>();");
+}
+
+TEST_F(FormatTest, MergeLessLessAtEnd) {
+  verifyFormat("<<");
+  verifyFormat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+               "aaallvm::outs() <<");
+  verifyFormat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+               "aaaallvm::outs()\n    <<");
 }
 
 TEST_F(FormatTest, HandleUnbalancedImplicitBracesAcrossPPBranches) {

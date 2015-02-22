@@ -49,9 +49,9 @@ class SanitizerArgs {
   bool needsUbsanRt() const;
   bool needsDfsanRt() const { return Sanitizers.has(SanitizerKind::DataFlow); }
 
-  bool sanitizesVptr() const { return Sanitizers.has(SanitizerKind::Vptr); }
   bool requiresPIE() const;
   bool needsUnwindTables() const;
+  bool needsLTO() const;
   bool linkCXXRuntimes() const { return LinkCXXRuntimes; }
   void addArgs(const llvm::opt::ArgList &Args,
                llvm::opt::ArgStringList &CmdArgs) const;

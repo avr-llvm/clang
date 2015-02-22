@@ -521,7 +521,9 @@ bool Sema::MergeCXXFunctionDecl(FunctionDecl *New, FunctionDecl *Old,
       // It's important to use getInit() here;  getDefaultArg()
       // strips off any top-level ExprWithCleanups.
       NewParam->setHasInheritedDefaultArg();
-      if (OldParam->hasUninstantiatedDefaultArg())
+      if (OldParam->hasUnparsedDefaultArg())
+        NewParam->setUnparsedDefaultArg();
+      else if (OldParam->hasUninstantiatedDefaultArg())
         NewParam->setUninstantiatedDefaultArg(
                                       OldParam->getUninstantiatedDefaultArg());
       else
@@ -4784,9 +4786,9 @@ static void checkDLLAttribute(Sema &S, CXXRecordDecl *Class) {
         continue;
       }
 
-      if (MD->isInlined() && ClassImported &&
+      if (MD->isInlined() &&
           !S.Context.getTargetInfo().getCXXABI().isMicrosoft()) {
-        // MinGW does not import inline functions.
+        // MinGW does not import or export inline methods.
         continue;
       }
     }
@@ -4819,7 +4821,13 @@ static void checkDLLAttribute(Sema &S, CXXRecordDecl *Class) {
         // defaulted methods, and the copy and move assignment operators. The
         // latter are exported even if they are trivial, because the address of
         // an operator can be taken and should compare equal accross libraries.
+        DiagnosticErrorTrap Trap(S.Diags);
         S.MarkFunctionReferenced(Class->getLocation(), MD);
+        if (Trap.hasErrorOccurred()) {
+          S.Diag(ClassAttr->getLocation(), diag::note_due_to_dllexported_class)
+              << Class->getName() << !S.getLangOpts().CPlusPlus11;
+          break;
+        }
 
         // There is no later point when we will see the definition of this
         // function, so pass it to the consumer now.
@@ -9061,7 +9069,7 @@ private:
     ASTContext &Context = SemaRef.Context;
     DeclarationName Name = Context.DeclarationNames.getCXXConstructorName(
         Context.getCanonicalType(Context.getRecordType(Base)));
-    DeclContext::lookup_const_result Decls = Derived->lookup(Name);
+    DeclContext::lookup_result Decls = Derived->lookup(Name);
     return Decls.empty() ? Derived->getLocation() : Decls[0]->getLocation();
   }
 
