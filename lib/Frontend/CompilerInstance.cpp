@@ -536,7 +536,7 @@ void CompilerInstance::clearOutputFiles(bool EraseFiles) {
         // relative to that.
         FileMgr->FixupRelativePath(NewOutFile);
         if (std::error_code ec =
-                llvm::sys::fs::rename(it->TempFilename, NewOutFile.str())) {
+                llvm::sys::fs::rename(it->TempFilename, NewOutFile)) {
           getDiagnostics().Report(diag::err_unable_to_rename_temp)
             << it->TempFilename << it->Filename << ec.message();
 
@@ -641,14 +641,14 @@ llvm::raw_fd_ostream *CompilerInstance::createOutputFile(
     TempPath += "-%%%%%%%%";
     int fd;
     std::error_code EC =
-        llvm::sys::fs::createUniqueFile(TempPath.str(), fd, TempPath);
+        llvm::sys::fs::createUniqueFile(TempPath, fd, TempPath);
 
     if (CreateMissingDirectories &&
         EC == llvm::errc::no_such_file_or_directory) {
       StringRef Parent = llvm::sys::path::parent_path(OutputPath);
       EC = llvm::sys::fs::create_directories(Parent);
       if (!EC) {
-        EC = llvm::sys::fs::createUniqueFile(TempPath.str(), fd, TempPath);
+        EC = llvm::sys::fs::createUniqueFile(TempPath, fd, TempPath);
       }
     }
 
@@ -1191,8 +1191,7 @@ static void pruneModuleCache(const HeaderSearchOptions &HSOpts) {
   std::error_code EC;
   SmallString<128> ModuleCachePathNative;
   llvm::sys::path::native(HSOpts.ModuleCachePath, ModuleCachePathNative);
-  for (llvm::sys::fs::directory_iterator
-         Dir(ModuleCachePathNative.str(), EC), DirEnd;
+  for (llvm::sys::fs::directory_iterator Dir(ModuleCachePathNative, EC), DirEnd;
        Dir != DirEnd && !EC; Dir.increment(EC)) {
     // If we don't have a directory, there's nothing to look into.
     if (!llvm::sys::fs::is_directory(Dir->path()))
@@ -1279,6 +1278,7 @@ bool CompilerInstance::loadModuleFile(StringRef FileName) {
   struct ReadModuleNames : ASTReaderListener {
     CompilerInstance &CI;
     std::vector<StringRef> ModuleFileStack;
+    std::vector<StringRef> ModuleNameStack;
     bool Failed;
     bool TopFileIsModule;
 
@@ -1288,21 +1288,36 @@ bool CompilerInstance::loadModuleFile(StringRef FileName) {
     bool needsImportVisitation() const override { return true; }
 
     void visitImport(StringRef FileName) override {
+      if (!CI.ExplicitlyLoadedModuleFiles.insert(FileName).second) {
+        if (ModuleFileStack.size() == 0)
+          TopFileIsModule = true;
+        return;
+      }
+
       ModuleFileStack.push_back(FileName);
+      ModuleNameStack.push_back(StringRef());
       if (ASTReader::readASTFileControlBlock(FileName, CI.getFileManager(),
                                              *this)) {
-        CI.getDiagnostics().Report(SourceLocation(),
-                                   diag::err_module_file_not_found)
+        CI.getDiagnostics().Report(
+            SourceLocation(), CI.getFileManager().getBufferForFile(FileName)
+                                  ? diag::err_module_file_invalid
+                                  : diag::err_module_file_not_found)
             << FileName;
-        // FIXME: Produce a note stack explaining how we got here.
+        for (int I = ModuleFileStack.size() - 2; I >= 0; --I)
+          CI.getDiagnostics().Report(SourceLocation(),
+                                     diag::note_module_file_imported_by)
+              << ModuleFileStack[I]
+              << !ModuleNameStack[I].empty() << ModuleNameStack[I];
         Failed = true;
       }
+      ModuleNameStack.pop_back();
       ModuleFileStack.pop_back();
     }
 
     void ReadModuleName(StringRef ModuleName) override {
       if (ModuleFileStack.size() == 1)
         TopFileIsModule = true;
+      ModuleNameStack.back() = ModuleName;
 
       auto &ModuleFile = CI.ModuleFileOverrides[ModuleName];
       if (!ModuleFile.empty() &&
@@ -1315,6 +1330,19 @@ bool CompilerInstance::loadModuleFile(StringRef FileName) {
     }
   } RMN(*this);
 
+  // If we don't already have an ASTReader, create one now.
+  if (!ModuleManager)
+    createModuleManager();
+
+  // Tell the module manager about this module file.
+  if (getModuleManager()->getModuleManager().addKnownModuleFile(FileName)) {
+    getDiagnostics().Report(SourceLocation(), diag::err_module_file_not_found)
+      << FileName;
+    return false;
+  }
+
+  // Build our mapping of module names to module files from this file
+  // and its imports.
   RMN.visitImport(FileName);
 
   if (RMN.Failed)

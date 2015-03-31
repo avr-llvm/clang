@@ -1566,8 +1566,7 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
         LHS = Actions.ActOnMemberAccessExpr(getCurScope(), LHS.get(), OpLoc, 
                                             OpKind, SS, TemplateKWLoc, Name,
                                  CurParsedObjCImpl ? CurParsedObjCImpl->Dcl
-                                                   : nullptr,
-                                            Tok.is(tok::l_paren));
+                                                   : nullptr);
       break;
     }
     case tok::plusplus:    // postfix-expression: postfix-expression '++'
@@ -2369,7 +2368,8 @@ ExprResult Parser::ParseGenericSelectionExpression() {
     // C11 6.5.1.1p3 "The controlling expression of a generic selection is
     // not evaluated."
     EnterExpressionEvaluationContext Unevaluated(Actions, Sema::Unevaluated);
-    ControllingExpr = ParseAssignmentExpression();
+    ControllingExpr =
+        Actions.CorrectDelayedTyposInExpr(ParseAssignmentExpression());
     if (ControllingExpr.isInvalid()) {
       SkipUntil(tok::r_paren, StopAtSemi);
       return ExprError();
@@ -2415,7 +2415,8 @@ ExprResult Parser::ParseGenericSelectionExpression() {
 
     // FIXME: These expressions should be parsed in a potentially potentially
     // evaluated context.
-    ExprResult ER(ParseAssignmentExpression());
+    ExprResult ER(
+        Actions.CorrectDelayedTyposInExpr(ParseAssignmentExpression()));
     if (ER.isInvalid()) {
       SkipUntil(tok::r_paren, StopAtSemi);
       return ExprError();

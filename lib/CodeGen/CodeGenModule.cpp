@@ -323,6 +323,8 @@ void CodeGenModule::checkAliases() {
 
 void CodeGenModule::clear() {
   DeferredDeclsToEmit.clear();
+  if (OpenMPRuntime)
+    OpenMPRuntime->clear();
 }
 
 void InstrProfStats::reportDiagnostics(DiagnosticsEngine &Diags,
@@ -1338,7 +1340,7 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
 
   // If this is CUDA, be selective about which declarations we emit.
   if (LangOpts.CUDA) {
-    if (CodeGenOpts.CUDAIsDevice) {
+    if (LangOpts.CUDAIsDevice) {
       if (!Global->hasAttr<CUDADeviceAttr>() &&
           !Global->hasAttr<CUDAGlobalAttr>() &&
           !Global->hasAttr<CUDAConstantAttr>() &&
@@ -1618,16 +1620,6 @@ CodeGenModule::GetOrCreateLLVMFunction(StringRef MangledName,
       // don't need it anymore).
       addDeferredDeclToEmit(F, DDI->second);
       DeferredDecls.erase(DDI);
-      
-      // Otherwise, if this is a sized deallocation function, emit a weak
-      // definition for it at the end of the translation unit (if allowed),
-      // unless the sized deallocation function is aliased.
-    } else if (D &&
-               cast<FunctionDecl>(D)
-                  ->getCorrespondingUnsizedGlobalDeallocationFunction() &&
-               getLangOpts().DefineSizedDeallocation &&
-               !D->hasAttr<AliasAttr>()) {
-      addDeferredDeclToEmit(F, GD);
 
       // Otherwise, there are cases we have to worry about where we're
       // using a declaration for which we must emit a definition but where
@@ -1849,7 +1841,8 @@ CodeGenModule::CreateOrReplaceCXXRuntimeVariable(StringRef Name,
     OldGV->eraseFromParent();
   }
 
-  if (supportsCOMDAT() && GV->isWeakForLinker())
+  if (supportsCOMDAT() && GV->isWeakForLinker() &&
+      !GV->hasAvailableExternallyLinkage())
     GV->setComdat(TheModule.getOrInsertComdat(GV->getName()));
 
   return GV;
@@ -1906,7 +1899,7 @@ CharUnits CodeGenModule::GetTargetTypeStoreSize(llvm::Type *Ty) const {
 
 unsigned CodeGenModule::GetGlobalVarAddressSpace(const VarDecl *D,
                                                  unsigned AddrSpace) {
-  if (LangOpts.CUDA && CodeGenOpts.CUDAIsDevice) {
+  if (LangOpts.CUDA && LangOpts.CUDAIsDevice) {
     if (D->hasAttr<CUDAConstantAttr>())
       AddrSpace = getContext().getTargetAddressSpace(LangAS::cuda_constant);
     else if (D->hasAttr<CUDASharedAttr>())
@@ -3360,15 +3353,7 @@ void CodeGenModule::EmitTopLevelDecl(Decl *D) {
 
   case Decl::FileScopeAsm: {
     auto *AD = cast<FileScopeAsmDecl>(D);
-    StringRef AsmString = AD->getAsmString()->getString();
-
-    const std::string &S = getModule().getModuleInlineAsm();
-    if (S.empty())
-      getModule().setModuleInlineAsm(AsmString);
-    else if (S.end()[-1] == '\n')
-      getModule().setModuleInlineAsm(S + AsmString.str());
-    else
-      getModule().setModuleInlineAsm(S + '\n' + AsmString.str());
+    getModule().appendModuleInlineAsm(AD->getAsmString()->getString());
     break;
   }
 
@@ -3652,6 +3637,12 @@ llvm::Constant *CodeGenModule::EmitUuidofInitializer(StringRef Uuid) {
   return llvm::ConstantStruct::getAnon(Fields);
 }
 
+llvm::Constant *
+CodeGenModule::getAddrOfCXXHandlerMapEntry(QualType Ty,
+                                           QualType CatchHandlerType) {
+  return getCXXABI().getAddrOfCXXHandlerMapEntry(Ty, CatchHandlerType);
+}
+
 llvm::Constant *CodeGenModule::GetAddrOfRTTIDescriptor(QualType Ty,
                                                        bool ForEH) {
   // Return a bogus pointer if RTTI is disabled, unless it's for EH.
@@ -3674,10 +3665,8 @@ void CodeGenModule::EmitOMPThreadPrivateDecl(const OMPThreadPrivateDecl *D) {
         VD->getAnyInitializer() &&
         !VD->getAnyInitializer()->isConstantInitializer(getContext(),
                                                         /*ForRef=*/false);
-    if (auto InitFunction =
-            getOpenMPRuntime().EmitOMPThreadPrivateVarDefinition(
-                VD, GetAddrOfGlobalVar(VD), RefExpr->getLocStart(),
-                PerformInit))
+    if (auto InitFunction = getOpenMPRuntime().emitThreadPrivateVarDefinition(
+            VD, GetAddrOfGlobalVar(VD), RefExpr->getLocStart(), PerformInit))
       CXXGlobalInits.push_back(InitFunction);
   }
 }

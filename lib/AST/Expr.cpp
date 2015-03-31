@@ -1141,40 +1141,13 @@ CallExpr::CallExpr(const ASTContext& C, StmtClass SC, Expr *fn,
   RParenLoc = rparenloc;
 }
 
-CallExpr::CallExpr(const ASTContext& C, Expr *fn, ArrayRef<Expr*> args,
+CallExpr::CallExpr(const ASTContext &C, Expr *fn, ArrayRef<Expr *> args,
                    QualType t, ExprValueKind VK, SourceLocation rparenloc)
-  : Expr(CallExprClass, t, VK, OK_Ordinary,
-         fn->isTypeDependent(),
-         fn->isValueDependent(),
-         fn->isInstantiationDependent(),
-         fn->containsUnexpandedParameterPack()),
-    NumArgs(args.size()) {
-
-  SubExprs = new (C) Stmt*[args.size()+PREARGS_START];
-  SubExprs[FN] = fn;
-  for (unsigned i = 0; i != args.size(); ++i) {
-    if (args[i]->isTypeDependent())
-      ExprBits.TypeDependent = true;
-    if (args[i]->isValueDependent())
-      ExprBits.ValueDependent = true;
-    if (args[i]->isInstantiationDependent())
-      ExprBits.InstantiationDependent = true;
-    if (args[i]->containsUnexpandedParameterPack())
-      ExprBits.ContainsUnexpandedParameterPack = true;
-
-    SubExprs[i+PREARGS_START] = args[i];
-  }
-
-  CallExprBits.NumPreArgs = 0;
-  RParenLoc = rparenloc;
+    : CallExpr(C, CallExprClass, fn, /*NumPreArgs=*/0, args, t, VK, rparenloc) {
 }
 
 CallExpr::CallExpr(const ASTContext &C, StmtClass SC, EmptyShell Empty)
-  : Expr(SC, Empty), SubExprs(nullptr), NumArgs(0) {
-  // FIXME: Why do we allocate this?
-  SubExprs = new (C) Stmt*[PREARGS_START];
-  CallExprBits.NumPreArgs = 0;
-}
+    : CallExpr(C, SC, /*NumPreArgs=*/0, Empty) {}
 
 CallExpr::CallExpr(const ASTContext &C, StmtClass SC, unsigned NumPreArgs,
                    EmptyShell Empty)
@@ -1271,16 +1244,21 @@ bool CallExpr::isUnevaluatedBuiltinCall(ASTContext &Ctx) const {
   return false;
 }
 
-QualType CallExpr::getCallReturnType() const {
-  QualType CalleeType = getCallee()->getType();
-  if (const PointerType *FnTypePtr = CalleeType->getAs<PointerType>())
+QualType CallExpr::getCallReturnType(const ASTContext &Ctx) const {
+  const Expr *Callee = getCallee();
+  QualType CalleeType = Callee->getType();
+  if (const auto *FnTypePtr = CalleeType->getAs<PointerType>()) {
     CalleeType = FnTypePtr->getPointeeType();
-  else if (const BlockPointerType *BPT = CalleeType->getAs<BlockPointerType>())
+  } else if (const auto *BPT = CalleeType->getAs<BlockPointerType>()) {
     CalleeType = BPT->getPointeeType();
-  else if (CalleeType->isSpecificPlaceholderType(BuiltinType::BoundMember))
+  } else if (CalleeType->isSpecificPlaceholderType(BuiltinType::BoundMember)) {
+    if (isa<CXXPseudoDestructorExpr>(Callee->IgnoreParens()))
+      return Ctx.VoidTy;
+
     // This should never be overloaded and so should never return null.
-    CalleeType = Expr::findBoundMemberType(getCallee());
-    
+    CalleeType = Expr::findBoundMemberType(Callee);
+  }
+
   const FunctionType *FnType = CalleeType->castAs<FunctionType>();
   return FnType->getReturnType();
 }
@@ -2170,8 +2148,8 @@ bool Expr::isUnusedResultAWarning(const Expr *&WarnE, SourceLocation &Loc,
     case OO_Greater:
     case OO_GreaterEqual:
     case OO_LessEqual:
-      if (Op->getCallReturnType()->isReferenceType() ||
-          Op->getCallReturnType()->isVoidType())
+      if (Op->getCallReturnType(Ctx)->isReferenceType() ||
+          Op->getCallReturnType(Ctx)->isVoidType())
         break;
       WarnE = this;
       Loc = Op->getOperatorLoc();
@@ -2423,7 +2401,7 @@ QualType Expr::findBoundMemberType(const Expr *expr) {
     return type;
   }
 
-  assert(isa<UnresolvedMemberExpr>(expr));
+  assert(isa<UnresolvedMemberExpr>(expr) || isa<CXXPseudoDestructorExpr>(expr));
   return QualType();
 }
 

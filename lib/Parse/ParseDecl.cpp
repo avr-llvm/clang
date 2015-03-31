@@ -547,7 +547,7 @@ void Parser::ParseMicrosoftDeclSpec(ParsedAttributes &Attrs) {
 
     // We expect either a well-known identifier or a generic string.  Anything
     // else is a malformed declspec.
-    bool IsString = Tok.getKind() == tok::string_literal ? true : false;
+    bool IsString = Tok.getKind() == tok::string_literal;
     if (!IsString && Tok.getKind() != tok::identifier &&
         Tok.getKind() != tok::kw_restrict) {
       Diag(Tok, diag::err_ms_declspec_type);
@@ -2577,7 +2577,8 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
   bool EnteringContext = (DSContext == DSC_class || DSContext == DSC_top_level);
   bool AttrsLastTime = false;
   ParsedAttributesWithRange attrs(AttrFactory);
-  const PrintingPolicy &Policy = Actions.getASTContext().getPrintingPolicy();
+  // We use Sema's policy to get bool macros right.
+  const PrintingPolicy &Policy = Actions.getPrintingPolicy();
   while (1) {
     bool isInvalid = false;
     bool isStorageClass = false;

@@ -2359,12 +2359,24 @@ SectionAttr *Sema::mergeSectionAttr(Decl *D, SourceRange Range,
                                      AttrSpellingListIndex);
 }
 
+bool Sema::checkSectionName(SourceLocation LiteralLoc, StringRef SecName) {
+  std::string Error = Context.getTargetInfo().isValidSectionSpecifier(SecName);
+  if (!Error.empty()) {
+    Diag(LiteralLoc, diag::err_attribute_section_invalid_for_target) << Error;
+    return false;
+  }
+  return true;
+}
+
 static void handleSectionAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   // Make sure that there is a string literal as the sections's single
   // argument.
   StringRef Str;
   SourceLocation LiteralLoc;
   if (!S.checkStringLiteralArgumentAttr(Attr, 0, Str, &LiteralLoc))
+    return;
+
+  if (!S.checkSectionName(LiteralLoc, Str))
     return;
 
   // If the target wants to validate the section specifier, make it happen.
@@ -3417,9 +3429,12 @@ bool Sema::CheckCallingConvAttr(const AttributeList &attr, CallingConv &CC,
 
   const TargetInfo &TI = Context.getTargetInfo();
   TargetInfo::CallingConvCheckResult A = TI.checkCallingConvention(CC);
-  if (A == TargetInfo::CCCR_Warning) {
-    Diag(attr.getLoc(), diag::warn_cconv_ignored) << attr.getName();
+  if (A != TargetInfo::CCCR_OK) {
+    if (A == TargetInfo::CCCR_Warning)
+      Diag(attr.getLoc(), diag::warn_cconv_ignored) << attr.getName();
 
+    // This convention is not valid for the target. Use the default function or
+    // method calling convention.
     TargetInfo::CallingConvMethodType MT = TargetInfo::CCMT_Unknown;
     if (FD)
       MT = FD->isCXXInstanceMember() ? TargetInfo::CCMT_Member : 
@@ -5165,7 +5180,7 @@ static bool isDeclUnavailable(Decl *D) {
   return false;
 }
 
-static void DoEmitAvailabilityWarning(Sema &S, DelayedDiagnostic::DDKind K,
+static void DoEmitAvailabilityWarning(Sema &S, Sema::AvailabilityDiagnostic K,
                                       Decl *Ctx, const NamedDecl *D,
                                       StringRef Message, SourceLocation Loc,
                                       const ObjCInterfaceDecl *UnknownObjCClass,
@@ -5182,7 +5197,7 @@ static void DoEmitAvailabilityWarning(Sema &S, DelayedDiagnostic::DDKind K,
 
   // Don't warn if our current context is deprecated or unavailable.
   switch (K) {
-  case DelayedDiagnostic::Deprecation:
+  case Sema::AD_Deprecation:
     if (isDeclDeprecated(Ctx))
       return;
     diag = !ObjCPropertyAccess ? diag::warn_deprecated
@@ -5193,7 +5208,7 @@ static void DoEmitAvailabilityWarning(Sema &S, DelayedDiagnostic::DDKind K,
     available_here_select_kind = /* deprecated */ 2;
     break;
 
-  case DelayedDiagnostic::Unavailable:
+  case Sema::AD_Unavailable:
     if (isDeclUnavailable(Ctx))
       return;
     diag = !ObjCPropertyAccess ? diag::err_unavailable
@@ -5204,8 +5219,13 @@ static void DoEmitAvailabilityWarning(Sema &S, DelayedDiagnostic::DDKind K,
     available_here_select_kind = /* unavailable */ 0;
     break;
 
-  default:
-    llvm_unreachable("Neither a deprecation or unavailable kind");
+  case Sema::AD_Partial:
+    diag = diag::warn_partial_availability;
+    diag_message = diag::warn_partial_message;
+    diag_fwdclass_message = diag::warn_partial_fwdclass_message;
+    property_note_select = /* partial */ 2;
+    available_here_select_kind = /* partial */ 3;
+    break;
   }
 
   if (!Message.empty()) {
@@ -5225,15 +5245,21 @@ static void DoEmitAvailabilityWarning(Sema &S, DelayedDiagnostic::DDKind K,
 
   S.Diag(D->getLocation(), diag::note_availability_specified_here)
       << D << available_here_select_kind;
+  if (K == Sema::AD_Partial)
+    S.Diag(Loc, diag::note_partial_availability_silence) << D;
 }
 
 static void handleDelayedAvailabilityCheck(Sema &S, DelayedDiagnostic &DD,
                                            Decl *Ctx) {
+  assert(DD.Kind == DelayedDiagnostic::Deprecation ||
+         DD.Kind == DelayedDiagnostic::Unavailable);
+  Sema::AvailabilityDiagnostic AD = DD.Kind == DelayedDiagnostic::Deprecation
+                                        ? Sema::AD_Deprecation
+                                        : Sema::AD_Unavailable;
   DD.Triggered = true;
-  DoEmitAvailabilityWarning(S, (DelayedDiagnostic::DDKind)DD.Kind, Ctx,
-                            DD.getDeprecationDecl(), DD.getDeprecationMessage(),
-                            DD.Loc, DD.getUnknownObjCClass(),
-                            DD.getObjCProperty(), false);
+  DoEmitAvailabilityWarning(
+      S, AD, Ctx, DD.getDeprecationDecl(), DD.getDeprecationMessage(), DD.Loc,
+      DD.getUnknownObjCClass(), DD.getObjCProperty(), false);
 }
 
 void Sema::PopParsingDeclaration(ParsingDeclState state, Decl *decl) {
@@ -5299,7 +5325,7 @@ void Sema::EmitAvailabilityWarning(AvailabilityDiagnostic AD,
                                    const ObjCPropertyDecl  *ObjCProperty,
                                    bool ObjCPropertyAccess) {
   // Delay if we're currently parsing a declaration.
-  if (DelayedDiagnostics.shouldDelayDiagnostics()) {
+  if (DelayedDiagnostics.shouldDelayDiagnostics() && AD != AD_Partial) {
     DelayedDiagnostics.add(DelayedDiagnostic::makeAvailability(
         AD, Loc, D, UnknownObjCClass, ObjCProperty, Message,
         ObjCPropertyAccess));
@@ -5307,16 +5333,6 @@ void Sema::EmitAvailabilityWarning(AvailabilityDiagnostic AD,
   }
 
   Decl *Ctx = cast<Decl>(getCurLexicalContext());
-  DelayedDiagnostic::DDKind K;
-  switch (AD) {
-    case AD_Deprecation:
-      K = DelayedDiagnostic::Deprecation;
-      break;
-    case AD_Unavailable:
-      K = DelayedDiagnostic::Unavailable;
-      break;
-  }
-
-  DoEmitAvailabilityWarning(*this, K, Ctx, D, Message, Loc,
-                            UnknownObjCClass, ObjCProperty, ObjCPropertyAccess);
+  DoEmitAvailabilityWarning(*this, AD, Ctx, D, Message, Loc, UnknownObjCClass,
+                            ObjCProperty, ObjCPropertyAccess);
 }

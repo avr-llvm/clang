@@ -137,6 +137,12 @@ def _SLASH_vd : CLJoined<"vd">, HelpText<"Control vtordisp placement">,
 def _SLASH_Zc_strictStrings : CLFlag<"Zc:strictStrings">,
   HelpText<"Treat string literals as const">, Alias<W_Joined>,
   AliasArgs<["error=c++11-compat-deprecated-writable-strings"]>;
+def _SLASH_Zc_threadSafeInit : CLFlag<"Zc:threadSafeInit">,
+  HelpText<"Enable thread-safe initialization of static variables">,
+  Alias<fthreadsafe_statics>;
+def _SLASH_Zc_threadSafeInit_ : CLFlag<"Zc:threadSafeInit-">,
+  HelpText<"Disable thread-safe initialization of static variables">,
+  Alias<fno_threadsafe_statics>;
 def _SLASH_Zc_trigraphs : CLFlag<"Zc:trigraphs">,
   HelpText<"Enable trigraphs">, Alias<ftrigraphs>;
 def _SLASH_Zc_trigraphs_off : CLFlag<"Zc:trigraphs-">,
@@ -216,6 +222,7 @@ def _SLASH_analyze_ : CLIgnoredFlag<"analyze-">;
 def _SLASH_cgthreads : CLIgnoredJoined<"cgthreads">;
 def _SLASH_d2Zi_PLUS : CLIgnoredFlag<"d2Zi+">;
 def _SLASH_errorReport : CLIgnoredJoined<"errorReport">;
+def _SLASH_Fd : CLIgnoredJoined<"Fd">;
 def _SLASH_FS : CLIgnoredFlag<"FS">, HelpText<"Force synchronous PDB writes">;
 def _SLASH_Gd : CLIgnoredFlag<"Gd">;
 def _SLASH_GF : CLIgnoredFlag<"GF">;
@@ -224,6 +231,7 @@ def _SLASH_kernel_ : CLIgnoredFlag<"kernel-">;
 def _SLASH_nologo : CLIgnoredFlag<"nologo">;
 def _SLASH_Ob1 : CLIgnoredFlag<"Ob1">;
 def _SLASH_Ob2 : CLIgnoredFlag<"Ob2">;
+def _SLASH_openmp_ : CLIgnoredFlag<"openmp-">;
 def _SLASH_RTC : CLIgnoredJoined<"RTC">;
 def _SLASH_sdl : CLIgnoredFlag<"sdl">;
 def _SLASH_sdl_ : CLIgnoredFlag<"sdl-">;
@@ -248,7 +256,6 @@ def _SLASH_FA_joined : CLJoined<"FA">;
 def _SLASH_favor : CLJoined<"favor">;
 def _SLASH_FC : CLFlag<"FC">;
 def _SLASH_F : CLFlag<"F">;
-def _SLASH_Fd : CLJoined<"Fd">;
 def _SLASH_Fm : CLJoined<"Fm">;
 def _SLASH_fp : CLJoined<"fp">;
 def _SLASH_Fp : CLJoined<"Fp">;

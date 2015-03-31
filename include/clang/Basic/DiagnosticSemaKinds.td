@@ -731,7 +731,7 @@ def warn_accessor_property_type_mismatch : Warning<
 def not_conv_function_declared_at : Note<"type conversion function declared here">;
 def note_method_declared_at : Note<"method %0 declared here">;
 def note_property_attribute : Note<"property %0 is declared "
-  "%select{deprecated|unavailable}1 here">;
+  "%select{deprecated|unavailable|partial}1 here">;
 def err_setter_type_void : Error<"type of setter must be void">;
 def err_duplicate_method_decl : Error<"duplicate declaration of method %0">;
 def warn_duplicate_method_decl : 
@@ -889,12 +889,6 @@ def warn_dealloc_in_category : Warning<
 InGroup<DeallocInCategory>;
 def err_gc_weak_property_strong_type : Error<
   "weak attribute declared on a __strong type property in GC mode">;
-def warn_receiver_is_weak : Warning <
-  "weak %select{receiver|property|implicit property}0 may be "
-  "unpredictably set to nil">,
-  InGroup<DiagGroup<"receiver-is-weak">>, DefaultIgnore;
-def note_arc_assign_to_strong : Note<
-  "assign the value to a strong variable to keep the object alive during use">;
 def warn_arc_repeated_use_of_weak : Warning <
   "weak %select{variable|property|implicit property|instance variable}0 %1 is "
   "accessed multiple times in this %select{function|method|block|lambda}2 "
@@ -2037,6 +2031,8 @@ def err_typecheck_vector_not_convertable : Error<
   "can't convert between vector values of different size (%0 and %1)">;
 def err_typecheck_vector_not_convertable_non_scalar : Error<
   "can't convert between vector and non-scalar values (%0 and %1)">;
+def err_typecheck_vector_lengths_not_equal : Error<
+  "vector operands do not have the same number of elements (%0 and %1)">;
 def err_ext_vector_component_exceeds_length : Error<
   "vector component access exceeds type %0">;
 def err_ext_vector_component_name_illegal : Error<
@@ -3447,6 +3443,12 @@ def err_template_spec_redecl_out_of_scope : Error<
   "variable template partial|function template|member "
   "function|static data member|member class|member enumeration}0 "
   "specialization of %1 not in a namespace enclosing %2">;
+def ext_ms_template_spec_redecl_out_of_scope: ExtWarn<
+  "%select{class template|class template partial|variable template|"
+  "variable template partial|function template|member "
+  "function|static data member|member class|member enumeration}0 "
+  "specialization of %1 outside namespace enclosing %2 "
+  "is a Microsoft extension">, InGroup<Microsoft>;
 def err_template_spec_redecl_global_scope : Error<
   "%select{class template|class template partial|variable template|"
   "variable template partial|function template|member "
@@ -3869,6 +3871,15 @@ def err_not_found_by_two_phase_lookup : Error<"call to function %0 that is neith
 def note_not_found_by_two_phase_lookup : Note<"%0 should be declared prior to the "
     "call site%select{| or in %2| or in an associated namespace of one of its arguments}1">;
 def err_undeclared_use : Error<"use of undeclared %0">;
+def warn_partial_availability : Warning<"%0 is only available conditionally">,
+    InGroup<PartialAvailability>, DefaultIgnore;
+def note_partial_availability_silence : Note<
+  "explicitly redeclare %0 to silence this warning">;
+def warn_partial_message : Warning<"%0 is partial: %1">,
+    InGroup<PartialAvailability>, DefaultIgnore;
+def warn_partial_fwdclass_message : Warning<
+    "%0 may be partial because the receiver type is unknown">,
+    InGroup<PartialAvailability>, DefaultIgnore;
 def warn_deprecated : Warning<"%0 is deprecated">,
     InGroup<DeprecatedDeclarations>;
 def warn_property_method_deprecated :
@@ -3894,7 +3905,7 @@ def warn_unavailable_fwdclass_message : Warning<
     InGroup<UnavailableDeclarations>;
 def note_availability_specified_here : Note<
   "%0 has been explicitly marked "
-  "%select{unavailable|deleted|deprecated}1 here">;
+  "%select{unavailable|deleted|deprecated|partial}1 here">;
 def note_implicitly_deleted : Note<
   "explicitly defaulted function was implicitly deleted here">;
 def note_inherited_deleted_here : Note<
@@ -4891,6 +4902,8 @@ def err_ivar_reference_type : Error<
   "instance variables cannot be of reference type">;
 def err_typecheck_illegal_increment_decrement : Error<
   "cannot %select{decrement|increment}1 value of type %0">;
+def err_typecheck_expect_int : Error<
+  "used type %0 where integer is required">;
 def err_typecheck_arithmetic_incomplete_type : Error<
   "arithmetic on a pointer to an incomplete type %0">;
 def err_typecheck_pointer_arith_function_type : Error<
@@ -5054,6 +5067,9 @@ def warn_null_in_comparison_operation : Warning<
   "comparison between NULL and non-pointer "
   "%select{(%1 and NULL)|(NULL and %1)}0">,
   InGroup<NullArithmetic>;
+def err_shift_rhs_only_vector : Error<
+  "requested shift is a vector of type %0 but the first operand is not a "
+  "vector (%1)">;
 
 def warn_logical_not_on_lhs_of_comparison : Warning<
   "logical not is only applied to the left hand side of this comparison">,
@@ -5256,6 +5272,10 @@ def err_objc_object_catch : Error<
   "can't catch an Objective-C object by value">;
 def err_incomplete_type_objc_at_encode : Error<
   "'@encode' of incomplete type %0">;
+def warn_objc_circular_container : Warning<
+  "adding '%0' to '%0' might cause circular dependency in container">,
+  InGroup<DiagGroup<"objc-circular-container">>;
+def note_objc_circular_container_declared_here : Note<"'%0' declared here">;
 
 def warn_setter_getter_impl_required : Warning<
   "property %0 requires method %1 to be defined - "
@@ -5479,6 +5499,9 @@ def err_mixing_cxx_try_seh_try : Error<
   "cannot use C++ 'try' in the same function as SEH '__try'">;
 def note_conflicting_try_here : Note<
   "conflicting %0 here">;
+def warn_jump_out_of_seh_finally : Warning<
+  "jump out of __finally block has undefined behavior">,
+  InGroup<DiagGroup<"jump-seh-finally">>;
 def warn_non_virtual_dtor : Warning<
   "%0 has virtual functions but non-virtual destructor">,
   InGroup<NonVirtualDtor>, DefaultIgnore;
@@ -5638,8 +5661,8 @@ def err_pseudo_dtor_type_mismatch : Error<
 def err_pseudo_dtor_call_with_args : Error<
   "call to pseudo-destructor cannot have any arguments">;
 def err_dtor_expr_without_call : Error<
-  "%select{destructor reference|pseudo-destructor expression}0 must be "
-  "called immediately with '()'">;
+  "reference to %select{destructor|pseudo-destructor}0 must be called"
+  "%select{|; did you mean to call it with no arguments?}1">;
 def err_pseudo_dtor_destructor_non_type : Error<
   "%0 does not refer to a type name in pseudo-destructor expression; expected "
   "the name of type %1">;
@@ -6067,6 +6090,9 @@ def err_global_call_not_config : Error<
 def err_ref_bad_target : Error<
   "reference to %select{__device__|__global__|__host__|__host__ __device__}0 "
   "function %1 in %select{__device__|__global__|__host__|__host__ __device__}2 function">;
+def warn_host_calls_from_host_device : Warning<
+  "calling __host__ function %0 from __host__ __device__ function %1 can lead to runtime errors">,
+  InGroup<CudaCompat>;
 
 def warn_non_pod_vararg_with_format_string : Warning<
   "cannot pass %select{non-POD|non-trivial}0 object of type %1 to variadic "
@@ -6634,6 +6660,10 @@ def warn_format_conversion_argument_type_mismatch : Warning<
   "format specifies type %0 but the argument has "
   "%select{type|underlying type}2 %1">,
   InGroup<Format>;
+def warn_format_conversion_argument_type_mismatch_pedantic : Extension<
+  "format specifies type %0 but the argument has "
+  "%select{type|underlying type}2 %1">,
+  InGroup<FormatPedantic>;
 def warn_format_argument_needs_cast : Warning<
   "%select{values of type|enum values with underlying type}2 '%0' should not "
   "be used as format arguments; add an explicit cast to %1 instead">,
@@ -7036,6 +7066,11 @@ def note_neon_vector_initializer_non_portable_q : Note<
   "vcombine_%0%1(vcreate_%0%1(), vcreate_%0%1()) to initialize from integer "
   "constants">;
 
+def err_builtin_longjmp_unsupported : Error<
+  "__builtin_longjmp is not supported for the current target">;
+def err_builtin_setjmp_unsupported : Error<
+  "__builtin_setjmp is not supported for the current target">;
+
 def err_builtin_longjmp_invalid_val : Error<
   "argument to __builtin_longjmp must be a constant 1">;
 def err_builtin_requires_language : Error<"'%0' is only available in %1">;
@@ -7102,8 +7137,8 @@ def ext_c99_array_usage : Extension<
 def err_c99_array_usage_cxx : Error<
   "%select{qualifier in |static |}0array size %select{||'[*] '}0is a C99 "
   "feature, not permitted in C++">;
-def err_double_requires_fp64 : Error<
-  "use of type 'double' requires cl_khr_fp64 extension to be enabled">;
+ def err_type_requires_extension : Error<
+  "use of type %0 requires %1 extension to be enabled">;
 def err_int128_unsupported : Error<
   "__int128 is not supported on this target">;
 def err_nsconsumed_attribute_mismatch : Error<
@@ -7468,8 +7503,15 @@ def err_omp_atomic_write_not_expression_statement : Error<
   "the statement for 'atomic write' must be an expression statement of form 'x = expr;',"
   " where x is a lvalue expression with scalar type">;
 def err_omp_atomic_update_not_expression_statement : Error<
-  "the statement for 'atomic%select{| update}0' must be an expression statement of form '++x;', '--x;', 'x++;', 'x--;', 'x binop= expr;', 'x = x binop expr' or 'x = expr binop x',"
+  "the statement for 'atomic update' must be an expression statement of form '++x;', '--x;', 'x++;', 'x--;', 'x binop= expr;', 'x = x binop expr' or 'x = expr binop x',"
   " where x is an l-value expression with scalar type">;
+def err_omp_atomic_not_expression_statement : Error<
+  "the statement for 'atomic' must be an expression statement of form '++x;', '--x;', 'x++;', 'x--;', 'x binop= expr;', 'x = x binop expr' or 'x = expr binop x',"
+  " where x is an l-value expression with scalar type">;
+def note_omp_atomic_update: Note<
+  "%select{expected an expression statement|expected built-in binary or unary operator|expected unary decrement/increment operation|"
+  "expected expression of scalar type|expected assignment expression|expected built-in binary operator|"
+  "expected one of '+', '*', '-', '/', '&', '^', '%|', '<<', or '>>' built-in operations|expected in right hand side of expression}0">;
 def err_omp_atomic_capture_not_expression_statement : Error<
   "the statement for 'atomic capture' must be an expression statement of form 'v = ++x;', 'v = --x;', 'v = x++;', 'v = x--;', 'v = x binop= expr;', 'v = x = x binop expr' or 'v = x = expr binop x',"
   " where x and v are both l-value expressions with scalar type">;

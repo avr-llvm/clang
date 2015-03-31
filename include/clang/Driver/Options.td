@@ -433,12 +433,12 @@ def fborland_extensions : Flag<["-"], "fborland-extensions">, Group<f_Group>, Fl
 def fbuiltin : Flag<["-"], "fbuiltin">, Group<f_Group>;
 def fcaret_diagnostics : Flag<["-"], "fcaret-diagnostics">, Group<f_Group>;
 def fclasspath_EQ : Joined<["-"], "fclasspath=">, Group<f_Group>;
-def fcolor_diagnostics : Flag<["-"], "fcolor-diagnostics">, Group<f_Group>, Flags<[CC1Option]>,
-  HelpText<"Use colors in diagnostics">;
+def fcolor_diagnostics : Flag<["-"], "fcolor-diagnostics">, Group<f_Group>,
+  Flags<[CoreOption, CC1Option]>, HelpText<"Use colors in diagnostics">;
 def fdiagnostics_color : Flag<["-"], "fdiagnostics-color">, Group<f_Group>;
 def fdiagnostics_color_EQ : Joined<["-"], "fdiagnostics-color=">, Group<f_Group>;
-def fansi_escape_codes : Flag<["-"], "fansi-escape-codes">, Group<f_Group>, Flags<[CC1Option]>,
-  HelpText<"Use ANSI escape codes for diagnostics">;
+def fansi_escape_codes : Flag<["-"], "fansi-escape-codes">, Group<f_Group>,
+  Flags<[CoreOption, CC1Option]>, HelpText<"Use ANSI escape codes for diagnostics">;
 def fcomment_block_commands : CommaJoined<["-"], "fcomment-block-commands=">, Group<f_clang_Group>, Flags<[CC1Option]>,
   HelpText<"Treat each comma separated argument in <arg> as a documentation comment block command">,
   MetaVarName<"<arg>">;
@@ -596,6 +596,10 @@ def frewrite_map_file_EQ : Joined<["-"], "frewrite-map-file=">,
                            Group<f_Group>,
                            Flags<[DriverOption]>;
 
+def fuse_line_directives : Flag<["-"], "fuse-line-directives">, Group<f_Group>,
+  Flags<[CC1Option]>;
+def fno_use_line_directives : Flag<["-"], "fno-use-line-directives">, Group<f_Group>;
+
 def ffreestanding : Flag<["-"], "ffreestanding">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Assert that the compilation takes place in a freestanding environment">;
 def fgnu_keywords : Flag<["-"], "fgnu-keywords">, Group<f_Group>, Flags<[CC1Option]>,
@@ -752,6 +756,8 @@ def fno_exceptions : Flag<["-"], "fno-exceptions">, Group<f_Group>;
 def fno_gnu_keywords : Flag<["-"], "fno-gnu-keywords">, Group<f_Group>, Flags<[CC1Option]>;
 def fno_inline_functions : Flag<["-"], "fno-inline-functions">, Group<f_clang_Group>, Flags<[CC1Option]>;
 def fno_inline : Flag<["-"], "fno-inline">, Group<f_clang_Group>, Flags<[CC1Option]>;
+def fveclib : Joined<["-"], "fveclib=">, Group<f_Group>, Flags<[CC1Option]>,
+    HelpText<"Use the given vector functions library">;
 def fno_lax_vector_conversions : Flag<["-"], "fno-lax-vector-conversions">, Group<f_Group>,
   HelpText<"Disallow implicit conversions between vectors with a different number of elements or different element types">, Flags<[CC1Option]>;
 def fno_merge_all_constants : Flag<["-"], "fno-merge-all-constants">, Group<f_Group>,
@@ -765,6 +771,10 @@ def fno_modules_decluse : Flag <["-"], "fno-modules-decluse">, Group<f_Group>,
 def fno_modules_strict_decluse : Flag <["-"], "fno-strict-modules-decluse">, Group<f_Group>,
   Flags<[DriverOption]>;
 def fimplicit_modules : Flag <["-"], "fimplicit-modules">, Group<f_Group>,
+  Flags<[DriverOption]>;
+def fmodule_file_deps : Flag <["-"], "fmodule-file-deps">, Group<f_Group>,
+  Flags<[DriverOption]>;
+def fno_module_file_deps : Flag <["-"], "fno-module-file-deps">, Group<f_Group>,
   Flags<[DriverOption]>;
 def fno_ms_extensions : Flag<["-"], "fno-ms-extensions">, Group<f_Group>;
 def fno_ms_compatibility : Flag<["-"], "fno-ms-compatibility">, Group<f_Group>;
@@ -815,6 +825,14 @@ def fobjc_atdefs : Flag<["-"], "fobjc-atdefs">, Group<clang_ignored_f_Group>;
 def fobjc_call_cxx_cdtors : Flag<["-"], "fobjc-call-cxx-cdtors">, Group<clang_ignored_f_Group>;
 def fobjc_exceptions: Flag<["-"], "fobjc-exceptions">, Group<f_Group>,
   HelpText<"Enable Objective-C exceptions">, Flags<[CC1Option]>;
+def fapplication_extension : Flag<["-"], "fapplication-extension">,
+  Group<f_Group>, Flags<[CC1Option]>,
+  HelpText<"Restrict code to those available for App Extensions">;
+def fno_application_extension : Flag<["-"], "fno-application-extension">,
+  Group<f_Group>;
+def fsized_deallocation : Flag<["-"], "fsized-deallocation">, Flags<[CC1Option]>,
+  HelpText<"Enable C++14 sized global deallocation functions">, Group<f_Group>;
+def fno_sized_deallocation: Flag<["-"], "fno-sized-deallocation">, Group<f_Group>;
 
 def fobjc_gc_only : Flag<["-"], "fobjc-gc-only">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Use GC exclusively for Objective-C related memory management">;
@@ -1242,6 +1260,10 @@ def mpower8_vector : Flag<["-"], "mpower8-vector">,
     Group<m_ppc_Features_Group>;
 def mno_power8_vector : Flag<["-"], "mno-power8-vector">,
     Group<m_ppc_Features_Group>;
+def mpower8_crypto : Flag<["-"], "mcrypto">,
+    Group<m_ppc_Features_Group>;
+def mnopower8_crypto : Flag<["-"], "mno-crypto">,
+    Group<m_ppc_Features_Group>;
 def mfprnd : Flag<["-"], "mfprnd">, Group<m_ppc_Features_Group>;
 def mno_fprnd : Flag<["-"], "mno-fprnd">, Group<m_ppc_Features_Group>;
 def mcmpb : Flag<["-"], "mcmpb">, Group<m_ppc_Features_Group>;
@@ -1528,7 +1550,7 @@ def no_system_header_prefix : Joined<["--"], "no-system-header-prefix=">,
            "system header.">;
 def : Separate<["--"], "no-system-header-prefix">, Alias<no_system_header_prefix>;
 def s : Flag<["-"], "s">;
-def target : Joined<["--"], "target=">, Flags<[DriverOption, CoreOption]>,
+def target : Joined<["-", "--"], "target=">, Flags<[DriverOption, CoreOption]>,
   HelpText<"Generate code for the given target">;
 def gcc_toolchain : Joined<["--"], "gcc-toolchain=">, Flags<[DriverOption]>,
   HelpText<"Use the gcc toolchain at the given directory">;
@@ -1701,7 +1723,7 @@ def mv5 : Flag<["-"], "mv5">, Group<m_hexagon_Features_Group>, Alias<march_EQ>,
 // aliases for options that are spelled using the more common Unix / GNU flag
 // style of double-dash and equals-joined flags.
 def gcc_toolchain_legacy_spelling : Separate<["-"], "gcc-toolchain">, Alias<gcc_toolchain>;
-def target_legacy_spelling : Separate<["-"], "target">, Alias<target>;
+def target_legacy_spelling : Separate<["-", "--"], "target">, Alias<target>;
 
 // Special internal option to handle -Xlinker --no-demangle.
 def Z_Xlinker__no_demangle : Flag<["-"], "Z-Xlinker-no-demangle">,

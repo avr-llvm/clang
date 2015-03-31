@@ -486,7 +486,7 @@ void ASTStmtReader::VisitStringLiteral(StringLiteral *E) {
 
   // Read string data
   SmallString<16> Str(&Record[Idx], &Record[Idx] + Len);
-  E->setString(Reader.getContext(), Str.str(), kind, isPascal);
+  E->setString(Reader.getContext(), Str, kind, isPascal);
   Idx += Len;
 
   // Read source locations
@@ -1928,7 +1928,20 @@ void OMPClauseReader::VisitOMPLinearClause(OMPLinearClause *C) {
   for (unsigned i = 0; i != NumVars; ++i)
     Vars.push_back(Reader->Reader.ReadSubExpr());
   C->setVarRefs(Vars);
+  Vars.clear();
+  for (unsigned i = 0; i != NumVars; ++i)
+    Vars.push_back(Reader->Reader.ReadSubExpr());
+  C->setInits(Vars);
+  Vars.clear();
+  for (unsigned i = 0; i != NumVars; ++i)
+    Vars.push_back(Reader->Reader.ReadSubExpr());
+  C->setUpdates(Vars);
+  Vars.clear();
+  for (unsigned i = 0; i != NumVars; ++i)
+    Vars.push_back(Reader->Reader.ReadSubExpr());
+  C->setFinals(Vars);
   C->setStep(Reader->Reader.ReadSubExpr());
+  C->setCalcStep(Reader->Reader.ReadSubExpr());
 }
 
 void OMPClauseReader::VisitOMPAlignedClause(OMPAlignedClause *C) {
@@ -1956,11 +1969,23 @@ void OMPClauseReader::VisitOMPCopyinClause(OMPCopyinClause *C) {
 void OMPClauseReader::VisitOMPCopyprivateClause(OMPCopyprivateClause *C) {
   C->setLParenLoc(Reader->ReadSourceLocation(Record, Idx));
   unsigned NumVars = C->varlist_size();
-  SmallVector<Expr *, 16> Vars;
-  Vars.reserve(NumVars);
+  SmallVector<Expr *, 16> Exprs;
+  Exprs.reserve(NumVars);
   for (unsigned i = 0; i != NumVars; ++i)
-    Vars.push_back(Reader->Reader.ReadSubExpr());
-  C->setVarRefs(Vars);
+    Exprs.push_back(Reader->Reader.ReadSubExpr());
+  C->setVarRefs(Exprs);
+  Exprs.clear();
+  for (unsigned i = 0; i != NumVars; ++i)
+    Exprs.push_back(Reader->Reader.ReadSubExpr());
+  C->setSourceExprs(Exprs);
+  Exprs.clear();
+  for (unsigned i = 0; i != NumVars; ++i)
+    Exprs.push_back(Reader->Reader.ReadSubExpr());
+  C->setDestinationExprs(Exprs);
+  Exprs.clear();
+  for (unsigned i = 0; i != NumVars; ++i)
+    Exprs.push_back(Reader->Reader.ReadSubExpr());
+  C->setAssignmentOps(Exprs);
 }
 
 void OMPClauseReader::VisitOMPFlushClause(OMPFlushClause *C) {
@@ -2132,7 +2157,9 @@ void ASTStmtReader::VisitOMPAtomicDirective(OMPAtomicDirective *D) {
   // The NumClauses field was read in ReadStmtFromStream.
   ++Idx;
   VisitOMPExecutableDirective(D);
+  D->setOpKind(static_cast<BinaryOperatorKind>(Record[Idx++]));
   D->setX(Reader.ReadSubExpr());
+  D->setXRVal(Reader.ReadSubExpr());
   D->setV(Reader.ReadSubExpr());
   D->setExpr(Reader.ReadSubExpr());
 }

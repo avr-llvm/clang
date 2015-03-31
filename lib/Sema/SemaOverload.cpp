@@ -3342,7 +3342,7 @@ CompareImplicitConversionSequences(Sema &S,
   // list-initialization sequence L2 if:
   // - L1 converts to std::initializer_list<X> for some X and L2 does not, or,
   //   if not that,
-  // - L1 converts to type “array of N1 T”, L2 converts to type “array of N2 T”,
+  // - L1 converts to type "array of N1 T", L2 converts to type "array of N2 T",
   //   and N1 is smaller than N2.,
   // even if one of the other rules in this paragraph would otherwise apply.
   if (!ICS1.isBad()) {
@@ -4501,7 +4501,7 @@ TryListConversion(Sema &S, InitListExpr *From, QualType ToType,
   //   element of the list to X.
   //
   // C++14 [over.ics.list]p3:
-  //   Otherwise, if the parameter type is “array of N X”, if the initializer
+  //   Otherwise, if the parameter type is "array of N X", if the initializer
   //   list has exactly N elements or if it has fewer than N elements and X is
   //   default-constructible, and if all the elements of the initializer list
   //   can be implicitly converted to X, the implicit conversion sequence is
@@ -9497,10 +9497,7 @@ struct CompareOverloadCandidatesForDisplay {
         numLFixes = (numLFixes == 0) ? UINT_MAX : numLFixes;
         numRFixes = (numRFixes == 0) ? UINT_MAX : numRFixes;
         if (numLFixes != numRFixes) {
-          if (numLFixes < numRFixes)
-            return true;
-          else
-            return false;
+          return numLFixes < numRFixes;
         }
 
         // If there's any ordering between the defined conversions...
@@ -11594,6 +11591,10 @@ Sema::BuildCallToMemberFunction(Scope *S, Expr *MemExprE,
 
     return MaybeBindToTemporary(call);
   }
+
+  if (isa<CXXPseudoDestructorExpr>(NakedMemExpr))
+    return new (Context)
+        CallExpr(Context, MemExprE, Args, Context.VoidTy, VK_RValue, RParenLoc);
 
   UnbridgedCastsSet UnbridgedCasts;
   if (checkArgPlaceholdersForOverload(*this, Args, UnbridgedCasts))

@@ -1702,7 +1702,7 @@ public:
   }
 
   StmtResult RebuildSEHFinallyStmt(SourceLocation Loc, Stmt *Block) {
-    return getSema().ActOnSEHFinallyBlock(Loc, Block);
+    return SEHFinallyStmt::Create(getSema().getASTContext(), Loc, Block);
   }
 
   /// \brief Build a new predefined expression.
@@ -10727,11 +10727,9 @@ TreeTransform<Derived>::RebuildCXXPseudoDestructorExpr(Expr *Base,
        !BaseType->getAs<PointerType>()->getPointeeType()
                                               ->template getAs<RecordType>())){
     // This pseudo-destructor expression is still a pseudo-destructor.
-    return SemaRef.BuildPseudoDestructorExpr(Base, OperatorLoc,
-                                             isArrow? tok::arrow : tok::period,
-                                             SS, ScopeType, CCLoc, TildeLoc,
-                                             Destroyed,
-                                             /*FIXME?*/true);
+    return SemaRef.BuildPseudoDestructorExpr(
+        Base, OperatorLoc, isArrow ? tok::arrow : tok::period, SS, ScopeType,
+        CCLoc, TildeLoc, Destroyed);
   }
 
   TypeSourceInfo *DestroyedType = Destroyed.getTypeSourceInfo();

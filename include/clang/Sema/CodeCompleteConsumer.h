@@ -17,6 +17,7 @@
 #include "clang/AST/CanonicalType.h"
 #include "clang/AST/Type.h"
 #include "clang/Sema/CodeCompleteOptions.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Allocator.h"
@@ -498,20 +499,7 @@ public:
 class CodeCompletionAllocator : public llvm::BumpPtrAllocator {
 public:
   /// \brief Copy the given string into this allocator.
-  const char *CopyString(StringRef String);
-
-  /// \brief Copy the given string into this allocator.
-  const char *CopyString(Twine String);
-
-  // \brief Copy the given string into this allocator.
-  const char *CopyString(const char *String) {
-    return CopyString(StringRef(String));
-  }
-
-  /// \brief Copy the given string into this allocator.
-  const char *CopyString(const std::string &String) {
-    return CopyString(StringRef(String));
-  }
+  const char *CopyString(const Twine &String);
 };
 
 /// \brief Allocator for a cached set of global code completions.

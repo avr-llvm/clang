@@ -118,6 +118,7 @@ void Parser::CheckForLParenAfterColonColon() {
   // Eat the '('.
   ConsumeParen();
   Token RParen;
+  RParen.setLocation(SourceLocation());
   // Do we have a ')' ?
   NextTok = StarTok.is(tok::star) ? GetLookAheadToken(2) : GetLookAheadToken(1);
   if (NextTok.is(tok::r_paren)) {
@@ -1493,9 +1494,8 @@ Parser::ParseCXXPseudoDestructor(Expr *Base, SourceLocation OpLoc,
     ParseDecltypeSpecifier(DS);
     if (DS.getTypeSpecType() == TST_error)
       return ExprError();
-    return Actions.ActOnPseudoDestructorExpr(getCurScope(), Base, OpLoc, 
-                                             OpKind, TildeLoc, DS, 
-                                             Tok.is(tok::l_paren));
+    return Actions.ActOnPseudoDestructorExpr(getCurScope(), Base, OpLoc, OpKind,
+                                             TildeLoc, DS);
   }
 
   if (!Tok.is(tok::identifier)) {
@@ -1518,11 +1518,9 @@ Parser::ParseCXXPseudoDestructor(Expr *Base, SourceLocation OpLoc,
                                    /*AssumeTemplateName=*/true))
     return ExprError();
 
-  return Actions.ActOnPseudoDestructorExpr(getCurScope(), Base,
-                                           OpLoc, OpKind,
-                                           SS, FirstTypeName, CCLoc,
-                                           TildeLoc, SecondTypeName,
-                                           Tok.is(tok::l_paren));
+  return Actions.ActOnPseudoDestructorExpr(getCurScope(), Base, OpLoc, OpKind,
+                                           SS, FirstTypeName, CCLoc, TildeLoc,
+                                           SecondTypeName);
 }
 
 /// ParseCXXBoolLiteral - This handles the C++ Boolean literals.

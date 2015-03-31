@@ -212,6 +212,29 @@ void Sema::Initialize() {
     addImplicitTypedef("image3d_t", Context.OCLImage3dTy);
     addImplicitTypedef("sampler_t", Context.OCLSamplerTy);
     addImplicitTypedef("event_t", Context.OCLEventTy);
+    if (getLangOpts().OpenCLVersion >= 200) {
+      addImplicitTypedef("atomic_int", Context.getAtomicType(Context.IntTy));
+      addImplicitTypedef("atomic_uint",
+                         Context.getAtomicType(Context.UnsignedIntTy));
+      addImplicitTypedef("atomic_long", Context.getAtomicType(Context.LongTy));
+      addImplicitTypedef("atomic_ulong",
+                         Context.getAtomicType(Context.UnsignedLongTy));
+      addImplicitTypedef("atomic_float",
+                         Context.getAtomicType(Context.FloatTy));
+      addImplicitTypedef("atomic_double",
+                         Context.getAtomicType(Context.DoubleTy));
+      // OpenCLC v2.0, s6.13.11.6 requires that atomic_flag is implemented as
+      // 32-bit integer and OpenCLC v2.0, s6.1.1 int is always 32-bit wide.
+      addImplicitTypedef("atomic_flag", Context.getAtomicType(Context.IntTy));
+      addImplicitTypedef("atomic_intptr_t",
+                         Context.getAtomicType(Context.getIntPtrType()));
+      addImplicitTypedef("atomic_uintptr_t",
+                         Context.getAtomicType(Context.getUIntPtrType()));
+      addImplicitTypedef("atomic_size_t",
+                         Context.getAtomicType(Context.getSizeType()));
+      addImplicitTypedef("atomic_ptrdiff_t",
+                         Context.getAtomicType(Context.getPointerDiffType()));
+    }
   }
 
   DeclarationName BuiltinVaList = &Context.Idents.get("__builtin_va_list");
@@ -621,22 +644,6 @@ void Sema::ActOnEndOfTranslationUnit() {
   if (TUKind != TU_Prefix) {
     DiagnoseUseOfUnimplementedSelectors();
 
-    // If any dynamic classes have their key function defined within
-    // this translation unit, then those vtables are considered "used" and must
-    // be emitted.
-    for (DynamicClassesType::iterator I = DynamicClasses.begin(ExternalSource),
-                                      E = DynamicClasses.end();
-         I != E; ++I) {
-      assert(!(*I)->isDependentType() &&
-             "Should not see dependent types here!");
-      if (const CXXMethodDecl *KeyFunction =
-              Context.getCurrentKeyFunction(*I)) {
-        const FunctionDecl *Definition = nullptr;
-        if (KeyFunction->hasBody(Definition))
-          MarkVTableUsed(Definition->getLocation(), *I, true);
-      }
-    }
-
     // If DefinedUsedVTables ends up marking any virtual member functions it
     // might lead to more pending template instantiations, which we then need
     // to instantiate.
@@ -668,6 +675,8 @@ void Sema::ActOnEndOfTranslationUnit() {
 
   // All delayed member exception specs should be checked or we end up accepting
   // incompatible declarations.
+  // FIXME: This is wrong for TUKind == TU_Prefix. In that case, we need to
+  // write out the lists to the AST file (if any).
   assert(DelayedDefaultedMemberExceptionSpecs.empty());
   assert(DelayedExceptionSpecChecks.empty());
 
