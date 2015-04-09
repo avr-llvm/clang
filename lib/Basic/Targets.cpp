@@ -5663,13 +5663,14 @@ namespace {
       IntPtrType = SignedInt;
       PtrDiffType = SignedInt;
       SigAtomicType = SignedLong;
-      DescriptionString = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-n8";
+      DescriptionString = "e-p:16:8:8-i8:8:8-i16:8:8-i32:8:8-i64:8:8-f32:8:8-f64:8:8-n8";
     }
 
     void getTargetDefines(const LangOptions &Opts,
                           MacroBuilder &Builder) const override {
       Builder.defineMacro("AVR");
       Builder.defineMacro("__AVR__");
+      Builder.defineMacro("__AVR");
 
       // FIXME: defines for different 'flavours' of MCU
 
