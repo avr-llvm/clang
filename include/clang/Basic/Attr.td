@@ -583,7 +583,7 @@ def CUDAInvalidTarget : InheritableAttr {
 
 def CUDALaunchBounds : InheritableAttr {
   let Spellings = [GNU<"launch_bounds">];
-  let Args = [IntArgument<"MaxThreads">, DefaultIntArgument<"MinBlocks", 0>];
+  let Args = [ExprArgument<"MaxThreads">, ExprArgument<"MinBlocks", 1>];
   let LangOpts = [CUDA];
   let Subjects = SubjectList<[ObjCMethod, FunctionLike], WarnDiag,
                              "ExpectedFunctionOrMethod">;
@@ -1133,6 +1133,11 @@ def ObjCMethodFamily : InheritableAttr {
 
 def ObjCNSObject : InheritableAttr {
   let Spellings = [GNU<"NSObject">];
+  let Documentation = [Undocumented];
+}
+
+def ObjCIndependentClass : InheritableAttr {
+  let Spellings = [GNU<"objc_independent_class">];
   let Documentation = [Undocumented];
 }
 

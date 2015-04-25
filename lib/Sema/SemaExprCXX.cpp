@@ -1418,8 +1418,9 @@ Sema::BuildCXXNew(SourceRange Range, bool UseGlobal,
                    << ConvTy->isEnumeralType() << ConvTy;
         }
 
-        virtual SemaDiagnosticBuilder diagnoseConversion(
-            Sema &S, SourceLocation Loc, QualType T, QualType ConvTy) override {
+        SemaDiagnosticBuilder diagnoseConversion(Sema &S, SourceLocation Loc,
+                                                 QualType T,
+                                                 QualType ConvTy) override {
           return S.Diag(Loc,
                         S.getLangOpts().CPlusPlus11
                           ? diag::warn_cxx98_compat_array_size_conversion
@@ -5771,10 +5772,9 @@ ExprResult Sema::BuildCXXMemberCallExpr(Expr *E, NamedDecl *FoundDecl,
   if (Exp.isInvalid())
     return true;
 
-  MemberExpr *ME =
-      new (Context) MemberExpr(Exp.get(), /*IsArrow=*/false, Method,
-                               SourceLocation(), Context.BoundMemberTy,
-                               VK_RValue, OK_Ordinary);
+  MemberExpr *ME = new (Context) MemberExpr(
+      Exp.get(), /*IsArrow=*/false, SourceLocation(), Method, SourceLocation(),
+      Context.BoundMemberTy, VK_RValue, OK_Ordinary);
   if (HadMultipleCandidates)
     ME->setHadMultipleCandidates(true);
   MarkMemberReferenced(ME);

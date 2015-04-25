@@ -490,7 +490,7 @@ struct CtorWithClosure {
 // M32-DAG:   %[[this_addr:.*]] = alloca %struct.CtorWithClosure*, align 4
 // M32-DAG:   store %struct.CtorWithClosure* %this, %struct.CtorWithClosure** %[[this_addr]], align 4
 // M32-DAG:   %[[this:.*]] = load %struct.CtorWithClosure*, %struct.CtorWithClosure** %[[this_addr]]
-// M32-DAG:   call %struct.CtorWithClosure* (%struct.CtorWithClosure*, ...)* @"\01??0CtorWithClosure@@QAA@ZZ"(%struct.CtorWithClosure* %[[this]])
+// M32-DAG:   call %struct.CtorWithClosure* (%struct.CtorWithClosure*, ...) @"\01??0CtorWithClosure@@QAA@ZZ"(%struct.CtorWithClosure* %[[this]])
 // M32-DAG:   ret void
 };
 
@@ -507,7 +507,7 @@ struct __declspec(dllexport) ClassWithClosure {
 // M32-DAG:   %[[this_addr:.*]] = alloca %struct.ClassWithClosure*, align 4
 // M32-DAG:   store %struct.ClassWithClosure* %this, %struct.ClassWithClosure** %[[this_addr]], align 4
 // M32-DAG:   %[[this:.*]] = load %struct.ClassWithClosure*, %struct.ClassWithClosure** %[[this_addr]]
-// M32-DAG:   call %struct.ClassWithClosure* (%struct.ClassWithClosure*, ...)* @"\01??0ClassWithClosure@@QAA@ZZ"(%struct.ClassWithClosure* %[[this]])
+// M32-DAG:   call %struct.ClassWithClosure* (%struct.ClassWithClosure*, ...) @"\01??0ClassWithClosure@@QAA@ZZ"(%struct.ClassWithClosure* %[[this]])
 // M32-DAG:   ret void
 };
 
@@ -690,6 +690,15 @@ template <typename T> struct __declspec(dllexport) ExplicitInstantiationDeclExpo
 extern template struct ExplicitInstantiationDeclExportedTemplate<int>;
 USEMEMFUNC(ExplicitInstantiationDeclExportedTemplate<int>, f);
 // M32-DAG: {{declare|define available_externally}} x86_thiscallcc void @"\01?f@?$ExplicitInstantiationDeclExportedTemplate@H@@QAEXXZ"
+
+namespace { struct InternalLinkageType {}; }
+struct __declspec(dllexport) PR23308 {
+  void f(InternalLinkageType*);
+};
+void PR23308::f(InternalLinkageType*) {}
+long use(PR23308* p) { p->f(nullptr); }
+// M32-DAG: define internal x86_thiscallcc void @"\01?f@PR23308@@QAEXPAUInternalLinkageType@?A@@@Z"
+
 
 
 //===----------------------------------------------------------------------===//

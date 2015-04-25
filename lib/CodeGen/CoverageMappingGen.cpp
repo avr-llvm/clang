@@ -124,7 +124,7 @@ public:
   SourceLocation getEndOfFileOrMacro(SourceLocation Loc) {
     if (Loc.isMacroID())
       return Loc.getLocWithOffset(SM.getFileIDSize(SM.getFileID(Loc)) -
-                                  SM.getFileOffset(Loc) - 1);
+                                  SM.getFileOffset(Loc));
     return SM.getLocForEndOfFile(SM.getFileID(Loc));
   }
 
@@ -147,7 +147,7 @@ public:
     SourceLocation Loc = S->getLocEnd();
     while (SM.isMacroArgExpansion(Loc))
       Loc = SM.getImmediateExpansionRange(Loc).first;
-    return Loc;
+    return getPreciseTokenLocEnd(Loc);
   }
 
   /// \brief Find the set of files we have regions for and assign IDs
@@ -257,7 +257,7 @@ public:
       if (!CovFileID)
         continue;
 
-      SourceLocation LocEnd = getPreciseTokenLocEnd(Region.getEndLoc());
+      SourceLocation LocEnd = Region.getEndLoc();
       assert(SM.isWrittenInSameFile(LocStart, LocEnd) &&
              "region spans multiple files");
 
@@ -407,7 +407,7 @@ struct CounterCoverageMappingBuilder
 
           SourceRegions.emplace_back(Region.getCounter(), NestedLoc, EndLoc);
 
-          EndLoc = getIncludeOrExpansionLoc(EndLoc);
+          EndLoc = getPreciseTokenLocEnd(getIncludeOrExpansionLoc(EndLoc));
           assert(!EndLoc.isInvalid() &&
                  "File exit was not handled before popRegions");
         }
@@ -748,7 +748,7 @@ struct CounterCoverageMappingBuilder
         size_t Index =
             pushRegion(Counter::getZero(), getStart(CS->body_front()),
                        getEnd(CS->body_back()));
-        for (const auto &Child : CS->children())
+        for (const auto *Child : CS->children())
           Visit(Child);
         popRegions(Index);
       }

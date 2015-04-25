@@ -750,9 +750,8 @@ static void getARMTargetFeatures(const Driver &D, const llvm::Triple &Triple,
     Features.push_back("-crypto");
   }
 
-  // En/disable crc
-  if (Arg *A = Args.getLastArg(options::OPT_mcrc,
-                               options::OPT_mnocrc)) {
+  // En/disable crc code generation.
+  if (Arg *A = Args.getLastArg(options::OPT_mcrc, options::OPT_mnocrc)) {
     if (A->getOption().matches(options::OPT_mcrc))
       Features.push_back("+crc");
     else
@@ -862,12 +861,14 @@ void Clang::AddARMTargetArgs(const ArgList &Args,
     }
   }
 
-  // Setting -mno-global-merge disables the codegen global merge pass. Setting 
-  // -mglobal-merge has no effect as the pass is enabled by default.
+  // Forward the -mglobal-merge option for explicit control over the pass.
   if (Arg *A = Args.getLastArg(options::OPT_mglobal_merge,
                                options::OPT_mno_global_merge)) {
+    CmdArgs.push_back("-backend-option");
     if (A->getOption().matches(options::OPT_mno_global_merge))
-      CmdArgs.push_back("-mno-global-merge");
+      CmdArgs.push_back("-arm-global-merge=false");
+    else
+      CmdArgs.push_back("-arm-global-merge=true");
   }
 
   if (!Args.hasFlag(options::OPT_mimplicit_float,
@@ -976,12 +977,14 @@ void Clang::AddAArch64TargetArgs(const ArgList &Args,
     CmdArgs.push_back("-aarch64-fix-cortex-a53-835769=1");
   }
 
-  // Setting -mno-global-merge disables the codegen global merge pass. Setting
-  // -mglobal-merge has no effect as the pass is enabled by default.
+  // Forward the -mglobal-merge option for explicit control over the pass.
   if (Arg *A = Args.getLastArg(options::OPT_mglobal_merge,
                                options::OPT_mno_global_merge)) {
+    CmdArgs.push_back("-backend-option");
     if (A->getOption().matches(options::OPT_mno_global_merge))
-      CmdArgs.push_back("-mno-global-merge");
+      CmdArgs.push_back("-aarch64-global-merge=false");
+    else
+      CmdArgs.push_back("-aarch64-global-merge=true");
   }
 
   if (Args.hasArg(options::OPT_ffixed_x18)) {
@@ -1133,11 +1136,21 @@ static void getMIPSTargetFeatures(const Driver &D, const llvm::Triple &Triple,
 
   if (Arg *A = Args.getLastArg(options::OPT_mnan_EQ)) {
     StringRef Val = StringRef(A->getValue());
-    if (Val == "2008")
-      Features.push_back("+nan2008");
-    else if (Val == "legacy")
-      Features.push_back("-nan2008");
-    else
+    if (Val == "2008") {
+      if (mips::getSupportedNanEncoding(CPUName) & mips::Nan2008)
+        Features.push_back("+nan2008");
+      else {
+        Features.push_back("-nan2008");
+        D.Diag(diag::warn_target_unsupported_nan2008) << CPUName;
+      }
+    } else if (Val == "legacy") {
+      if (mips::getSupportedNanEncoding(CPUName) & mips::NanLegacy)
+        Features.push_back("-nan2008");
+      else {
+        Features.push_back("+nan2008");
+        D.Diag(diag::warn_target_unsupported_nanlegacy) << CPUName;
+      }
+    } else
       D.Diag(diag::err_drv_unsupported_option_argument)
           << A->getOption().getName() << Val;
   }
@@ -1436,6 +1449,18 @@ static const char *getSystemZTargetCPU(const ArgList &Args) {
   return "z10";
 }
 
+static void getSystemZTargetFeatures(const ArgList &Args,
+                                     std::vector<const char *> &Features) {
+  // -m(no-)htm overrides use of the transactional-execution facility.
+  if (Arg *A = Args.getLastArg(options::OPT_mhtm,
+                               options::OPT_mno_htm)) {
+    if (A->getOption().matches(options::OPT_mhtm))
+      Features.push_back("+transactional-execution");
+    else
+      Features.push_back("-transactional-execution");
+  }
+}
+
 static const char *getX86TargetCPU(const ArgList &Args,
                                    const llvm::Triple &Triple) {
   if (const Arg *A = Args.getLastArg(options::OPT_march_EQ)) {
@@ -1583,10 +1608,20 @@ static void AddGoldPlugin(const ToolChain &ToolChain, const ArgList &Args,
     CmdArgs.push_back(Args.MakeArgString(Twine("-plugin-opt=mcpu=") + CPU));
 }
 
-static void getX86TargetFeatures(const Driver & D,
-                                 const llvm::Triple &Triple,
+static void getX86TargetFeatures(const Driver &D, const llvm::Triple &Triple,
                                  const ArgList &Args,
                                  std::vector<const char *> &Features) {
+  // If -march=native, autodetect the feature list.
+  if (const Arg *A = Args.getLastArg(options::OPT_march_EQ)) {
+    if (StringRef(A->getValue()) == "native") {
+      llvm::StringMap<bool> HostFeatures;
+      if (llvm::sys::getHostCPUFeatures(HostFeatures))
+        for (auto &F : HostFeatures)
+          Features.push_back(Args.MakeArgString((F.second ? "+" : "-") +
+                                                F.first()));
+    }
+  }
+
   if (Triple.getArchName() == "x86_64h") {
     // x86_64h implies quite a few of the more modern subtarget features
     // for Haswell class CPUs, but not all of them. Opt-out of a few.
@@ -1598,7 +1633,7 @@ static void getX86TargetFeatures(const Driver & D,
     Features.push_back("-fsgsbase");
   }
 
-  // Add features to comply with gcc on Android
+  // Add features to be compatible with gcc for Android.
   if (Triple.getEnvironment() == llvm::Triple::Android) {
     if (Triple.getArch() == llvm::Triple::x86_64) {
       Features.push_back("+sse4.2");
@@ -1607,7 +1642,7 @@ static void getX86TargetFeatures(const Driver & D,
       Features.push_back("+ssse3");
   }
 
-  // Set features according to the -arch flag on MSVC
+  // Set features according to the -arch flag on MSVC.
   if (Arg *A = Args.getLastArg(options::OPT__SLASH_arch)) {
     StringRef Arch = A->getValue();
     bool ArchUsed = false;
@@ -1787,8 +1822,17 @@ getAArch64ArchFeaturesFromMarch(const Driver &D, StringRef March,
                                 const ArgList &Args,
                                 std::vector<const char *> &Features) {
   std::pair<StringRef, StringRef> Split = March.split("+");
-  if (Split.first != "armv8-a")
+
+  if (Split.first == "armv8-a" ||
+      Split.first == "armv8a") {
+    // ok, no additional features.
+  } else if (
+      Split.first == "armv8.1-a" ||
+      Split.first == "armv8.1a" ) {
+    Features.push_back("+v8.1a");
+  } else {
     return false;
+  }
 
   if (Split.second.size() && !DecodeAArch64Features(D, Split.second, Features))
     return false;
@@ -1905,6 +1949,9 @@ static void getTargetFeatures(const Driver &D, const llvm::Triple &Triple,
   case llvm::Triple::sparc:
   case llvm::Triple::sparcv9:
     getSparcTargetFeatures(Args, Features);
+    break;
+  case llvm::Triple::systemz:
+    getSystemZTargetFeatures(Args, Features);
     break;
   case llvm::Triple::aarch64:
   case llvm::Triple::aarch64_be:
@@ -2302,15 +2349,10 @@ collectSanitizerRuntimes(const ToolChain &TC, const ArgList &Args,
     StaticRuntimes.push_back("msan");
   if (SanArgs.needsTsanRt())
     StaticRuntimes.push_back("tsan");
-  // WARNING: UBSan should always go last.
   if (SanArgs.needsUbsanRt()) {
-    // If UBSan is not combined with another sanitizer, we need to pull in
-    // sanitizer_common explicitly.
-    if (StaticRuntimes.empty())
-      HelperStaticRuntimes.push_back("san");
-    StaticRuntimes.push_back("ubsan");
+    StaticRuntimes.push_back("ubsan_standalone");
     if (SanArgs.linkCXXRuntimes())
-      StaticRuntimes.push_back("ubsan_cxx");
+      StaticRuntimes.push_back("ubsan_standalone_cxx");
   }
 }
 
@@ -2665,6 +2707,13 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       assert(JA.getType() == types::TY_PP_Asm &&
              "Unexpected output type!");
     }
+
+    // Preserve use-list order by default when emitting bitcode, so that
+    // loading the bitcode up in 'opt' or 'llc' and running passes gives the
+    // same result as running passes here.  For LTO, we don't need to preserve
+    // the use-list order, since serialization to bitcode is part of the flow.
+    if (JA.getType() == types::TY_LLVM_BC)
+      CmdArgs.push_back("-emit-llvm-uselists");
   }
 
   // We normally speed up the clang process a bit by skipping destructors at
@@ -3063,6 +3112,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (!SignedZeros)
     CmdArgs.push_back("-fno-signed-zeros");
 
+  if (ReciprocalMath)
+    CmdArgs.push_back("-freciprocal-math");
+
   // Validate and pass through -fp-contract option. 
   if (Arg *A = Args.getLastArg(options::OPT_ffast_math, FastMathAliasOption,
                                options::OPT_fno_fast_math,
@@ -3105,8 +3157,10 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       Args.hasArg(options::OPT_dA))
     CmdArgs.push_back("-masm-verbose");
 
-  if (!Args.hasFlag(options::OPT_fintegrated_as, options::OPT_fno_integrated_as,
-                    IsIntegratedAssemblerDefault))
+  bool UsingIntegratedAssembler =
+      Args.hasFlag(options::OPT_fintegrated_as, options::OPT_fno_integrated_as,
+                   IsIntegratedAssemblerDefault);
+  if (!UsingIntegratedAssembler)
     CmdArgs.push_back("-no-integrated-as");
 
   if (Args.hasArg(options::OPT_fdebug_pass_structure)) {
@@ -3336,18 +3390,22 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("-generate-type-units");
   }
 
+  // CloudABI uses -ffunction-sections and -fdata-sections by default.
+  bool UseSeparateSections = Triple.getOS() == llvm::Triple::CloudABI;
+
   if (Args.hasFlag(options::OPT_ffunction_sections,
-                   options::OPT_fno_function_sections, false)) {
+                   options::OPT_fno_function_sections, UseSeparateSections)) {
     CmdArgs.push_back("-ffunction-sections");
   }
 
   if (Args.hasFlag(options::OPT_fdata_sections,
-                   options::OPT_fno_data_sections, false)) {
+                   options::OPT_fno_data_sections, UseSeparateSections)) {
     CmdArgs.push_back("-fdata-sections");
   }
 
   if (!Args.hasFlag(options::OPT_funique_section_names,
-                    options::OPT_fno_unique_section_names, true))
+                    options::OPT_fno_unique_section_names,
+                    !UsingIntegratedAssembler))
     CmdArgs.push_back("-fno-unique-section-names");
 
   Args.AddAllArgs(CmdArgs, options::OPT_finstrument_functions);
@@ -5601,7 +5659,7 @@ const char *arm::getLLVMArchSuffixForARM(StringRef CPU) {
     .Cases("arm1156t2-s",  "arm1156t2f-s", "v6t2")
     .Cases("cortex-a5", "cortex-a7", "cortex-a8", "v7")
     .Cases("cortex-a9", "cortex-a12", "cortex-a15", "cortex-a17", "krait", "v7")
-    .Cases("cortex-r4", "cortex-r5", "cortex-r7", "v7r")
+    .Cases("cortex-r4", "cortex-r4f", "cortex-r5", "cortex-r7", "v7r")
     .Cases("sc000", "cortex-m0", "cortex-m0plus", "cortex-m1", "v6m")
     .Cases("sc300", "cortex-m3", "v7m")
     .Cases("cortex-m4", "cortex-m7", "v7em")
@@ -5623,6 +5681,26 @@ void arm::appendEBLinkFlags(const ArgList &Args, ArgStringList &CmdArgs, const l
 
   if (LinkFlag)
     CmdArgs.push_back(LinkFlag);
+}
+
+mips::NanEncoding mips::getSupportedNanEncoding(StringRef &CPU) {
+  return (NanEncoding)llvm::StringSwitch<int>(CPU)
+      .Case("mips1", NanLegacy)
+      .Case("mips2", NanLegacy)
+      .Case("mips3", NanLegacy)
+      .Case("mips4", NanLegacy)
+      .Case("mips5", NanLegacy)
+      .Case("mips32", NanLegacy)
+      .Case("mips32r2", NanLegacy)
+      .Case("mips32r3", NanLegacy | Nan2008)
+      .Case("mips32r5", NanLegacy | Nan2008)
+      .Case("mips32r6", Nan2008)
+      .Case("mips64", NanLegacy)
+      .Case("mips64r2", NanLegacy)
+      .Case("mips64r3", NanLegacy | Nan2008)
+      .Case("mips64r5", NanLegacy | Nan2008)
+      .Case("mips64r6", Nan2008)
+      .Default(NanLegacy);
 }
 
 bool mips::hasMipsAbiArg(const ArgList &Args, const char *Value) {
@@ -5741,6 +5819,76 @@ const char *Clang::getDependencyFileName(const ArgList &Args,
     Res = getBaseInputStem(Args, Inputs);
   }
   return Args.MakeArgString(Res + ".d");
+}
+
+void cloudabi::Link::ConstructJob(Compilation &C, const JobAction &JA,
+                                  const InputInfo &Output,
+                                  const InputInfoList &Inputs,
+                                  const ArgList &Args,
+                                  const char *LinkingOutput) const {
+  const ToolChain &ToolChain = getToolChain();
+  const Driver &D = ToolChain.getDriver();
+  ArgStringList CmdArgs;
+
+  // Silence warning for "clang -g foo.o -o foo"
+  Args.ClaimAllArgs(options::OPT_g_Group);
+  // and "clang -emit-llvm foo.o -o foo"
+  Args.ClaimAllArgs(options::OPT_emit_llvm);
+  // and for "clang -w foo.o -o foo". Other warning options are already
+  // handled somewhere else.
+  Args.ClaimAllArgs(options::OPT_w);
+
+  if (!D.SysRoot.empty())
+    CmdArgs.push_back(Args.MakeArgString("--sysroot=" + D.SysRoot));
+
+  // CloudABI only supports static linkage.
+  CmdArgs.push_back("-Bstatic");
+  CmdArgs.push_back("--eh-frame-hdr");
+  CmdArgs.push_back("--gc-sections");
+
+  if (Output.isFilename()) {
+    CmdArgs.push_back("-o");
+    CmdArgs.push_back(Output.getFilename());
+  } else {
+    assert(Output.isNothing() && "Invalid output.");
+  }
+
+  if (!Args.hasArg(options::OPT_nostdlib) &&
+      !Args.hasArg(options::OPT_nostartfiles)) {
+    CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath("crt0.o")));
+    CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath("crtbegin.o")));
+  }
+
+  Args.AddAllArgs(CmdArgs, options::OPT_L);
+  const ToolChain::path_list &Paths = ToolChain.getFilePaths();
+  for (const auto &Path : Paths)
+    CmdArgs.push_back(Args.MakeArgString(StringRef("-L") + Path));
+  Args.AddAllArgs(CmdArgs, options::OPT_T_Group);
+  Args.AddAllArgs(CmdArgs, options::OPT_e);
+  Args.AddAllArgs(CmdArgs, options::OPT_s);
+  Args.AddAllArgs(CmdArgs, options::OPT_t);
+  Args.AddAllArgs(CmdArgs, options::OPT_Z_Flag);
+  Args.AddAllArgs(CmdArgs, options::OPT_r);
+
+  if (D.IsUsingLTO(ToolChain, Args))
+    AddGoldPlugin(ToolChain, Args, CmdArgs);
+
+  AddLinkerInputs(ToolChain, Inputs, Args, CmdArgs);
+
+  if (!Args.hasArg(options::OPT_nostdlib) &&
+      !Args.hasArg(options::OPT_nodefaultlibs)) {
+    if (D.CCCIsCXX())
+      ToolChain.AddCXXStdlibLibArgs(Args, CmdArgs);
+    CmdArgs.push_back("-lc");
+    CmdArgs.push_back("-lcompiler_rt");
+  }
+
+  if (!Args.hasArg(options::OPT_nostdlib) &&
+      !Args.hasArg(options::OPT_nostartfiles))
+    CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath("crtend.o")));
+
+  const char *Exec = Args.MakeArgString(ToolChain.GetLinkerPath());
+  C.addCommand(llvm::make_unique<Command>(JA, *this, Exec, CmdArgs));
 }
 
 void darwin::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
@@ -7336,7 +7484,8 @@ void gnutools::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
     }
 
     StringRef ARMFloatABI = tools::arm::getARMFloatABI(
-        getToolChain().getDriver(), Args, Triple);
+        getToolChain().getDriver(), Args,
+        llvm::Triple(getToolChain().ComputeEffectiveClangTriple(Args)));
     CmdArgs.push_back(Args.MakeArgString("-mfloat-abi=" + ARMFloatABI));
 
     Args.AddLastArg(CmdArgs, options::OPT_march_EQ);
@@ -7855,6 +8004,172 @@ void gnutools::Link::ConstructJob(Compilation &C, const JobAction &JA,
   C.addCommand(
       llvm::make_unique<Command>(JA, *this, ToolChain.Linker.c_str(), CmdArgs));
 }
+
+
+// NaCl ARM assembly (inline or standalone) can be written with a set of macros
+// for the various SFI requirements like register masking. The assembly tool
+// inserts the file containing the macros as an input into all the assembly
+// jobs.
+void nacltools::AssembleARM::ConstructJob(Compilation &C, const JobAction &JA,
+                                          const InputInfo &Output,
+                                          const InputInfoList &Inputs,
+                                          const ArgList &Args,
+                                          const char *LinkingOutput) const {
+  const toolchains::NaCl_TC& ToolChain =
+    static_cast<const toolchains::NaCl_TC&>(getToolChain());
+  InputInfo NaClMacros(ToolChain.GetNaClArmMacrosPath(), types::TY_PP_Asm,
+                       "nacl-arm-macros.s");
+  InputInfoList NewInputs;
+  NewInputs.push_back(NaClMacros);
+  NewInputs.append(Inputs.begin(), Inputs.end());
+  gnutools::Assemble::ConstructJob(C, JA, Output, NewInputs, Args,
+                                   LinkingOutput);
+}
+
+
+// This is quite similar to gnutools::link::ConstructJob with changes that
+// we use static by default, do not yet support sanitizers or LTO, and a few
+// others. Eventually we can support more of that and hopefully migrate back
+// to gnutools::link.
+void nacltools::Link::ConstructJob(Compilation &C, const JobAction &JA,
+                                  const InputInfo &Output,
+                                  const InputInfoList &Inputs,
+                                  const ArgList &Args,
+                                  const char *LinkingOutput) const {
+
+  const toolchains::NaCl_TC& ToolChain =
+    static_cast<const toolchains::NaCl_TC&>(getToolChain());
+  const Driver &D = ToolChain.getDriver();
+  const bool IsStatic =
+    !Args.hasArg(options::OPT_dynamic) &&
+    !Args.hasArg(options::OPT_shared);
+
+  ArgStringList CmdArgs;
+
+  // Silence warning for "clang -g foo.o -o foo"
+  Args.ClaimAllArgs(options::OPT_g_Group);
+  // and "clang -emit-llvm foo.o -o foo"
+  Args.ClaimAllArgs(options::OPT_emit_llvm);
+  // and for "clang -w foo.o -o foo". Other warning options are already
+  // handled somewhere else.
+  Args.ClaimAllArgs(options::OPT_w);
+
+  if (!D.SysRoot.empty())
+    CmdArgs.push_back(Args.MakeArgString("--sysroot=" + D.SysRoot));
+
+  if (Args.hasArg(options::OPT_rdynamic))
+    CmdArgs.push_back("-export-dynamic");
+
+  if (Args.hasArg(options::OPT_s))
+    CmdArgs.push_back("-s");
+
+  // NaCl_TC doesn't have ExtraOpts like Linux; the only relevant flag from
+  // there is --build-id, which we do want.
+  CmdArgs.push_back("--build-id");
+
+  if (!IsStatic)
+    CmdArgs.push_back("--eh-frame-hdr");
+
+  CmdArgs.push_back("-m");
+  if (ToolChain.getArch() == llvm::Triple::x86)
+    CmdArgs.push_back("elf_i386_nacl");
+  else if (ToolChain.getArch() == llvm::Triple::arm)
+    CmdArgs.push_back("armelf_nacl");
+  else if (ToolChain.getArch() == llvm::Triple::x86_64)
+    CmdArgs.push_back("elf_x86_64_nacl");
+  else
+    D.Diag(diag::err_target_unsupported_arch) << ToolChain.getArchName() <<
+        "Native Client";
+
+
+  if (IsStatic)
+    CmdArgs.push_back("-static");
+  else if (Args.hasArg(options::OPT_shared))
+    CmdArgs.push_back("-shared");
+
+  CmdArgs.push_back("-o");
+  CmdArgs.push_back(Output.getFilename());
+  if (!Args.hasArg(options::OPT_nostdlib) &&
+      !Args.hasArg(options::OPT_nostartfiles)) {
+    if (!Args.hasArg(options::OPT_shared))
+      CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath("crt1.o")));
+    CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath("crti.o")));
+
+    const char *crtbegin;
+    if (IsStatic)
+      crtbegin = "crtbeginT.o";
+    else if (Args.hasArg(options::OPT_shared))
+      crtbegin = "crtbeginS.o";
+    else
+      crtbegin = "crtbegin.o";
+    CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath(crtbegin)));
+  }
+
+  Args.AddAllArgs(CmdArgs, options::OPT_L);
+  Args.AddAllArgs(CmdArgs, options::OPT_u);
+
+  const ToolChain::path_list &Paths = ToolChain.getFilePaths();
+
+  for (const auto &Path : Paths)
+    CmdArgs.push_back(Args.MakeArgString(StringRef("-L") + Path));
+
+  if (Args.hasArg(options::OPT_Z_Xlinker__no_demangle))
+    CmdArgs.push_back("--no-demangle");
+
+  AddLinkerInputs(ToolChain, Inputs, Args, CmdArgs);
+
+  if (D.CCCIsCXX() &&
+      !Args.hasArg(options::OPT_nostdlib) &&
+      !Args.hasArg(options::OPT_nodefaultlibs)) {
+    bool OnlyLibstdcxxStatic = Args.hasArg(options::OPT_static_libstdcxx) &&
+      !IsStatic;
+    if (OnlyLibstdcxxStatic)
+      CmdArgs.push_back("-Bstatic");
+    ToolChain.AddCXXStdlibLibArgs(Args, CmdArgs);
+    if (OnlyLibstdcxxStatic)
+      CmdArgs.push_back("-Bdynamic");
+    CmdArgs.push_back("-lm");
+  }
+
+  if (!Args.hasArg(options::OPT_nostdlib)) {
+    if (!Args.hasArg(options::OPT_nodefaultlibs)) {
+      // Always use groups, since it has no effect on dynamic libraries.
+      CmdArgs.push_back("--start-group");
+      CmdArgs.push_back("-lc");
+      // NaCl's libc++ currently requires libpthread, so just always include it
+      // in the group for C++.
+      if (Args.hasArg(options::OPT_pthread) ||
+          Args.hasArg(options::OPT_pthreads) ||
+          D.CCCIsCXX()) {
+        CmdArgs.push_back("-lpthread");
+      }
+
+      CmdArgs.push_back("-lgcc");
+      CmdArgs.push_back("--as-needed");
+      if (IsStatic)
+        CmdArgs.push_back("-lgcc_eh");
+      else
+        CmdArgs.push_back("-lgcc_s");
+      CmdArgs.push_back("--no-as-needed");
+      CmdArgs.push_back("--end-group");
+    }
+
+    if (!Args.hasArg(options::OPT_nostartfiles)) {
+      const char *crtend;
+      if (Args.hasArg(options::OPT_shared))
+        crtend = "crtendS.o";
+      else
+        crtend = "crtend.o";
+
+      CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath(crtend)));
+      CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath("crtn.o")));
+    }
+  }
+
+  C.addCommand(llvm::make_unique<Command>(JA, *this,
+                                          ToolChain.Linker.c_str(), CmdArgs));
+}
+
 
 void minix::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
                                    const InputInfo &Output,

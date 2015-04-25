@@ -234,3 +234,31 @@ void MacroDirective::dump() const {
   }
   Out << "\n";
 }
+
+DefMacroDirective *
+DefMacroDirective::createImported(Preprocessor &PP, MacroInfo *MI,
+                                  SourceLocation Loc,
+                                  ModuleMacro *ImportedFrom) {
+  void *Mem = PP.getPreprocessorAllocator().Allocate(
+      sizeof(DefMacroDirective) + sizeof(MacroDirective::ImportData),
+      llvm::alignOf<DefMacroDirective>());
+  return new (Mem) DefMacroDirective(MI, Loc, ImportedFrom);
+}
+
+UndefMacroDirective *
+UndefMacroDirective::createImported(Preprocessor &PP, SourceLocation Loc,
+                                    ModuleMacro *ImportedFrom) {
+  void *Mem = PP.getPreprocessorAllocator().Allocate(
+      sizeof(UndefMacroDirective) + sizeof(MacroDirective::ImportData),
+      llvm::alignOf<UndefMacroDirective>());
+  return new (Mem) UndefMacroDirective(Loc, ImportedFrom);
+}
+
+ModuleMacro *ModuleMacro::create(Preprocessor &PP, Module *OwningModule,
+                                 IdentifierInfo *II, MacroInfo *Macro,
+                                 ArrayRef<ModuleMacro *> Overrides) {
+  void *Mem = PP.getPreprocessorAllocator().Allocate(
+      sizeof(ModuleMacro) + sizeof(ModuleMacro *) * Overrides.size(),
+      llvm::alignOf<ModuleMacro>());
+  return new (Mem) ModuleMacro(OwningModule, II, Macro, Overrides);
+}

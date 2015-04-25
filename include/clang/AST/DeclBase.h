@@ -1209,6 +1209,11 @@ public:
     }
   }
 
+  /// \brief Test whether the context supports looking up names.
+  bool isLookupContext() const {
+    return !isFunctionOrMethod() && DeclKind != Decl::LinkageSpec;
+  }
+
   bool isFileContext() const {
     return DeclKind == Decl::TranslationUnit || DeclKind == Decl::Namespace;
   }
@@ -1722,7 +1727,7 @@ public:
 
 private:
   void reconcileExternalVisibleStorage() const;
-  void LoadLexicalDeclsFromExternalStorage() const;
+  bool LoadLexicalDeclsFromExternalStorage() const;
 
   /// @brief Makes a declaration visible within this context, but
   /// suppresses searches for external declarations with the same

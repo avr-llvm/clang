@@ -1043,7 +1043,7 @@ ExprResult Sema::ParseObjCSelectorExpression(Selector Sel,
                                              SourceLocation RParenLoc,
                                              bool WarnMultipleSelectors) {
   ObjCMethodDecl *Method = LookupInstanceMethodInGlobalPool(Sel,
-                             SourceRange(LParenLoc, RParenLoc), false, false);
+                             SourceRange(LParenLoc, RParenLoc));
   if (!Method)
     Method = LookupFactoryMethodInGlobalPool(Sel,
                                           SourceRange(LParenLoc, RParenLoc));
@@ -1061,15 +1061,11 @@ ExprResult Sema::ParseObjCSelectorExpression(Selector Sel,
   } else
     DiagnoseMismatchedSelectors(*this, AtLoc, Method, LParenLoc, RParenLoc,
                                 WarnMultipleSelectors);
-  
+
   if (Method &&
       Method->getImplementationControl() != ObjCMethodDecl::Optional &&
-      !getSourceManager().isInSystemHeader(Method->getLocation())) {
-    llvm::DenseMap<Selector, SourceLocation>::iterator Pos
-      = ReferencedSelectors.find(Sel);
-    if (Pos == ReferencedSelectors.end())
-      ReferencedSelectors.insert(std::make_pair(Sel, AtLoc));
-  }
+      !getSourceManager().isInSystemHeader(Method->getLocation()))
+    ReferencedSelectors.insert(std::make_pair(Sel, AtLoc));
 
   // In ARC, forbid the user from using @selector for 
   // retain/release/autorelease/dealloc/retainCount.
@@ -2397,8 +2393,11 @@ ExprResult Sema::BuildInstanceMessage(Expr *Receiver,
         if (ObjCMethodDecl *BestMethod =
               SelectBestMethod(Sel, ArgsIn, Method->isInstanceMethod()))
           Method = BestMethod;
-        if (!AreMultipleMethodsInGlobalPool(Sel, Method->isInstanceMethod()))
+        if (!AreMultipleMethodsInGlobalPool(Sel, Method,
+                                            SourceRange(LBracLoc, RBracLoc),
+                                            receiverIsId)) {
           DiagnoseUseOfDecl(Method, SelLoc);
+        }
       }
     } else if (ReceiverType->isObjCClassType() ||
                ReceiverType->isObjCQualifiedClassType()) {
@@ -2436,14 +2435,12 @@ ExprResult Sema::BuildInstanceMessage(Expr *Receiver,
           // If not messaging 'self', look for any factory method named 'Sel'.
           if (!Receiver || !isSelfExpr(Receiver)) {
             Method = LookupFactoryMethodInGlobalPool(Sel, 
-                                                SourceRange(LBracLoc, RBracLoc),
-                                                     true);
+                                                SourceRange(LBracLoc, RBracLoc));
             if (!Method) {
               // If no class (factory) method was found, check if an _instance_
               // method of the same name exists in the root class only.
               Method = LookupInstanceMethodInGlobalPool(Sel,
-                                               SourceRange(LBracLoc, RBracLoc),
-                                                        true);
+                                               SourceRange(LBracLoc, RBracLoc));
               if (Method)
                   if (const ObjCInterfaceDecl *ID =
                       dyn_cast<ObjCInterfaceDecl>(Method->getDeclContext())) {
@@ -2520,6 +2517,14 @@ ExprResult Sema::BuildInstanceMessage(Expr *Receiver,
             if (OCIType->qual_empty()) {
               Method = LookupInstanceMethodInGlobalPool(Sel,
                                               SourceRange(LBracLoc, RBracLoc));
+              if (Method) {
+                if (auto BestMethod =
+                      SelectBestMethod(Sel, ArgsIn, Method->isInstanceMethod()))
+                  Method = BestMethod;
+                AreMultipleMethodsInGlobalPool(Sel, Method,
+                                               SourceRange(LBracLoc, RBracLoc),
+                                               true);
+              }
               if (Method && !forwardClass)
                 Diag(SelLoc, diag::warn_maynot_respond)
                   << OCIType->getInterfaceDecl()->getIdentifier()
@@ -2743,8 +2748,7 @@ static void RemoveSelectorFromWarningCache(Sema &S, Expr* Arg) {
       dyn_cast<ObjCSelectorExpr>(Arg->IgnoreParenCasts())) {
     Selector Sel = OSE->getSelector();
     SourceLocation Loc = OSE->getAtLoc();
-    llvm::DenseMap<Selector, SourceLocation>::iterator Pos
-    = S.ReferencedSelectors.find(Sel);
+    auto Pos = S.ReferencedSelectors.find(Sel);
     if (Pos != S.ReferencedSelectors.end() && Pos->second == Loc)
       S.ReferencedSelectors.erase(Pos);
   }
@@ -3362,7 +3366,7 @@ static bool CheckObjCBridgeNSCast(Sema &S, QualType castType, Expr *castExpr,
               ObjCInterfaceDecl *CastClass
                 = InterfacePointerType->getObjectType()->getInterface();
               if ((CastClass == ExprClass) ||
-                  (CastClass && ExprClass->isSuperClassOf(CastClass)))
+                  (CastClass && CastClass->isSuperClassOf(ExprClass)))
                 return true;
               if (warn)
                 S.Diag(castExpr->getLocStart(), diag::warn_objc_invalid_bridge)
@@ -3385,12 +3389,13 @@ static bool CheckObjCBridgeNSCast(Sema &S, QualType castType, Expr *castExpr,
               return false;
            }
           }
+        } else if (!castType->isObjCIdType()) {
+          S.Diag(castExpr->getLocStart(), diag::err_objc_cf_bridged_not_interface)
+            << castExpr->getType() << Parm;
+          S.Diag(TDNDecl->getLocStart(), diag::note_declared_at);
+          if (Target)
+            S.Diag(Target->getLocStart(), diag::note_declared_at);
         }
-        S.Diag(castExpr->getLocStart(), diag::err_objc_cf_bridged_not_interface)
-          << castExpr->getType() << Parm;
-        S.Diag(TDNDecl->getLocStart(), diag::note_declared_at);
-        if (Target)
-          S.Diag(Target->getLocStart(), diag::note_declared_at);
         return true;
       }
       return false;

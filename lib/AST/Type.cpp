@@ -632,12 +632,13 @@ bool Type::hasIntegerRepresentation() const {
 bool Type::isIntegralType(ASTContext &Ctx) const {
   if (const BuiltinType *BT = dyn_cast<BuiltinType>(CanonicalType))
     return BT->getKind() >= BuiltinType::Bool &&
-    BT->getKind() <= BuiltinType::Int128;
-  
+           BT->getKind() <= BuiltinType::Int128;
+
+  // Complete enum types are integral in C.
   if (!Ctx.getLangOpts().CPlusPlus)
     if (const EnumType *ET = dyn_cast<EnumType>(CanonicalType))
-      return ET->getDecl()->isComplete(); // Complete enum types are integral in C.
-  
+      return ET->getDecl()->isComplete();
+
   return false;
 }
 
@@ -2368,6 +2369,11 @@ bool Type::isObjCARCImplicitlyUnretainedType() const {
 bool Type::isObjCNSObjectType() const {
   if (const TypedefType *typedefType = dyn_cast<TypedefType>(this))
     return typedefType->getDecl()->hasAttr<ObjCNSObjectAttr>();
+  return false;
+}
+bool Type::isObjCIndependentClassType() const {
+  if (const TypedefType *typedefType = dyn_cast<TypedefType>(this))
+    return typedefType->getDecl()->hasAttr<ObjCIndependentClassAttr>();
   return false;
 }
 bool Type::isObjCRetainableType() const {

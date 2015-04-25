@@ -1965,6 +1965,13 @@ public:
     return getType()->getAs<FunctionType>()->getCallResultType(getASTContext());
   }
 
+  /// \brief Returns true if this function or its return type has the
+  /// warn_unused_result attribute. If the return type has the attribute and
+  /// this function is a method of the return type's class, then false will be
+  /// returned to avoid spurious warnings on member methods such as assignment
+  /// operators.
+  bool hasUnusedResultAttr() const;
+
   /// \brief Returns the storage class as written in the source. For the
   /// computed linkage of symbol, see getLinkage.
   StorageClass getStorageClass() const { return StorageClass(SClass); }
@@ -2578,6 +2585,10 @@ public:
   /// Retrieves the canonical declaration of this typedef-name.
   TypedefNameDecl *getCanonicalDecl() override { return getFirstDecl(); }
   const TypedefNameDecl *getCanonicalDecl() const { return getFirstDecl(); }
+
+  /// Retrieves the tag declaration for which this is the typedef name for
+  /// linkage purposes, if any.
+  TagDecl *getAnonDeclWithTypedefName() const;
 
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
@@ -3737,8 +3748,6 @@ void Redeclarable<decl_type>::setPreviousDecl(decl_type *PrevDecl) {
   // and Redeclarable to be defined.
   assert(RedeclLink.NextIsLatest() &&
          "setPreviousDecl on a decl already in a redeclaration chain");
-
-  decl_type *First;
 
   if (PrevDecl) {
     // Point to previous. Make sure that this is actually the most recent

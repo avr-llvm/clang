@@ -1376,16 +1376,12 @@ UnaryExprOrTypeTraitExpr::UnaryExprOrTypeTraitExpr(
   }
 }
 
-MemberExpr *MemberExpr::Create(const ASTContext &C, Expr *base, bool isarrow,
-                               NestedNameSpecifierLoc QualifierLoc,
-                               SourceLocation TemplateKWLoc,
-                               ValueDecl *memberdecl,
-                               DeclAccessPair founddecl,
-                               DeclarationNameInfo nameinfo,
-                               const TemplateArgumentListInfo *targs,
-                               QualType ty,
-                               ExprValueKind vk,
-                               ExprObjectKind ok) {
+MemberExpr *MemberExpr::Create(
+    const ASTContext &C, Expr *base, bool isarrow, SourceLocation OperatorLoc,
+    NestedNameSpecifierLoc QualifierLoc, SourceLocation TemplateKWLoc,
+    ValueDecl *memberdecl, DeclAccessPair founddecl,
+    DeclarationNameInfo nameinfo, const TemplateArgumentListInfo *targs,
+    QualType ty, ExprValueKind vk, ExprObjectKind ok) {
   std::size_t Size = sizeof(MemberExpr);
 
   bool hasQualOrFound = (QualifierLoc ||
@@ -1400,8 +1396,8 @@ MemberExpr *MemberExpr::Create(const ASTContext &C, Expr *base, bool isarrow,
     Size += ASTTemplateKWAndArgsInfo::sizeFor(0);
 
   void *Mem = C.Allocate(Size, llvm::alignOf<MemberExpr>());
-  MemberExpr *E = new (Mem) MemberExpr(base, isarrow, memberdecl, nameinfo,
-                                       ty, vk, ok);
+  MemberExpr *E = new (Mem)
+      MemberExpr(base, isarrow, OperatorLoc, memberdecl, nameinfo, ty, vk, ok);
 
   if (hasQualOrFound) {
     // FIXME: Wrong. We should be looking at the member declaration we found.
@@ -2165,12 +2161,16 @@ bool Expr::isUnusedResultAWarning(const Expr *&WarnE, SourceLocation &Loc,
     // If this is a direct call, get the callee.
     const CallExpr *CE = cast<CallExpr>(this);
     if (const Decl *FD = CE->getCalleeDecl()) {
+      const FunctionDecl *Func = dyn_cast<FunctionDecl>(FD);
+      bool HasWarnUnusedResultAttr = Func ? Func->hasUnusedResultAttr()
+                                          : FD->hasAttr<WarnUnusedResultAttr>();
+
       // If the callee has attribute pure, const, or warn_unused_result, warn
       // about it. void foo() { strlen("bar"); } should warn.
       //
       // Note: If new cases are added here, DiagnoseUnusedExprResult should be
       // updated to match for QoI.
-      if (FD->hasAttr<WarnUnusedResultAttr>() ||
+      if (HasWarnUnusedResultAttr ||
           FD->hasAttr<PureAttr>() || FD->hasAttr<ConstAttr>()) {
         WarnE = this;
         Loc = CE->getCallee()->getLocStart();
@@ -2946,11 +2946,19 @@ bool Expr::HasSideEffects(const ASTContext &Ctx,
   case CXXOperatorCallExprClass:
   case CXXMemberCallExprClass:
   case CUDAKernelCallExprClass:
+  case UserDefinedLiteralClass: {
+    // We don't know a call definitely has side effects, except for calls
+    // to pure/const functions that definitely don't.
+    // If the call itself is considered side-effect free, check the operands.
+    const Decl *FD = cast<CallExpr>(this)->getCalleeDecl();
+    bool IsPure = FD && (FD->hasAttr<ConstAttr>() || FD->hasAttr<PureAttr>());
+    if (IsPure || !IncludePossibleEffects)
+      break;
+    return true;
+  }
+
   case BlockExprClass:
   case CXXBindTemporaryExprClass:
-  case UserDefinedLiteralClass:
-    // We don't know a call definitely has side effects, but we can check the
-    // call's operands.
     if (!IncludePossibleEffects)
       break;
     return true;

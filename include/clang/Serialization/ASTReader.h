@@ -73,6 +73,7 @@ class GlobalModuleIndex;
 class GotoStmt;
 class MacroDefinition;
 class MacroDirective;
+class ModuleMacro;
 class NamedDecl;
 class OpaqueValueExpr;
 class Preprocessor;
@@ -676,30 +677,10 @@ private:
 
   struct PendingMacroInfo {
     ModuleFile *M;
+    uint64_t MacroDirectivesOffset;
 
-    struct ModuleMacroDataTy {
-      uint32_t MacID;
-      serialization::SubmoduleID *Overrides;
-    };
-    struct PCHMacroDataTy {
-      uint64_t MacroDirectivesOffset;
-    };
-
-    union {
-      ModuleMacroDataTy ModuleMacroData;
-      PCHMacroDataTy PCHMacroData;
-    };
-
-    PendingMacroInfo(ModuleFile *M,
-                     uint32_t MacID,
-                     serialization::SubmoduleID *Overrides) : M(M) {
-      ModuleMacroData.MacID = MacID;
-      ModuleMacroData.Overrides = Overrides;
-    }
-
-    PendingMacroInfo(ModuleFile *M, uint64_t MacroDirectivesOffset) : M(M) {
-      PCHMacroData.MacroDirectivesOffset = MacroDirectivesOffset;
-    }
+    PendingMacroInfo(ModuleFile *M, uint64_t MacroDirectivesOffset)
+        : M(M), MacroDirectivesOffset(MacroDirectivesOffset) {}
   };
 
   typedef llvm::MapVector<IdentifierInfo *, SmallVector<PendingMacroInfo, 2> >
@@ -942,9 +923,6 @@ private:
   /// This is used as a guard to avoid recursively repeating the process of
   /// passing decls to consumer.
   bool PassingDeclsToConsumer;
-
-  /// Number of CXX base specifiers currently loaded
-  unsigned NumCXXBaseSpecifiersLoaded;
 
   /// \brief The set of identifiers that were read while the AST reader was
   /// (recursively) loading declarations.
@@ -1326,7 +1304,7 @@ public:
             bool ValidateSystemInputs = false,
             bool UseGlobalIndex = true);
 
-  ~ASTReader();
+  ~ASTReader() override;
 
   SourceManager &getSourceManager() const { return SourceMgr; }
   FileManager &getFileManager() const { return FileMgr; }
@@ -1583,11 +1561,6 @@ public:
     return Result;
   }
 
-  /// \brief Returns the number of C++ base specifiers found in the chain.
-  unsigned getTotalNumCXXBaseSpecifiers() const {
-    return NumCXXBaseSpecifiersLoaded;
-  }
-
   /// \brief Reads a TemplateArgumentLocInfo appropriate for the
   /// given TemplateArgument kind.
   TemplateArgumentLocInfo
@@ -1840,8 +1813,8 @@ public:
                                            SourceLocation> > &Pending) override;
 
   void ReadLateParsedTemplates(
-                         llvm::DenseMap<const FunctionDecl *,
-                                        LateParsedTemplate *> &LPTMap) override;
+      llvm::MapVector<const FunctionDecl *, LateParsedTemplate *> &LPTMap)
+      override;
 
   /// \brief Load a selector from disk, registering its ID if it exists.
   void LoadSelector(Selector Sel);
@@ -1876,28 +1849,21 @@ public:
   serialization::IdentifierID getGlobalIdentifierID(ModuleFile &M,
                                                     unsigned LocalID);
 
-  ModuleMacroInfo *getModuleMacro(IdentifierInfo *II,
-                                  const PendingMacroInfo &PMInfo);
-
   void resolvePendingMacro(IdentifierInfo *II, const PendingMacroInfo &PMInfo);
 
-  void installPCHMacroDirectives(IdentifierInfo *II,
-                                 ModuleFile &M, uint64_t Offset);
-
-  void installImportedMacro(IdentifierInfo *II, ModuleMacroInfo *MMI,
+  void installImportedMacro(IdentifierInfo *II, ModuleMacroInfo &MMI,
                             Module *Owner);
 
   typedef llvm::TinyPtrVector<DefMacroDirective *> AmbiguousMacros;
   llvm::DenseMap<IdentifierInfo*, AmbiguousMacros> AmbiguousMacroDefs;
 
-  void
-  removeOverriddenMacros(IdentifierInfo *II, SourceLocation Loc,
-                         AmbiguousMacros &Ambig,
-                         ArrayRef<serialization::SubmoduleID> Overrides);
+  void removeOverriddenMacros(IdentifierInfo *II, SourceLocation Loc,
+                              AmbiguousMacros &Ambig,
+                              ArrayRef<ModuleMacro *> Overrides);
 
-  AmbiguousMacros *
-  removeOverriddenMacros(IdentifierInfo *II, SourceLocation Loc,
-                         ArrayRef<serialization::SubmoduleID> Overrides);
+  AmbiguousMacros *removeOverriddenMacros(IdentifierInfo *II,
+                                          SourceLocation Loc,
+                                          ArrayRef<ModuleMacro *> Overrides);
 
   /// \brief Retrieve the macro with the given ID.
   MacroInfo *getMacro(serialization::MacroID ID);
@@ -1993,9 +1959,17 @@ public:
                                         const RecordData &Record,unsigned &Idx);
 
   /// \brief Read a CXXCtorInitializer array.
-  std::pair<CXXCtorInitializer **, unsigned>
+  CXXCtorInitializer **
   ReadCXXCtorInitializers(ModuleFile &F, const RecordData &Record,
                           unsigned &Idx);
+
+  /// \brief Read a CXXCtorInitializers ID from the given record and
+  /// return its global bit offset.
+  uint64_t ReadCXXCtorInitializersRef(ModuleFile &M, const RecordData &Record,
+                                      unsigned &Idx);
+
+  /// \brief Read the contents of a CXXCtorInitializer array.
+  CXXCtorInitializer **GetExternalCXXCtorInitializers(uint64_t Offset) override;
 
   /// \brief Read a source location from raw form.
   SourceLocation ReadSourceLocation(ModuleFile &ModuleFile, unsigned Raw) const {
@@ -2073,24 +2047,14 @@ public:
   serialization::PreprocessedEntityID
   getGlobalPreprocessedEntityID(ModuleFile &M, unsigned LocalID) const;
 
-  /// \brief Add a macro to resolve imported from a module.
-  ///
-  /// \param II The name of the macro.
-  /// \param M The module file.
-  /// \param GMacID The global macro ID that is associated with this identifier.
-  void addPendingMacroFromModule(IdentifierInfo *II,
-                                 ModuleFile *M,
-                                 serialization::GlobalMacroID GMacID,
-                                 ArrayRef<serialization::SubmoduleID>);
-
-  /// \brief Add a macro to deserialize its macro directive history from a PCH.
+  /// \brief Add a macro to deserialize its macro directive history.
   ///
   /// \param II The name of the macro.
   /// \param M The module file.
   /// \param MacroDirectivesOffset Offset of the serialized macro directive
   /// history.
-  void addPendingMacroFromPCH(IdentifierInfo *II,
-                              ModuleFile *M, uint64_t MacroDirectivesOffset);
+  void addPendingMacro(IdentifierInfo *II, ModuleFile *M,
+                       uint64_t MacroDirectivesOffset);
 
   /// \brief Read the set of macros defined by this external macro source.
   void ReadDefinedMacros() override;

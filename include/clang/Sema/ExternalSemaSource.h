@@ -55,7 +55,7 @@ public:
     ExternalASTSource::SemaSource = true;
   }
 
-  ~ExternalSemaSource();
+  ~ExternalSemaSource() override;
 
   /// \brief Initialize the semantic source with the Sema instance
   /// being used to perform semantic analysis on the abstract syntax
@@ -182,7 +182,7 @@ public:
   /// external source should take care not to introduce the same map entries
   /// repeatedly.
   virtual void ReadLateParsedTemplates(
-      llvm::DenseMap<const FunctionDecl *, LateParsedTemplate *> &LPTMap) {}
+      llvm::MapVector<const FunctionDecl *, LateParsedTemplate *> &LPTMap) {}
 
   /// \copydoc Sema::CorrectTypo
   /// \note LookupKind must correspond to a valid Sema::LookupNameKind

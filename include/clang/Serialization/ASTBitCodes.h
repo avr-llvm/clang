@@ -149,7 +149,11 @@ namespace clang {
     /// \brief An ID number that refers to a set of CXXBaseSpecifiers in an 
     /// AST file.
     typedef uint32_t CXXBaseSpecifiersID;
-    
+
+    /// \brief An ID number that refers to a list of CXXCtorInitializers in an
+    /// AST file.
+    typedef uint32_t CXXCtorInitializersID;
+
     /// \brief An ID number that refers to an entity in the detailed
     /// preprocessing record.
     typedef uint32_t PreprocessedEntityID;
@@ -539,9 +543,7 @@ namespace clang {
       /// macro definition.
       MACRO_OFFSET = 47,
 
-      /// \brief Mapping table from the identifier ID to the offset of the
-      /// macro directive history for the identifier.
-      MACRO_TABLE = 48,
+      // ID 48 used to be a table of macros.
 
       /// \brief Record code for undefined but used functions and variables that
       /// need a definition in this TU.
@@ -555,6 +557,10 @@ namespace clang {
 
       /// \brief Record code for potentially unused local typedef names.
       UNUSED_LOCAL_TYPEDEF_NAME_CANDIDATES = 52,
+
+      /// \brief Record code for the table of offsets to CXXCtorInitializers
+      /// lists.
+      CXX_CTOR_INITIALIZERS_OFFSETS = 53,
     };
 
     /// \brief Record types used within a source manager block.
@@ -594,7 +600,11 @@ namespace clang {
       PP_TOKEN = 3,
 
       /// \brief The macro directives history for a particular identifier.
-      PP_MACRO_DIRECTIVE_HISTORY = 4
+      PP_MACRO_DIRECTIVE_HISTORY = 4,
+
+      /// \brief A macro directive exported by a module.
+      /// [PP_MODULE_MACRO, SubmoduleID, MacroID, (Overridden SubmoduleID)*]
+      PP_MODULE_MACRO = 5,
     };
 
     /// \brief Record types used within a preprocessor detail block.
@@ -1074,6 +1084,8 @@ namespace clang {
       DECL_STATIC_ASSERT,
       /// \brief A record containing CXXBaseSpecifiers.
       DECL_CXX_BASE_SPECIFIERS,
+      /// \brief A record containing CXXCtorInitializers.
+      DECL_CXX_CTOR_INITIALIZERS,
       /// \brief A IndirectFieldDecl record.
       DECL_INDIRECTFIELD,
       /// \brief A NonTypeTemplateParmDecl record that stores an expanded

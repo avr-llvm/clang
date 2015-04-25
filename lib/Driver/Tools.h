@@ -234,6 +234,11 @@ namespace arm {
 }
 
 namespace mips {
+  typedef enum {
+    NanLegacy = 1,
+    Nan2008 = 2
+  } NanEncoding;
+  NanEncoding getSupportedNanEncoding(StringRef &CPU);
   void getMipsCPUAndABI(const llvm::opt::ArgList &Args,
                         const llvm::Triple &Triple, StringRef &CPUName,
                         StringRef &ABIName);
@@ -247,6 +252,22 @@ namespace mips {
 namespace ppc {
   bool hasPPCAbiArg(const llvm::opt::ArgList &Args, const char *Value);
 }
+
+  /// cloudabi -- Directly call GNU Binutils linker
+namespace cloudabi {
+class LLVM_LIBRARY_VISIBILITY Link : public GnuTool {
+public:
+  Link(const ToolChain &TC) : GnuTool("cloudabi::Link", "linker", TC) {}
+
+  bool hasIntegratedCPP() const override { return false; }
+  bool isLinkJob() const override { return true; }
+
+  void ConstructJob(Compilation &C, const JobAction &JA,
+                    const InputInfo &Output, const InputInfoList &Inputs,
+                    const llvm::opt::ArgList &TCArgs,
+                    const char *LinkingOutput) const override;
+};
+} // end namespace cloudabi
 
 namespace darwin {
   llvm::Triple::ArchType getArchTypeForMachOArchName(StringRef Str);
@@ -491,6 +512,33 @@ namespace gnutools {
                       const char *LinkingOutput) const override;
   };
 }
+
+namespace nacltools {
+  class LLVM_LIBRARY_VISIBILITY AssembleARM : public gnutools::Assemble  {
+  public:
+    AssembleARM(const ToolChain &TC) : gnutools::Assemble(TC) {}
+
+    void ConstructJob(Compilation &C, const JobAction &JA,
+                      const InputInfo &Output,
+                      const InputInfoList &Inputs,
+                      const llvm::opt::ArgList &TCArgs,
+                      const char *LinkingOutput) const override;
+  };
+  class LLVM_LIBRARY_VISIBILITY Link : public Tool  {
+  public:
+    Link(const ToolChain &TC) : Tool("NaCl::Link", "linker", TC) {}
+
+    bool hasIntegratedCPP() const override { return false; }
+    bool isLinkJob() const override { return true; }
+
+    void ConstructJob(Compilation &C, const JobAction &JA,
+                              const InputInfo &Output,
+                              const InputInfoList &Inputs,
+                              const llvm::opt::ArgList &TCArgs,
+                              const char *LinkingOutput) const override;
+  };
+}
+
   /// minix -- Directly call GNU Binutils assembler and linker
 namespace minix {
   class LLVM_LIBRARY_VISIBILITY Assemble : public GnuTool  {

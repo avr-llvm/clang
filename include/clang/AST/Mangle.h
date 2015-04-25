@@ -135,6 +135,9 @@ public:
   virtual void mangleSEHFilterExpression(const NamedDecl *EnclosingDecl,
                                          raw_ostream &Out) = 0;
 
+  virtual void mangleSEHFinallyBlock(const NamedDecl *EnclosingDecl,
+                                     raw_ostream &Out) = 0;
+
   /// Generates a unique string for an externally visible type for use with TBAA
   /// or type uniquing.
   /// TODO: Extend this to internal types by generating names that are unique
@@ -208,9 +211,8 @@ public:
                                       uint32_t NVOffset, int32_t VBPtrOffset,
                                       uint32_t VBIndex, raw_ostream &Out) = 0;
 
-  virtual void mangleCXXHandlerMapEntry(QualType T, bool IsConst,
-                                        bool IsVolatile, bool IsReference,
-                                        raw_ostream &Out) = 0;
+  virtual void mangleCXXCatchHandlerType(QualType T, uint32_t Flags,
+                                         raw_ostream &Out) = 0;
 
   virtual void mangleCXXRTTIBaseClassDescriptor(
       const CXXRecordDecl *Derived, uint32_t NVOffset, int32_t VBPtrOffset,

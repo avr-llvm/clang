@@ -405,6 +405,12 @@ void ASTDeclReader::Visit(Decl *D) {
     // module).
     // FIXME: Can we diagnose ODR violations somehow?
     if (Record[Idx++]) {
+      if (auto *CD = dyn_cast<CXXConstructorDecl>(FD)) {
+        CD->NumCtorInitializers = Record[Idx++];
+        if (CD->NumCtorInitializers)
+          CD->CtorInitializers =
+              Reader.ReadCXXCtorInitializersRef(F, Record, Idx);
+      }
       Reader.PendingBodies[FD] = GetCurrentCursorOffset();
       HasPendingBody = true;
     }
@@ -992,8 +998,9 @@ void ASTDeclReader::VisitObjCImplementationDecl(ObjCImplementationDecl *D) {
   D->setIvarRBraceLoc(ReadSourceLocation(Record, Idx));
   D->setHasNonZeroConstructors(Record[Idx++]);
   D->setHasDestructors(Record[Idx++]);
-  std::tie(D->IvarInitializers, D->NumIvarInitializers) =
-      Reader.ReadCXXCtorInitializers(F, Record, Idx);
+  D->NumIvarInitializers = Record[Idx++];
+  if (D->NumIvarInitializers)
+    D->IvarInitializers = Reader.ReadCXXCtorInitializersRef(F, Record, Idx);
 }
 
 
@@ -1378,6 +1385,29 @@ void ASTDeclReader::MergeDefinitionData(
          "merging class definition into non-definition");
   auto &DD = *D->DefinitionData.getNotUpdated();
 
+  // If the new definition has new special members, let the name lookup
+  // code know that it needs to look in the new definition too.
+  //
+  // FIXME: We only need to do this if the merged definition declares members
+  // that this definition did not declare, or if it defines members that this
+  // definition did not define.
+  if (DD.Definition != MergeDD.Definition) {
+    Reader.MergedLookups[DD.Definition].push_back(MergeDD.Definition);
+    DD.Definition->setHasExternalVisibleStorage();
+
+    if (DD.Definition->isHidden()) {
+      // If MergeDD is visible or becomes visible, make the definition visible.
+      if (!MergeDD.Definition->isHidden())
+        DD.Definition->Hidden = false;
+      else {
+        auto SubmoduleID = MergeDD.Definition->getOwningModuleID();
+        assert(SubmoduleID && "hidden definition in no module");
+        Reader.HiddenNamesMap[Reader.getSubmodule(SubmoduleID)]
+              .HiddenDecls.push_back(DD.Definition);
+      }
+    }
+  }
+
   auto PFDI = Reader.PendingFakeDefinitionData.find(&DD);
   if (PFDI != Reader.PendingFakeDefinitionData.end() &&
       PFDI->second == ASTReader::PendingFakeDefinitionKind::Fake) {
@@ -1392,17 +1422,6 @@ void ASTDeclReader::MergeDefinitionData(
     DD = std::move(MergeDD);
     DD.Definition = Def;
     return;
-  }
-
-  // If the new definition has new special members, let the name lookup
-  // code know that it needs to look in the new definition too.
-  //
-  // FIXME: We only need to do this if the merged definition declares members
-  // that this definition did not declare, or if it defines members that this
-  // definition did not define.
-  if (MergeDD.DeclaredSpecialMembers && DD.Definition != MergeDD.Definition) {
-    Reader.MergedLookups[DD.Definition].push_back(MergeDD.Definition);
-    DD.Definition->setHasExternalVisibleStorage();
   }
 
   // FIXME: Move this out into a .def file?
@@ -1621,11 +1640,8 @@ void ASTDeclReader::VisitCXXConstructorDecl(CXXConstructorDecl *D) {
 
   if (auto *CD = ReadDeclAs<CXXConstructorDecl>(Record, Idx))
     if (D->isCanonicalDecl())
-      D->setInheritedConstructor(CD);
+      D->setInheritedConstructor(CD->getCanonicalDecl());
   D->IsExplicitSpecified = Record[Idx++];
-  // FIXME: We should defer loading this until we need the constructor's body.
-  std::tie(D->CtorInitializers, D->NumCtorInitializers) =
-      Reader.ReadCXXCtorInitializers(F, Record, Idx);
 }
 
 void ASTDeclReader::VisitCXXDestructorDecl(CXXDestructorDecl *D) {
@@ -2102,6 +2118,7 @@ ASTDeclReader::VisitRedeclarable(Redeclarable<T> *D) {
     // which is the one that matters and mark the real previous DeclID to be
     // loaded & attached later on.
     D->RedeclLink = Redeclarable<T>::PreviousDeclLink(FirstDecl);
+    D->First = FirstDecl->getCanonicalDecl();
   }    
   
   // Note that this declaration has been deserialized.
@@ -2205,6 +2222,7 @@ void ASTDeclReader::mergeRedeclarable(Redeclarable<T> *DBase, T *Existing,
     // of the existing declaration, so that this declaration has the
     // appropriate canonical declaration.
     D->RedeclLink = Redeclarable<T>::PreviousDeclLink(ExistingCanon);
+    D->First = ExistingCanon;
 
     // When we merge a namespace, update its pointer to the first namespace.
     // We cannot have loaded any redeclarations of this declaration yet, so
@@ -2646,12 +2664,11 @@ static NamedDecl *getDeclForMerging(NamedDecl *Found,
   // If we found a typedef declaration that gives a name to some other
   // declaration, then we want that inner declaration. Declarations from
   // AST files are handled via ImportedTypedefNamesForLinkage.
-  if (Found->isFromASTFile()) return 0;
-  if (auto *TND = dyn_cast<TypedefNameDecl>(Found)) {
-    if (auto *TT = TND->getTypeSourceInfo()->getType()->getAs<TagType>())
-      if (TT->getDecl()->getTypedefNameForAnonDecl() == TND)
-        return TT->getDecl();
-  }
+  if (Found->isFromASTFile())
+    return 0;
+
+  if (auto *TND = dyn_cast<TypedefNameDecl>(Found))
+    return TND->getAnonDeclWithTypedefName();
 
   return 0;
 }
@@ -2824,6 +2841,7 @@ void ASTDeclReader::attachPreviousDeclImpl(ASTReader &Reader,
                                            Redeclarable<DeclT> *D,
                                            Decl *Previous, Decl *Canon) {
   D->RedeclLink.setPrevious(cast<DeclT>(Previous));
+  D->First = cast<DeclT>(Previous)->First;
 }
 namespace clang {
 template<>
@@ -2834,6 +2852,7 @@ void ASTDeclReader::attachPreviousDeclImpl(ASTReader &Reader,
   FunctionDecl *PrevFD = cast<FunctionDecl>(Previous);
 
   FD->RedeclLink.setPrevious(PrevFD);
+  FD->First = PrevFD->First;
 
   // If the previous declaration is an inline function declaration, then this
   // declaration is too.
@@ -3145,6 +3164,9 @@ Decl *ASTReader::ReadDeclRecord(DeclID ID) {
     break;
   case DECL_CXX_BASE_SPECIFIERS:
     Error("attempt to read a C++ base-specifier record as a declaration");
+    return nullptr;
+  case DECL_CXX_CTOR_INITIALIZERS:
+    Error("attempt to read a C++ ctor initializer record as a declaration");
     return nullptr;
   case DECL_IMPORT:
     // Note: last entry of the ImportDecl record is the number of stored source 
@@ -3649,9 +3671,12 @@ void ASTDeclReader::UpdateDecl(Decl *D, ModuleFile &ModuleFile,
         });
       }
       FD->setInnerLocStart(Reader.ReadSourceLocation(ModuleFile, Record, Idx));
-      if (auto *CD = dyn_cast<CXXConstructorDecl>(FD))
-        std::tie(CD->CtorInitializers, CD->NumCtorInitializers) =
-            Reader.ReadCXXCtorInitializers(ModuleFile, Record, Idx);
+      if (auto *CD = dyn_cast<CXXConstructorDecl>(FD)) {
+        CD->NumCtorInitializers = Record[Idx++];
+        if (CD->NumCtorInitializers)
+          CD->CtorInitializers =
+              Reader.ReadCXXCtorInitializersRef(F, Record, Idx);
+      }
       // Store the offset of the body so we can lazily load it later.
       Reader.PendingBodies[FD] = GetCurrentCursorOffset();
       HasPendingBody = true;
@@ -3779,9 +3804,23 @@ void ASTDeclReader::UpdateDecl(Decl *D, ModuleFile &ModuleFile,
     case UPD_STATIC_LOCAL_NUMBER:
       Reader.Context.setStaticLocalNumber(cast<VarDecl>(D), Record[Idx++]);
       break;
+
     case UPD_DECL_MARKED_OPENMP_THREADPRIVATE:
       D->addAttr(OMPThreadPrivateDeclAttr::CreateImplicit(
           Reader.Context, ReadSourceRange(Record, Idx)));
+      break;
+
+    case UPD_DECL_EXPORTED:
+      unsigned SubmoduleID = readSubmoduleID(Record, Idx);
+      Module *Owner = SubmoduleID ? Reader.getSubmodule(SubmoduleID) : nullptr;
+      if (Owner && Owner->NameVisibility != Module::AllVisible) {
+        // If Owner is made visible at some later point, make this declaration
+        // visible too.
+        Reader.HiddenNamesMap[Owner].HiddenDecls.push_back(D);
+      } else {
+        // The declaration is now visible.
+        D->Hidden = false;
+      }
       break;
     }
   }

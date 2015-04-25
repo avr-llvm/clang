@@ -183,6 +183,8 @@ def warn_attribute_no_decl : Warning<
   "attribute %0 ignored, because it is not attached to a declaration">, 
   InGroup<IgnoredAttributes>;
 def err_expected_method_body : Error<"expected method body">;
+def err_declspec_after_virtspec : Error<
+  "'%0' qualifier may not appear after the virtual specifier '%1'">;
 def err_invalid_token_after_toplevel_declarator : Error<
   "expected ';' after top level declarator">;
 def err_invalid_token_after_declarator_suggest_equal : Error<
@@ -931,6 +933,9 @@ def err_pragma_fp_contract_scope : Error<
 def err_pragma_comment_malformed : Error<
   "pragma comment requires parenthesized identifier and optional string">;
 def err_pragma_comment_unknown_kind : Error<"unknown kind of pragma comment">;
+// PS4 recognizes only #pragma comment(lib)
+def warn_pragma_comment_ignored : Warning<"'#pragma comment %0' ignored">,
+  InGroup<Microsoft>;
 // - #pragma detect_mismatch
 def err_pragma_detect_mismatch_malformed : Error<
   "pragma detect_mismatch is malformed; it requires two comma-separated "

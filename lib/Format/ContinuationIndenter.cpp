@@ -221,8 +221,7 @@ bool ContinuationIndenter::mustBreak(const LineState &State) {
 
   if (startsSegmentOfBuilderTypeCall(Current) &&
       (State.Stack.back().CallContinuation != 0 ||
-       (State.Stack.back().BreakBeforeParameter &&
-        State.Stack.back().ContainsUnwrappedBuilder)))
+       State.Stack.back().BreakBeforeParameter))
     return true;
 
   // The following could be precomputed as they do not depend on the state.
@@ -323,6 +322,8 @@ void ContinuationIndenter::addTokenOnCurrentLine(LineState &State, bool DryRun,
   if (startsSegmentOfBuilderTypeCall(Current))
     State.Stack.back().ContainsUnwrappedBuilder = true;
 
+  if (Current.is(TT_LambdaArrow))
+    State.Stack.back().NoLineBreak = true;
   if (Current.isMemberAccess() && Previous.is(tok::r_paren) &&
       (Previous.MatchingParen &&
        (Previous.TotalLength - Previous.MatchingParen->TotalLength > 10))) {
@@ -633,7 +634,7 @@ unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
         std::min(State.LowestLevelOnLine, Current.NestingLevel);
   if (Current.isMemberAccess())
     State.Stack.back().StartOfFunctionCall =
-        Current.LastOperator ? 0 : State.Column + Current.ColumnWidth;
+        Current.LastOperator ? 0 : State.Column;
   if (Current.is(TT_SelectorName))
     State.Stack.back().ObjCSelectorNameFound = true;
   if (Current.is(TT_CtorInitializerColon)) {
@@ -838,17 +839,32 @@ void ContinuationIndenter::moveStatePastScopeOpener(LineState &State,
          (Current.PackingKind == PPK_OnePerLine ||
           (!BinPackInconclusiveFunctions &&
            Current.PackingKind == PPK_Inconclusive)));
-    // If this '[' opens an ObjC call, determine whether all parameters fit
-    // into one line and put one per line if they don't.
-    if (Current.is(TT_ObjCMethodExpr) && Style.ColumnLimit != 0 &&
-        getLengthToMatchingParen(Current) + State.Column >
+    if (Current.is(TT_ObjCMethodExpr) && Current.MatchingParen) {
+      if (Style.ColumnLimit) {
+        // If this '[' opens an ObjC call, determine whether all parameters fit
+        // into one line and put one per line if they don't.
+        if (getLengthToMatchingParen(Current) + State.Column >
             getColumnLimit(State))
-      BreakBeforeParameter = true;
+          BreakBeforeParameter = true;
+      } else {
+        // For ColumnLimit = 0, we have to figure out whether there is or has to
+        // be a line break within this call.
+        for (const FormatToken *Tok = &Current;
+             Tok && Tok != Current.MatchingParen; Tok = Tok->Next) {
+          if (Tok->MustBreakBefore || 
+              (Tok->CanBreakBefore && Tok->NewlinesBefore > 0)) {
+            BreakBeforeParameter = true;
+            break;
+          }
+        }
+      }
+    }
   }
   bool NoLineBreak = State.Stack.back().NoLineBreak ||
                      (Current.is(TT_TemplateOpener) &&
                       State.Stack.back().ContainsUnwrappedBuilder);
-  unsigned NestedBlockIndent = State.Stack.back().NestedBlockIndent;
+  unsigned NestedBlockIndent = std::max(State.Stack.back().StartOfFunctionCall,
+                                        State.Stack.back().NestedBlockIndent);
   State.Stack.push_back(ParenState(NewIndent, NewIndentLevel,
                                    State.Stack.back().LastSpace,
                                    AvoidBinPacking, NoLineBreak));

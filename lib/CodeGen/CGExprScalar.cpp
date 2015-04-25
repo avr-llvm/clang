@@ -349,10 +349,9 @@ public:
     return EmitScalarPrePostIncDec(E, LV, true, true);
   }
 
-  llvm::Value *EmitAddConsiderOverflowBehavior(const UnaryOperator *E,
-                                               llvm::Value *InVal,
-                                               llvm::Value *NextVal,
-                                               bool IsInc);
+  llvm::Value *EmitIncDecConsiderOverflowBehavior(const UnaryOperator *E,
+                                                  llvm::Value *InVal,
+                                                  bool IsInc);
 
   llvm::Value *EmitScalarPrePostIncDec(const UnaryOperator *E, LValue LV,
                                        bool isInc, bool isPre);
@@ -745,22 +744,36 @@ Value *ScalarExprEmitter::EmitScalarConversion(Value *Src, QualType SrcType,
   QualType OrigSrcType = SrcType;
   llvm::Type *SrcTy = Src->getType();
 
-  // If casting to/from storage-only half FP, use special intrinsics.
-  if (SrcType->isHalfType() && !CGF.getContext().getLangOpts().NativeHalfType &&
-      !CGF.getContext().getLangOpts().HalfArgsAndReturns) {
-    Src = Builder.CreateCall(
-        CGF.CGM.getIntrinsic(llvm::Intrinsic::convert_from_fp16,
-                             CGF.CGM.FloatTy),
-        Src);
-    SrcType = CGF.getContext().FloatTy;
-    SrcTy = CGF.FloatTy;
-  }
-
   // Handle conversions to bool first, they are special: comparisons against 0.
   if (DstType->isBooleanType())
     return EmitConversionToBool(Src, SrcType);
 
   llvm::Type *DstTy = ConvertType(DstType);
+
+  // Cast from half through float if half isn't a native type.
+  if (SrcType->isHalfType() && !CGF.getContext().getLangOpts().NativeHalfType) {
+    // Cast to FP using the intrinsic if the half type itself isn't supported.
+    if (DstTy->isFloatingPointTy()) {
+      if (!CGF.getContext().getLangOpts().HalfArgsAndReturns)
+        return Builder.CreateCall(
+            CGF.CGM.getIntrinsic(llvm::Intrinsic::convert_from_fp16, DstTy),
+            Src);
+    } else {
+      // Cast to other types through float, using either the intrinsic or FPExt,
+      // depending on whether the half type itself is supported
+      // (as opposed to operations on half, available with NativeHalfType).
+      if (!CGF.getContext().getLangOpts().HalfArgsAndReturns) {
+        Src = Builder.CreateCall(
+            CGF.CGM.getIntrinsic(llvm::Intrinsic::convert_from_fp16,
+                                 CGF.CGM.FloatTy),
+            Src);
+      } else {
+        Src = Builder.CreateFPExt(Src, CGF.CGM.FloatTy, "conv");
+      }
+      SrcType = CGF.getContext().FloatTy;
+      SrcTy = CGF.FloatTy;
+    }
+  }
 
   // Ignore conversions like int -> uint.
   if (SrcTy == DstTy)
@@ -818,10 +831,20 @@ Value *ScalarExprEmitter::EmitScalarConversion(Value *Src, QualType SrcType,
     EmitFloatConversionCheck(OrigSrc, OrigSrcType, Src, SrcType, DstType,
                              DstTy);
 
-  // Cast to half via float
-  if (DstType->isHalfType() && !CGF.getContext().getLangOpts().NativeHalfType &&
-      !CGF.getContext().getLangOpts().HalfArgsAndReturns)
+  // Cast to half through float if half isn't a native type.
+  if (DstType->isHalfType() && !CGF.getContext().getLangOpts().NativeHalfType) {
+    // Make sure we cast in a single step if from another FP type.
+    if (SrcTy->isFloatingPointTy()) {
+      // Use the intrinsic if the half type itself isn't supported
+      // (as opposed to operations on half, available with NativeHalfType).
+      if (!CGF.getContext().getLangOpts().HalfArgsAndReturns)
+        return Builder.CreateCall(
+            CGF.CGM.getIntrinsic(llvm::Intrinsic::convert_to_fp16, SrcTy), Src);
+      // If the half type is supported, just use an fptrunc.
+      return Builder.CreateFPTrunc(Src, DstTy);
+    }
     DstTy = CGF.FloatTy;
+  }
 
   if (isa<llvm::IntegerType>(SrcTy)) {
     bool InputSigned = SrcType->isSignedIntegerOrEnumerationType();
@@ -847,10 +870,14 @@ Value *ScalarExprEmitter::EmitScalarConversion(Value *Src, QualType SrcType,
   }
 
   if (DstTy != ResTy) {
-    assert(ResTy->isIntegerTy(16) && "Only half FP requires extra conversion");
-    Res = Builder.CreateCall(
+    if (!CGF.getContext().getLangOpts().HalfArgsAndReturns) {
+      assert(ResTy->isIntegerTy(16) && "Only half FP requires extra conversion");
+      Res = Builder.CreateCall(
         CGF.CGM.getIntrinsic(llvm::Intrinsic::convert_to_fp16, CGF.CGM.FloatTy),
         Res);
+    } else {
+      Res = Builder.CreateFPTrunc(Res, ResTy, "conv");
+    }
   }
 
   return Res;
@@ -1423,13 +1450,13 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
     // anything here.
     if (!E->getType()->isVariableArrayType()) {
       assert(isa<llvm::PointerType>(V->getType()) && "Expected pointer");
+      llvm::Type *NewTy = ConvertType(E->getType());
       V = CGF.Builder.CreatePointerCast(
-          V, ConvertType(E->getType())->getPointerTo(
-            V->getType()->getPointerAddressSpace()));
+          V, NewTy->getPointerTo(V->getType()->getPointerAddressSpace()));
 
       assert(isa<llvm::ArrayType>(V->getType()->getPointerElementType()) &&
              "Expected pointer to array");
-      V = Builder.CreateStructGEP(V, 0, "arraydecay");
+      V = Builder.CreateStructGEP(NewTy, V, 0, "arraydecay");
     }
 
     // Make sure the array decay ends up being the right type.  This matters if
@@ -1582,26 +1609,32 @@ Value *ScalarExprEmitter::VisitStmtExpr(const StmtExpr *E) {
 //                             Unary Operators
 //===----------------------------------------------------------------------===//
 
-llvm::Value *ScalarExprEmitter::
-EmitAddConsiderOverflowBehavior(const UnaryOperator *E,
-                                llvm::Value *InVal,
-                                llvm::Value *NextVal, bool IsInc) {
+static BinOpInfo createBinOpInfoFromIncDec(const UnaryOperator *E,
+                                           llvm::Value *InVal, bool IsInc) {
+  BinOpInfo BinOp;
+  BinOp.LHS = InVal;
+  BinOp.RHS = llvm::ConstantInt::get(InVal->getType(), 1, false);
+  BinOp.Ty = E->getType();
+  BinOp.Opcode = IsInc ? BO_Add : BO_Sub;
+  BinOp.FPContractable = false;
+  BinOp.E = E;
+  return BinOp;
+}
+
+llvm::Value *ScalarExprEmitter::EmitIncDecConsiderOverflowBehavior(
+    const UnaryOperator *E, llvm::Value *InVal, bool IsInc) {
+  llvm::Value *Amount =
+      llvm::ConstantInt::get(InVal->getType(), IsInc ? 1 : -1, true);
+  StringRef Name = IsInc ? "inc" : "dec";
   switch (CGF.getLangOpts().getSignedOverflowBehavior()) {
   case LangOptions::SOB_Defined:
-    return Builder.CreateAdd(InVal, NextVal, IsInc ? "inc" : "dec");
+    return Builder.CreateAdd(InVal, Amount, Name);
   case LangOptions::SOB_Undefined:
     if (!CGF.SanOpts.has(SanitizerKind::SignedIntegerOverflow))
-      return Builder.CreateNSWAdd(InVal, NextVal, IsInc ? "inc" : "dec");
+      return Builder.CreateNSWAdd(InVal, Amount, Name);
     // Fall through.
   case LangOptions::SOB_Trapping:
-    BinOpInfo BinOp;
-    BinOp.LHS = InVal;
-    BinOp.RHS = NextVal;
-    BinOp.Ty = E->getType();
-    BinOp.Opcode = BO_Add;
-    BinOp.FPContractable = false;
-    BinOp.E = E;
-    return EmitOverflowCheckedBinOp(BinOp);
+    return EmitOverflowCheckedBinOp(createBinOpInfoFromIncDec(E, InVal, IsInc));
   }
   llvm_unreachable("Unknown SignedOverflowBehaviorTy");
 }
@@ -1679,27 +1712,20 @@ ScalarExprEmitter::EmitScalarPrePostIncDec(const UnaryOperator *E, LValue LV,
 
   // Most common case by far: integer increment.
   } else if (type->isIntegerType()) {
-
-    llvm::Value *amt = llvm::ConstantInt::get(value->getType(), amount, true);
-
     // Note that signed integer inc/dec with width less than int can't
     // overflow because of promotion rules; we're just eliding a few steps here.
     bool CanOverflow = value->getType()->getIntegerBitWidth() >=
                        CGF.IntTy->getIntegerBitWidth();
     if (CanOverflow && type->isSignedIntegerOrEnumerationType()) {
-      value = EmitAddConsiderOverflowBehavior(E, value, amt, isInc);
+      value = EmitIncDecConsiderOverflowBehavior(E, value, isInc);
     } else if (CanOverflow && type->isUnsignedIntegerType() &&
                CGF.SanOpts.has(SanitizerKind::UnsignedIntegerOverflow)) {
-      BinOpInfo BinOp;
-      BinOp.LHS = value;
-      BinOp.RHS = llvm::ConstantInt::get(value->getType(), 1, false);
-      BinOp.Ty = E->getType();
-      BinOp.Opcode = isInc ? BO_Add : BO_Sub;
-      BinOp.FPContractable = false;
-      BinOp.E = E;
-      value = EmitOverflowCheckedBinOp(BinOp);
-    } else
+      value =
+          EmitOverflowCheckedBinOp(createBinOpInfoFromIncDec(E, value, isInc));
+    } else {
+      llvm::Value *amt = llvm::ConstantInt::get(value->getType(), amount, true);
       value = Builder.CreateAdd(value, amt, isInc ? "inc" : "dec");
+    }
 
   // Next most common: pointer increment.
   } else if (const PointerType *ptr = type->getAs<PointerType>()) {
@@ -1753,13 +1779,16 @@ ScalarExprEmitter::EmitScalarPrePostIncDec(const UnaryOperator *E, LValue LV,
     // Add the inc/dec to the real part.
     llvm::Value *amt;
 
-    if (type->isHalfType() && !CGF.getContext().getLangOpts().NativeHalfType &&
-        !CGF.getContext().getLangOpts().HalfArgsAndReturns) {
+    if (type->isHalfType() && !CGF.getContext().getLangOpts().NativeHalfType) {
       // Another special case: half FP increment should be done via float
-      value = Builder.CreateCall(
-          CGF.CGM.getIntrinsic(llvm::Intrinsic::convert_from_fp16,
-                               CGF.CGM.FloatTy),
-          input);
+      if (!CGF.getContext().getLangOpts().HalfArgsAndReturns) {
+        value = Builder.CreateCall(
+            CGF.CGM.getIntrinsic(llvm::Intrinsic::convert_from_fp16,
+                                 CGF.CGM.FloatTy),
+            input, "incdec.conv");
+      } else {
+        value = Builder.CreateFPExt(input, CGF.CGM.FloatTy, "incdec.conv");
+      }
     }
 
     if (value->getType()->isFloatTy())
@@ -1769,20 +1798,29 @@ ScalarExprEmitter::EmitScalarPrePostIncDec(const UnaryOperator *E, LValue LV,
       amt = llvm::ConstantFP::get(VMContext,
                                   llvm::APFloat(static_cast<double>(amount)));
     else {
+      // Remaining types are either Half or LongDouble.  Convert from float.
       llvm::APFloat F(static_cast<float>(amount));
       bool ignored;
-      F.convert(CGF.getTarget().getLongDoubleFormat(),
+      // Don't use getFloatTypeSemantics because Half isn't
+      // necessarily represented using the "half" LLVM type.
+      F.convert(value->getType()->isHalfTy()
+                    ? CGF.getTarget().getHalfFormat()
+                    : CGF.getTarget().getLongDoubleFormat(),
                 llvm::APFloat::rmTowardZero, &ignored);
       amt = llvm::ConstantFP::get(VMContext, F);
     }
     value = Builder.CreateFAdd(value, amt, isInc ? "inc" : "dec");
 
-    if (type->isHalfType() && !CGF.getContext().getLangOpts().NativeHalfType &&
-        !CGF.getContext().getLangOpts().HalfArgsAndReturns)
-      value = Builder.CreateCall(
-          CGF.CGM.getIntrinsic(llvm::Intrinsic::convert_to_fp16,
-                               CGF.CGM.FloatTy),
-          value);
+    if (type->isHalfType() && !CGF.getContext().getLangOpts().NativeHalfType) {
+      if (!CGF.getContext().getLangOpts().HalfArgsAndReturns) {
+        value = Builder.CreateCall(
+            CGF.CGM.getIntrinsic(llvm::Intrinsic::convert_to_fp16,
+                                 CGF.CGM.FloatTy),
+            value, "incdec.conv");
+      } else {
+        value = Builder.CreateFPTrunc(value, input->getType(), "incdec.conv");
+      }
+    }
 
   // Objective-C pointer types.
   } else {
@@ -1805,10 +1843,9 @@ ScalarExprEmitter::EmitScalarPrePostIncDec(const UnaryOperator *E, LValue LV,
     llvm::BasicBlock *opBB = Builder.GetInsertBlock();
     llvm::BasicBlock *contBB = CGF.createBasicBlock("atomic_cont", CGF.CurFn);
     auto Pair = CGF.EmitAtomicCompareExchange(
-        LV, RValue::get(atomicPHI), RValue::get(CGF.EmitToMemory(value, type)),
-        E->getExprLoc());
-    llvm::Value *old = Pair.first.getScalarVal();
-    llvm::Value *success = Pair.second.getScalarVal();
+        LV, RValue::get(atomicPHI), RValue::get(value), E->getExprLoc());
+    llvm::Value *old = CGF.EmitToMemory(Pair.first.getScalarVal(), type);
+    llvm::Value *success = Pair.second;
     atomicPHI->addIncoming(old, opBB);
     Builder.CreateCondBr(success, contBB, opBB);
     Builder.SetInsertPoint(contBB);
@@ -2149,10 +2186,9 @@ LValue ScalarExprEmitter::EmitCompoundAssignLValue(
     llvm::BasicBlock *opBB = Builder.GetInsertBlock();
     llvm::BasicBlock *contBB = CGF.createBasicBlock("atomic_cont", CGF.CurFn);
     auto Pair = CGF.EmitAtomicCompareExchange(
-        LHSLV, RValue::get(atomicPHI),
-        RValue::get(CGF.EmitToMemory(Result, LHSTy)), E->getExprLoc());
-    llvm::Value *old = Pair.first.getScalarVal();
-    llvm::Value *success = Pair.second.getScalarVal();
+        LHSLV, RValue::get(atomicPHI), RValue::get(Result), E->getExprLoc());
+    llvm::Value *old = CGF.EmitToMemory(Pair.first.getScalarVal(), LHSTy);
+    llvm::Value *success = Pair.second;
     atomicPHI->addIncoming(old, opBB);
     Builder.CreateCondBr(success, contBB, opBB);
     Builder.SetInsertPoint(contBB);

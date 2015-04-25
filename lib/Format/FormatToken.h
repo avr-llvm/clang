@@ -49,6 +49,7 @@ enum TokenType {
   TT_InlineASMColon,
   TT_JavaAnnotation,
   TT_JsTypeColon,
+  TT_JsTypeOptionalQuestion,
   TT_LambdaArrow,
   TT_LambdaLSquare,
   TT_LeadingJavaAnnotation,
@@ -321,7 +322,8 @@ struct FormatToken {
   /// \brief Returns \c true if this is a "." or "->" accessing a member.
   bool isMemberAccess() const {
     return isOneOf(tok::arrow, tok::period, tok::arrowstar) &&
-           !isOneOf(TT_DesignatedInitializerPeriod, TT_TrailingReturnArrow);
+           !isOneOf(TT_DesignatedInitializerPeriod, TT_TrailingReturnArrow,
+                    TT_LambdaArrow);
   }
 
   bool isUnaryOperator() const {
@@ -543,11 +545,17 @@ struct AdditionalKeywords {
     kw_throws = &IdentTable.get("throws");
     kw___except = &IdentTable.get("__except");
 
+    kw_mark = &IdentTable.get("mark");
+
     kw_option = &IdentTable.get("option");
     kw_optional = &IdentTable.get("optional");
     kw_repeated = &IdentTable.get("repeated");
     kw_required = &IdentTable.get("required");
     kw_returns = &IdentTable.get("returns");
+
+    kw_signals = &IdentTable.get("signals");
+    kw_slots = &IdentTable.get("slots");
+    kw_qslots = &IdentTable.get("Q_SLOTS");
   }
 
   // Context sensitive keywords.
@@ -576,12 +584,20 @@ struct AdditionalKeywords {
   IdentifierInfo *kw_synchronized;
   IdentifierInfo *kw_throws;
 
+  // Pragma keywords.
+  IdentifierInfo *kw_mark;
+
   // Proto keywords.
   IdentifierInfo *kw_option;
   IdentifierInfo *kw_optional;
   IdentifierInfo *kw_repeated;
   IdentifierInfo *kw_required;
   IdentifierInfo *kw_returns;
+
+  // QT keywords.
+  IdentifierInfo *kw_signals;
+  IdentifierInfo *kw_slots;
+  IdentifierInfo *kw_qslots;
 };
 
 } // namespace format
