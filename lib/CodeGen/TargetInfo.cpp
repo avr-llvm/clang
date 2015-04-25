@@ -5487,7 +5487,9 @@ void AVRTargetCodeGenInfo::SetTargetAttributes(const Decl *D,
                                                   llvm::GlobalValue *GV,
                                                   CodeGen::CodeGenModule &M) const {
     if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D)) {
-        if (const AVRSignalAttr *attr = FD->getAttr<AVRSignalAttr>()) {
+        const AVRSignalAttr *attr = FD->getAttr<AVRSignalAttr>();
+
+        if (attr) {
             // Handle 'interrupt' attribute:
             llvm::Function *F = cast<llvm::Function>(GV);
 
