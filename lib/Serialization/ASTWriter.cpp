@@ -1979,10 +1979,6 @@ static bool shouldIgnoreMacro(MacroDirective *MD, bool IsModule,
       return true;
 
   if (IsModule) {
-    // Re-export any imported directives.
-    if (MD->isImported())
-      return false;
-
     SourceLocation Loc = MD->getLocation();
     if (Loc.isInvalid())
       return true;
@@ -2023,37 +2019,23 @@ void ASTWriter::WritePreprocessor(const Preprocessor &PP, bool IsModule) {
   // Loop over all the macro directives that are live at the end of the file,
   // emitting each to the PP section.
 
-  // Construct the list of macro directives that need to be serialized.
-  typedef std::pair<const IdentifierInfo *, MacroDirective *> MacroChain;
-  SmallVector<MacroChain, 2> MacroDirectives;
-  for (Preprocessor::macro_iterator
-         I = PP.macro_begin(/*IncludeExternalMacros=*/false),
-         E = PP.macro_end(/*IncludeExternalMacros=*/false);
-       I != E; ++I) {
-    MacroDirectives.push_back(std::make_pair(I->first, I->second.getLatest()));
-  }
-
+  // Construct the list of identifiers with macro directives that need to be
+  // serialized.
+  SmallVector<const IdentifierInfo *, 128> MacroIdentifiers;
+  for (auto &Id : PP.getIdentifierTable())
+    if (Id.second->hadMacroDefinition() &&
+        (!Id.second->isFromAST() ||
+         Id.second->hasChangedSinceDeserialization()))
+      MacroIdentifiers.push_back(Id.second);
   // Sort the set of macro definitions that need to be serialized by the
   // name of the macro, to provide a stable ordering.
-  int (*Cmp)(const MacroChain*, const MacroChain*) =
-    [](const MacroChain *A, const MacroChain *B) -> int {
-      return A->first->getName().compare(B->first->getName());
-    };
-  llvm::array_pod_sort(MacroDirectives.begin(), MacroDirectives.end(), Cmp);
+  std::sort(MacroIdentifiers.begin(), MacroIdentifiers.end(),
+            llvm::less_ptr<IdentifierInfo>());
 
   // Emit the macro directives as a list and associate the offset with the
   // identifier they belong to.
-  for (auto &Chain : MacroDirectives) {
-    const IdentifierInfo *Name = Chain.first;
-    MacroDirective *MD = Chain.second;
-
-    // If the macro or identifier need no updates, don't write the macro history
-    // for this one.
-    // FIXME: Chain the macro history instead of re-writing it.
-    if (MD->isFromPCH() &&
-        Name->isFromAST() && !Name->hasChangedSinceDeserialization())
-      continue;
-
+  for (const IdentifierInfo *Name : MacroIdentifiers) {
+    MacroDirective *MD = PP.getLocalMacroDirectiveHistory(Name);
     auto StartOffset = Stream.GetCurrentBitNo();
 
     // Emit the macro directives in reverse source order.
@@ -2066,22 +2048,14 @@ void ASTWriter::WritePreprocessor(const Preprocessor &PP, bool IsModule) {
       AddSourceLocation(MD->getLocation(), Record);
       Record.push_back(MD->getKind());
       if (auto *DefMD = dyn_cast<DefMacroDirective>(MD)) {
-        MacroID InfoID = getMacroRef(DefMD->getInfo(), Name);
-        Record.push_back(InfoID);
-        Record.push_back(DefMD->isAmbiguous());
+        Record.push_back(getMacroRef(DefMD->getInfo(), Name));
       } else if (auto *VisMD = dyn_cast<VisibilityMacroDirective>(MD)) {
         Record.push_back(VisMD->isPublic());
-        // No owning module macro.
-        continue;
       }
-
-      if (auto *MM = MD->getOwningModuleMacro())
-        Record.push_back(getSubmoduleID(MM->getOwningModule()));
-      else
-        Record.push_back(0);
     }
 
     // Write out any exported module macros.
+    bool EmittedModuleMacros = false;
     if (IsModule) {
       auto Leafs = PP.getLeafModuleMacros(Name);
       SmallVector<ModuleMacro*, 8> Worklist(Leafs.begin(), Leafs.end());
@@ -2092,7 +2066,7 @@ void ASTWriter::WritePreprocessor(const Preprocessor &PP, bool IsModule) {
         // Emit a record indicating this submodule exports this macro.
         ModuleMacroRecord.push_back(
             getSubmoduleID(Macro->getOwningModule()));
-        ModuleMacroRecord.push_back(getMacroID(Macro->getMacroInfo()));
+        ModuleMacroRecord.push_back(getMacroRef(Macro->getMacroInfo(), Name));
         for (auto *M : Macro->overrides())
           ModuleMacroRecord.push_back(getSubmoduleID(M->getOwningModule()));
 
@@ -2103,10 +2077,12 @@ void ASTWriter::WritePreprocessor(const Preprocessor &PP, bool IsModule) {
         for (auto *M : Macro->overrides())
           if (++Visits[M] == M->getNumOverridingMacros())
             Worklist.push_back(M);
+
+        EmittedModuleMacros = true;
       }
     }
 
-    if (Record.empty())
+    if (Record.empty() && !EmittedModuleMacros)
       continue;
 
     IdentMacroDirectivesOffsetMap[Name] = StartOffset;
@@ -2241,13 +2217,13 @@ void ASTWriter::WritePreprocessorDetail(PreprocessingRecord &PPRec) {
        (void)++E, ++NumPreprocessingRecords, ++NextPreprocessorEntityID) {
     Record.clear();
 
-    PreprocessedEntityOffsets.push_back(PPEntityOffset((*E)->getSourceRange(),
-                                                     Stream.GetCurrentBitNo()));
+    PreprocessedEntityOffsets.push_back(
+        PPEntityOffset((*E)->getSourceRange(), Stream.GetCurrentBitNo()));
 
-    if (MacroDefinition *MD = dyn_cast<MacroDefinition>(*E)) {
+    if (MacroDefinitionRecord *MD = dyn_cast<MacroDefinitionRecord>(*E)) {
       // Record this macro definition's ID.
       MacroDefinitions[MD] = NextPreprocessorEntityID;
-      
+
       AddIdentifierRef(MD->getName(), Record);
       Stream.EmitRecord(PPD_MACRO_DEFINITION, Record);
       continue;
@@ -2336,19 +2312,6 @@ static unsigned getNumberOfModules(Module *Mod) {
 }
 
 void ASTWriter::WriteSubmodules(Module *WritingModule) {
-  // Determine the dependencies of our module and each of it's submodules.
-  // FIXME: This feels like it belongs somewhere else, but there are no
-  // other consumers of this information.
-  SourceManager &SrcMgr = PP->getSourceManager();
-  ModuleMap &ModMap = PP->getHeaderSearchInfo().getModuleMap();
-  for (const auto *I : Context->local_imports()) {
-    if (Module *ImportedFrom
-          = ModMap.inferModuleFromLocation(FullSourceLoc(I->getLocation(), 
-                                                         SrcMgr))) {
-      ImportedFrom->Imports.push_back(I->getImportedModule());
-    }
-  }
-  
   // Enter the submodule description block.
   Stream.EnterSubblock(SUBMODULE_BLOCK_ID, /*bits for abbreviations*/5);
   
@@ -4495,7 +4458,7 @@ void ASTWriter::WriteASTCore(Sema &SemaRef,
         // FIXME: If the module has macros imported then later has declarations
         // imported, this location won't be the right one as a location for the
         // declaration imports.
-        AddSourceLocation(Import.M->MacroVisibilityLoc, ImportedModules);
+        AddSourceLocation(PP.getModuleImportLoc(Import.M), ImportedModules);
       }
 
       Stream.EmitRecord(IMPORTED_MODULES, ImportedModules);
@@ -5582,7 +5545,7 @@ void ASTWriter::SelectorRead(SelectorID ID, Selector S) {
 }
 
 void ASTWriter::MacroDefinitionRead(serialization::PreprocessedEntityID ID,
-                                    MacroDefinition *MD) {
+                                    MacroDefinitionRecord *MD) {
   assert(MacroDefinitions.find(MD) == MacroDefinitions.end());
   MacroDefinitions[MD] = ID;
 }

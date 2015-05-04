@@ -1379,13 +1379,12 @@ void MicrosoftCXXNameMangler::mangleArgumentType(QualType T,
   void *TypePtr;
   if (const auto *DT = T->getAs<DecayedType>()) {
     QualType OriginalType = DT->getOriginalType();
-    // Decayed ConstantArrayType should be treated identically to decayed
-    // IncompleteArrayType.
-    if (const auto *CAT =
-            getASTContext().getAsConstantArrayType(OriginalType))
+    // All decayed ArrayTypes should be treated identically; as-if they were
+    // a decayed IncompleteArrayType.
+    if (const auto *AT = getASTContext().getAsArrayType(OriginalType))
       OriginalType = getASTContext().getIncompleteArrayType(
-          CAT->getElementType(), CAT->getSizeModifier(),
-          CAT->getIndexTypeCVRQualifiers());
+          AT->getElementType(), AT->getSizeModifier(),
+          AT->getIndexTypeCVRQualifiers());
 
     TypePtr = OriginalType.getCanonicalType().getAsOpaquePtr();
     // If the original parameter was textually written as an array,
@@ -1402,14 +1401,14 @@ void MicrosoftCXXNameMangler::mangleArgumentType(QualType T,
   ArgBackRefMap::iterator Found = TypeBackReferences.find(TypePtr);
 
   if (Found == TypeBackReferences.end()) {
-    size_t OutSizeBefore = Out.GetNumBytesInBuffer();
+    size_t OutSizeBefore = Out.tell();
 
     mangleType(T, Range, QMM_Drop);
 
     // See if it's worth creating a back reference.
     // Only types longer than 1 character are considered
     // and only 10 back references slots are available:
-    bool LongerThanOneChar = (Out.GetNumBytesInBuffer() - OutSizeBefore > 1);
+    bool LongerThanOneChar = (Out.tell() - OutSizeBefore > 1);
     if (LongerThanOneChar && TypeBackReferences.size() < 10) {
       size_t Size = TypeBackReferences.size();
       TypeBackReferences[TypePtr] = Size;

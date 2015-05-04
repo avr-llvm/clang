@@ -576,54 +576,8 @@ private:
   /// global submodule ID to produce a local ID.
   GlobalSubmoduleMapType GlobalSubmoduleMap;
 
-  /// \brief Information on a macro definition or undefinition that is visible
-  /// at the end of a submodule.
-  struct ModuleMacroInfo;
-
-  /// \brief An entity that has been hidden.
-  class HiddenName {
-  public:
-    enum NameKind {
-      Declaration,
-      Macro
-    } Kind;
-
-  private:
-    union {
-      Decl *D;
-      ModuleMacroInfo *MMI;
-    };
-
-    IdentifierInfo *Id;
-
-  public:
-    HiddenName(Decl *D) : Kind(Declaration), D(D), Id() { }
-
-    HiddenName(IdentifierInfo *II, ModuleMacroInfo *MMI)
-      : Kind(Macro), MMI(MMI), Id(II) { }
-
-    NameKind getKind() const { return Kind; }
-
-    Decl *getDecl() const {
-      assert(getKind() == Declaration && "Hidden name is not a declaration");
-      return D;
-    }
-
-    std::pair<IdentifierInfo *, ModuleMacroInfo *> getMacro() const {
-      assert(getKind() == Macro && "Hidden name is not a macro!");
-      return std::make_pair(Id, MMI);
-    }
-  };
-
-  typedef llvm::SmallDenseMap<IdentifierInfo*,
-                              ModuleMacroInfo*> HiddenMacrosMap;
-
   /// \brief A set of hidden declarations.
-  struct HiddenNames {
-    SmallVector<Decl*, 2> HiddenDecls;
-    HiddenMacrosMap HiddenMacros;
-  };
-
+  typedef SmallVector<Decl*, 2> HiddenNames;
   typedef llvm::DenseMap<Module *, HiddenNames> HiddenNamesMapType;
 
   /// \brief A mapping from each of the hidden submodules to the deserialized
@@ -1358,16 +1312,12 @@ public:
   /// module.  Visibility can only be increased over time.
   ///
   /// \param ImportLoc The location at which the import occurs.
-  ///
-  /// \param Complain Whether to complain about conflicting module imports.
   void makeModuleVisible(Module *Mod,
                          Module::NameVisibilityKind NameVisibility,
-                         SourceLocation ImportLoc,
-                         bool Complain);
+                         SourceLocation ImportLoc);
 
   /// \brief Make the names within this set of hidden names visible.
-  void makeNamesVisible(const HiddenNames &Names, Module *Owner,
-                        bool FromFinalization);
+  void makeNamesVisible(const HiddenNames &Names, Module *Owner);
 
   /// \brief Take the AST callbacks listener.
   std::unique_ptr<ASTReaderListener> takeListener() {
@@ -1850,20 +1800,6 @@ public:
                                                     unsigned LocalID);
 
   void resolvePendingMacro(IdentifierInfo *II, const PendingMacroInfo &PMInfo);
-
-  void installImportedMacro(IdentifierInfo *II, ModuleMacroInfo &MMI,
-                            Module *Owner);
-
-  typedef llvm::TinyPtrVector<DefMacroDirective *> AmbiguousMacros;
-  llvm::DenseMap<IdentifierInfo*, AmbiguousMacros> AmbiguousMacroDefs;
-
-  void removeOverriddenMacros(IdentifierInfo *II, SourceLocation Loc,
-                              AmbiguousMacros &Ambig,
-                              ArrayRef<ModuleMacro *> Overrides);
-
-  AmbiguousMacros *removeOverriddenMacros(IdentifierInfo *II,
-                                          SourceLocation Loc,
-                                          ArrayRef<ModuleMacro *> Overrides);
 
   /// \brief Retrieve the macro with the given ID.
   MacroInfo *getMacro(serialization::MacroID ID);
