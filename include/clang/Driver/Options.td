@@ -529,9 +529,15 @@ def fsanitize_blacklist : Joined<["-"], "fsanitize-blacklist=">,
 def fno_sanitize_blacklist : Flag<["-"], "fno-sanitize-blacklist">,
                              Group<f_clang_Group>,
                              HelpText<"Don't use blacklist file for sanitizers">;
-def fsanitize_coverage : Joined<["-"], "fsanitize-coverage=">,
-                                        Group<f_clang_Group>, Flags<[CC1Option, CoreOption]>,
-                                        HelpText<"Enable coverage instrumentation for Sanitizers">;
+def fsanitize_coverage
+    : CommaJoined<["-"], "fsanitize-coverage=">,
+      Group<f_clang_Group>, Flags<[CoreOption]>,
+      HelpText<"Specify the type of coverage instrumentation for Sanitizers">;
+def fno_sanitize_coverage
+    : CommaJoined<["-"], "fno-sanitize-coverage=">,
+      Group<f_clang_Group>, Flags<[CoreOption]>,
+      HelpText<"Disable specified features of coverage instrumentation for "
+               "Sanitizers">;
 def fsanitize_memory_track_origins_EQ : Joined<["-"], "fsanitize-memory-track-origins=">,
                                         Group<f_clang_Group>, Flags<[CC1Option]>,
                                         HelpText<"Enable origins tracking in MemorySanitizer">;
@@ -870,7 +876,7 @@ def fno_objc_nonfragile_abi : Flag<["-"], "fno-objc-nonfragile-abi">, Group<f_Gr
 def fobjc_sender_dependent_dispatch : Flag<["-"], "fobjc-sender-dependent-dispatch">, Group<f_Group>;
 def fomit_frame_pointer : Flag<["-"], "fomit-frame-pointer">, Group<f_Group>;
 def fopenmp : Flag<["-"], "fopenmp">, Group<f_Group>, Flags<[CC1Option, NoArgumentUnused]>;
-def fopenmp_EQ : Joined<["-"], "fopenmp=">, Group<f_Group>, Flags<[CC1Option]>;
+def fopenmp_EQ : Joined<["-"], "fopenmp=">, Group<f_Group>;
 def fno_optimize_sibling_calls : Flag<["-"], "fno-optimize-sibling-calls">, Group<f_Group>;
 def foptimize_sibling_calls : Flag<["-"], "foptimize-sibling-calls">, Group<f_Group>;
 def force__cpusubtype__ALL : Flag<["-"], "force_cpusubtype_ALL">;
@@ -918,8 +924,8 @@ def fspell_checking : Flag<["-"], "fspell-checking">, Group<f_Group>;
 def fspell_checking_limit_EQ : Joined<["-"], "fspell-checking-limit=">, Group<f_Group>;
 def fsigned_bitfields : Flag<["-"], "fsigned-bitfields">, Group<f_Group>;
 def fsigned_char : Flag<["-"], "fsigned-char">, Group<f_Group>;
-def fno_signed_char : Flag<["-"], "fno-signed-char">, Flags<[CC1Option]>,
-    Group<clang_ignored_f_Group>, HelpText<"Char is unsigned">;
+def fno_signed_char : Flag<["-"], "fno-signed-char">, Group<f_Group>,
+    Flags<[CC1Option]>, HelpText<"Char is unsigned">;
 def fsplit_stack : Flag<["-"], "fsplit-stack">, Group<f_Group>;
 def fstack_protector_all : Flag<["-"], "fstack-protector-all">, Group<f_Group>,
   HelpText<"Force the usage of stack protectors for all functions">;
@@ -1000,7 +1006,7 @@ def fno_trigraphs : Flag<["-"], "fno-trigraphs">, Group<f_Group>,
   HelpText<"Do not process trigraph sequences">, Flags<[CC1Option]>;
 def funsigned_bitfields : Flag<["-"], "funsigned-bitfields">, Group<f_Group>;
 def funsigned_char : Flag<["-"], "funsigned-char">, Group<f_Group>;
-def fno_unsigned_char : Flag<["-"], "fno-unsigned-char">, Group<clang_ignored_f_Group>;
+def fno_unsigned_char : Flag<["-"], "fno-unsigned-char">;
 def funwind_tables : Flag<["-"], "funwind-tables">, Group<f_Group>;
 def fuse_cxa_atexit : Flag<["-"], "fuse-cxa-atexit">, Group<f_Group>;
 def fuse_init_array : Flag<["-"], "fuse-init-array">, Group<f_Group>, Flags<[CC1Option]>,
@@ -1311,6 +1317,9 @@ def fno_altivec : Flag<["-"], "fno-altivec">, Group<f_Group>, Flags<[CC1Option]>
 def maltivec : Flag<["-"], "maltivec">, Alias<faltivec>;
 def mno_altivec : Flag<["-"], "mno-altivec">, Alias<fno_altivec>;
 
+def mvx : Flag<["-"], "mvx">, Group<m_Group>;
+def mno_vx : Flag<["-"], "mno-vx">, Group<m_Group>;
+
 def mno_warn_nonportable_cfstrings : Flag<["-"], "mno-warn-nonportable-cfstrings">, Group<m_Group>;
 def mno_omit_leaf_frame_pointer : Flag<["-"], "mno-omit-leaf-frame-pointer">, Group<m_Group>;
 def momit_leaf_frame_pointer : Flag<["-"], "momit-leaf-frame-pointer">, Group<m_Group>,
@@ -1573,7 +1582,7 @@ def no_system_header_prefix : Joined<["--"], "no-system-header-prefix=">,
            "system header.">;
 def : Separate<["--"], "no-system-header-prefix">, Alias<no_system_header_prefix>;
 def s : Flag<["-"], "s">;
-def target : Joined<["-", "--"], "target=">, Flags<[DriverOption, CoreOption]>,
+def target : Joined<["--"], "target=">, Flags<[DriverOption, CoreOption]>,
   HelpText<"Generate code for the given target">;
 def gcc_toolchain : Joined<["--"], "gcc-toolchain=">, Flags<[DriverOption]>,
   HelpText<"Use the gcc toolchain at the given directory">;
@@ -1746,7 +1755,7 @@ def mv5 : Flag<["-"], "mv5">, Group<m_hexagon_Features_Group>, Alias<march_EQ>,
 // aliases for options that are spelled using the more common Unix / GNU flag
 // style of double-dash and equals-joined flags.
 def gcc_toolchain_legacy_spelling : Separate<["-"], "gcc-toolchain">, Alias<gcc_toolchain>;
-def target_legacy_spelling : Separate<["-", "--"], "target">, Alias<target>;
+def target_legacy_spelling : Separate<["-"], "target">, Alias<target>;
 
 // Special internal option to handle -Xlinker --no-demangle.
 def Z_Xlinker__no_demangle : Flag<["-"], "Z-Xlinker-no-demangle">,

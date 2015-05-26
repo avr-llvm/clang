@@ -1595,6 +1595,13 @@ TEST(IsDeleted, MatchesDeletedFunctionDeclarations) {
                       functionDecl(hasName("Func"), isDeleted())));
 }
 
+TEST(isConstexpr, MatchesConstexprDeclarations) {
+  EXPECT_TRUE(matches("constexpr int foo = 42;",
+                      varDecl(hasName("foo"), isConstexpr())));
+  EXPECT_TRUE(matches("constexpr int bar();",
+                      functionDecl(hasName("bar"), isConstexpr())));
+}
+
 TEST(HasAnyParameter, DoesntMatchIfInnerMatcherDoesntMatch) {
   EXPECT_TRUE(notMatches("class Y {}; class X { void x(int) {} };",
       methodDecl(hasAnyParameter(hasType(recordDecl(hasName("X")))))));
@@ -2142,6 +2149,10 @@ TEST(Matcher, FloatLiterals) {
 
 TEST(Matcher, NullPtrLiteral) {
   EXPECT_TRUE(matches("int* i = nullptr;", nullPtrLiteralExpr()));
+}
+
+TEST(Matcher, GNUNullExpr) {
+  EXPECT_TRUE(matches("int* i = __null;", gnuNullExpr()));
 }
 
 TEST(Matcher, AsmStatement) {

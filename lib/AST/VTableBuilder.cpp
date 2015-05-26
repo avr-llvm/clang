@@ -2738,8 +2738,9 @@ VFTableBuilder::ComputeThisOffset(FinalOverriders::OverriderInfo Overrider) {
     CharUnits ThisOffset = Overrider.Offset;
     CharUnits LastVBaseOffset;
 
-    // For each path from the overrider to the parents of the overridden methods,
-    // traverse the path, calculating the this offset in the most derived class.
+    // For each path from the overrider to the parents of the overridden
+    // methods, traverse the path, calculating the this offset in the most
+    // derived class.
     for (int J = 0, F = Path.size(); J != F; ++J) {
       const CXXBasePathElement &Element = Path[J];
       QualType CurTy = Element.Base->getType();
@@ -2971,7 +2972,8 @@ void VFTableBuilder::AddMethods(BaseSubobject Base, unsigned BaseDepth,
   const ASTRecordLayout &Layout = Context.getASTRecordLayout(RD);
 
   // See if this class expands a vftable of the base we look at, which is either
-  // the one defined by the vfptr base path or the primary base of the current class.
+  // the one defined by the vfptr base path or the primary base of the current
+  // class.
   const CXXRecordDecl *NextBase = nullptr, *NextLastVBase = LastVBase;
   CharUnits NextBaseOffset;
   if (BaseDepth < WhichVFPtr.PathToBaseWithVPtr.size()) {
@@ -3029,7 +3031,8 @@ void VFTableBuilder::AddMethods(BaseSubobject Base, unsigned BaseDepth,
                                   ThisAdjustmentOffset);
 
     if (OverriddenMD) {
-      // If MD overrides anything in this vftable, we need to update the entries.
+      // If MD overrides anything in this vftable, we need to update the
+      // entries.
       MethodInfoMapTy::iterator OverriddenMDIterator =
           MethodInfoMap.find(OverriddenMD);
 
@@ -3528,12 +3531,17 @@ static CharUnits getOffsetOfFullPath(ASTContext &Context,
 static const FullPathTy *selectBestPath(ASTContext &Context,
                                         const CXXRecordDecl *RD, VPtrInfo *Info,
                                         std::list<FullPathTy> &FullPaths) {
+  // Handle some easy cases first.
+  if (FullPaths.empty())
+    return nullptr;
+  if (FullPaths.size() == 1)
+    return &FullPaths.front();
+
   const FullPathTy *BestPath = nullptr;
   typedef std::set<const CXXMethodDecl *> OverriderSetTy;
   OverriderSetTy LastOverrides;
   for (const FullPathTy &SpecificPath : FullPaths) {
-    if (SpecificPath.empty())
-      continue;
+    assert(!SpecificPath.empty());
     OverriderSetTy CurrentOverrides;
     const CXXRecordDecl *TopLevelRD = SpecificPath.begin()->getBase();
     // Find the distance from the start of the path to the subobject with the
@@ -3546,19 +3554,21 @@ static const FullPathTy *selectBestPath(ASTContext &Context,
         continue;
       FinalOverriders::OverriderInfo OI =
           Overriders.getOverrider(MD->getCanonicalDecl(), BaseOffset);
+      const CXXMethodDecl *OverridingMethod = OI.Method;
       // Only overriders which have a return adjustment introduce problematic
       // thunks.
-      if (ComputeReturnAdjustmentBaseOffset(Context, OI.Method, MD).isEmpty())
+      if (ComputeReturnAdjustmentBaseOffset(Context, OverridingMethod, MD)
+              .isEmpty())
         continue;
       // It's possible that the overrider isn't in this path.  If so, skip it
       // because this path didn't introduce it.
-      const CXXRecordDecl *OverridingParent = OI.Method->getParent();
+      const CXXRecordDecl *OverridingParent = OverridingMethod->getParent();
       if (std::none_of(SpecificPath.begin(), SpecificPath.end(),
                        [&](const BaseSubobject &BSO) {
                          return BSO.getBase() == OverridingParent;
                        }))
         continue;
-      CurrentOverrides.insert(OI.Method);
+      CurrentOverrides.insert(OverridingMethod);
     }
     OverriderSetTy NewOverrides =
         llvm::set_difference(CurrentOverrides, LastOverrides);
@@ -3583,16 +3593,9 @@ static const FullPathTy *selectBestPath(ASTContext &Context,
           << ConflictMD;
     }
   }
-  // Select the longest path if no path introduces covariant overrides.
-  // Technically, the path we choose should have no effect but longer paths are
-  // nicer to see in -fdump-vtable-layouts.
-  if (!BestPath)
-    BestPath =
-        &*std::max_element(FullPaths.begin(), FullPaths.end(),
-                           [](const FullPathTy &FP1, const FullPathTy &FP2) {
-                             return FP1.size() < FP2.size();
-                           });
-  return BestPath;
+  // Go with the path that introduced the most covariant overrides.  If there is
+  // no such path, pick the first path.
+  return BestPath ? BestPath : &FullPaths.front();
 }
 
 static void computeFullPathsForVFTables(ASTContext &Context,
