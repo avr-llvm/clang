@@ -4064,6 +4064,8 @@ TEST_F(FormatTest, FunctionAnnotations) {
   // Not function annotations.
   verifyFormat("ASSERT(\"aaaaa\") << aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
                "                << bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+  verifyFormat("TEST_F(ThisIsATestFixtureeeeeeeeeeeee,\n"
+               "       ThisIsATestWithAReallyReallyReallyReallyLongName) {}");
 }
 
 TEST_F(FormatTest, BreaksDesireably) {
@@ -4963,6 +4965,9 @@ TEST_F(FormatTest, AlignsPipes) {
                "                    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
                "                    aaaaaaaaaaaaaaaaaaaaa)\n"
                "             << aaaaaaaaaaaaaaaaaaaaaaaaaa;");
+  verifyFormat("LOG_IF(aaa == //\n"
+               "       bbb)\n"
+               "    << a << b;");
 
   // Breaking before the first "<<" is generally not desirable.
   verifyFormat(
@@ -7583,9 +7588,9 @@ TEST_F(FormatTest, ObjCArrayLiterals) {
       "                                             index:(NSUInteger)index\n"
       "                                nonDigitAttributes:\n"
       "                                    (NSDictionary *)noDigitAttributes;");
-  verifyFormat(
-      "[someFunction someLooooooooooooongParameter:\n"
-      "                  @[ NSBundle.mainBundle.infoDictionary[@\"a\"] ]];");
+  verifyFormat("[someFunction someLooooooooooooongParameter:@[\n"
+               "  NSBundle.mainBundle.infoDictionary[@\"a\"]\n"
+               "]];");
 }
 
 TEST_F(FormatTest, ReformatRegionAdjustsIndent) {

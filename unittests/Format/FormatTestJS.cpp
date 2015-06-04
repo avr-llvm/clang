@@ -151,6 +151,14 @@ TEST_F(FormatTestJS, ContainerLiterals) {
   // Arrow functions in object literals.
   verifyFormat("var x = {y: (a) => { return a; }};");
   verifyFormat("var x = {y: (a) => a};");
+
+  // Computed keys.
+  verifyFormat("var x = {[a]: 1, b: 2, [c]: 3};");
+  verifyFormat("var x = {\n"
+               "  [a]: 1,\n"
+               "  b: 2,\n"
+               "  [c]: 3,\n"
+               "};");
 }
 
 TEST_F(FormatTestJS, MethodsInObjectLiterals) {
@@ -239,6 +247,33 @@ TEST_F(FormatTestJS, FormatsFreestandingFunctions) {
                "}");
 }
 
+TEST_F(FormatTestJS, ArrayLiterals) {
+  verifyFormat(
+      "var aaaaa: List<SomeThing> =\n"
+      "    [new SomeThingAAAAAAAAAAAA(), new SomeThingBBBBBBBBB()];");
+  verifyFormat("return [\n"
+               "  aaaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
+               "  bbbbbbbbbbbbbbbbbbbbbbbbbbb,\n"
+               "  ccccccccccccccccccccccccccc\n"
+               "];");
+  verifyFormat("var someVariable = SomeFuntion([\n"
+               "  aaaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
+               "  bbbbbbbbbbbbbbbbbbbbbbbbbbb,\n"
+               "  ccccccccccccccccccccccccccc\n"
+               "]);");
+  verifyFormat("var someVariable = SomeFuntion([\n"
+               "  [aaaaaaaaaaaaaaaaaaaaaa, bbbbbbbbbbbbbbbbbbbbbb],\n"
+               "]);",
+               getGoogleJSStyleWithColumns(51));
+  verifyFormat("var someVariable = SomeFuntion(aaaa, [\n"
+               "  aaaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
+               "  bbbbbbbbbbbbbbbbbbbbbbbbbbb,\n"
+               "  ccccccccccccccccccccccccccc\n"
+               "]);");
+
+  verifyFormat("someFunction([], {a: a});");
+}
+
 TEST_F(FormatTestJS, FunctionLiterals) {
   verifyFormat("doFoo(function() {});");
   verifyFormat("doFoo(function() { return 1; });");
@@ -322,6 +357,14 @@ TEST_F(FormatTestJS, FunctionLiterals) {
                "               doSomething();\n"
                "               doSomething();\n"
                "             }, this));");
+
+  // FIXME: This is bad, we should be wrapping before "function() {".
+  verifyFormat("someFunction(function() {\n"
+               "  doSomething();  // break\n"
+               "})\n"
+               "    .doSomethingElse(\n"
+               "        // break\n"
+               "        );");
 }
 
 TEST_F(FormatTestJS, InliningFunctionLiterals) {
@@ -440,7 +483,21 @@ TEST_F(FormatTestJS, ArrowFunctions) {
                "  return a;\n"
                "};");
   verifyFormat("var x = (a) => a;");
-  verifyFormat("var x = (a) => a;");
+  verifyFormat("return () => [];");
+  verifyFormat("var aaaaaaaaaaaaaaaaaaaa = {\n"
+               "  aaaaaaaaaaaaaaaaaaaaaaaaaaaa:\n"
+               "      (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
+               "       aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) =>\n"
+               "              aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
+               "};");
+
+  // FIXME: This is bad, we should be wrapping before "() => {".
+  verifyFormat("someFunction(() => {\n"
+               "  doSomething();  // break\n"
+               "})\n"
+               "    .doSomethingElse(\n"
+               "        // break\n"
+               "        );");
 }
 
 TEST_F(FormatTestJS, ReturnStatements) {
@@ -579,6 +636,15 @@ TEST_F(FormatTestJS, ClassDeclarations) {
   verifyFormat("class C {\n  static x(): string { return 'asd'; }\n}");
   verifyFormat("class C extends P implements I {}");
   verifyFormat("class C extends p.P implements i.I {}");
+
+  // ':' is not a type declaration here.
+  verifyFormat("class X {\n"
+               "  subs = {\n"
+               "    'b': {\n"
+               "      'c': 1,\n"
+               "    },\n"
+               "  };\n"
+               "}");
 }
 
 TEST_F(FormatTestJS, InterfaceDeclarations) {
@@ -753,6 +819,13 @@ TEST_F(FormatTestJS, OptionalTypes) {
                "  y?(): z;\n"
                "}");
   verifyFormat("x ? 1 : 2;");
+  verifyFormat("constructor({aa}: {\n"
+               "  aa?: string,\n"
+               "  aaaaaaaa?: string,\n"
+               "  aaaaaaaaaaaaaaa?: boolean,\n"
+               "  aaaaaa?: List<string>\n"
+               "}) {\n"
+               "}");
 }
 
 TEST_F(FormatTestJS, IndexSignature) {
