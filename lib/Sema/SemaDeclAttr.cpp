@@ -1713,23 +1713,6 @@ static void handleUsedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
                       Attr.getAttributeSpellingListIndex()));
 }
 
-static void handleExternallyVisibleAttr(Sema &S, Decl *D, const AttributeList &Attr) {
-  if (const VarDecl *VD = dyn_cast<VarDecl>(D)) {
-    if (VD->hasLocalStorage()) {
-      S.Diag(Attr.getLoc(), diag::warn_attribute_ignored) << Attr.getName();
-      return;
-    }
-  } else if (!isFunctionOrMethod(D)) {
-    S.Diag(Attr.getLoc(), diag::warn_attribute_wrong_decl_type)
-      << Attr.getName() << ExpectedVariableOrFunction;
-    return;
-  }
-
-  D->addAttr(::new (S.Context)
-             ExternallyVisibleAttr(Attr.getRange(), S.Context,
-                      Attr.getAttributeSpellingListIndex()));
-}
-
 static void handleConstructorAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   uint32_t priority = ConstructorAttr::DefaultPriority;
   if (Attr.getNumArgs() &&
@@ -2419,6 +2402,28 @@ static void handleProgmemAttr(Sema &S, Decl *D, const AttributeList &Attr, Strin
   SectionAttr *NewAttr = S.mergeSectionAttr(D, Attr.getRange(), SectionName, Index);
   if (NewAttr)
     D->addAttr(NewAttr);
+}
+
+// Check for things we'd like to warn about, no errors or validation for now.
+// TODO: Validation should use a backend target library that specifies
+// the allowable subtarget features and cpus. We could use something like a
+// TargetCodeGenInfo hook here to do validation.
+void Sema::checkTargetAttr(SourceLocation LiteralLoc, StringRef AttrStr) {
+  for (auto Str : {"tune=", "fpmath="})
+    if (AttrStr.find(Str) != StringRef::npos)
+      Diag(LiteralLoc, diag::warn_unsupported_target_attribute) << Str;
+}
+
+static void handleTargetAttr(Sema &S, Decl *D, const AttributeList &Attr) {
+  StringRef Str;
+  SourceLocation LiteralLoc;
+  if (!S.checkStringLiteralArgumentAttr(Attr, 0, Str, &LiteralLoc))
+    return;
+  S.checkTargetAttr(LiteralLoc, Str);
+  unsigned Index = Attr.getAttributeSpellingListIndex();
+  TargetAttr *NewAttr =
+      ::new (S.Context) TargetAttr(Attr.getRange(), S.Context, Str, Index);
+  D->addAttr(NewAttr);
 }
 
 
@@ -4130,8 +4135,6 @@ static void handleAVRSignalAttr(Sema &S, Decl *D,
 
     D->addAttr(::new (S.Context)
         AVRSignalAttr(Attr.getLoc(), S.Context, Attr.getAttributeSpellingListIndex()));
-
-//    __attribute__ ((used)) should be set implicitly (in contrast to MSP430 it's assumed)
 }
 
 static void handleInterruptAttr(Sema &S, Decl *D, const AttributeList &Attr) {
@@ -4775,6 +4778,8 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     break;
   case AttributeList::AT_AVRMemx:
     handleProgmemAttr(S, D, Attr, ".progmemx.data");
+  case AttributeList::AT_Target:
+    handleTargetAttr(S, D, Attr);
     break;
   case AttributeList::AT_Unavailable:
     handleAttrWithMessage<UnavailableAttr>(S, D, Attr);
@@ -4799,9 +4804,6 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     break;
   case AttributeList::AT_Used:
     handleUsedAttr(S, D, Attr);
-    break;
-  case AttributeList::AT_ExternallyVisible:
-    handleExternallyVisibleAttr(S, D, Attr);
     break;
   case AttributeList::AT_Visibility:
     handleVisibilityAttr(S, D, Attr, false);

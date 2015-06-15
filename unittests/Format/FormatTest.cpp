@@ -616,6 +616,18 @@ TEST_F(FormatTest, ForEachLoops) {
                "  BOOST_FOREACH (Item *item, itemlist) {}\n"
                "  UNKNOWN_FORACH(Item * item, itemlist) {}\n"
                "}");
+
+  // As function-like macros.
+  verifyFormat("#define foreach(x, y)\n"
+               "#define Q_FOREACH(x, y)\n"
+               "#define BOOST_FOREACH(x, y)\n"
+               "#define UNKNOWN_FOREACH(x, y)\n");
+
+  // Not as function-like macros.
+  verifyFormat("#define foreach (x, y)\n"
+               "#define Q_FOREACH (x, y)\n"
+               "#define BOOST_FOREACH (x, y)\n"
+               "#define UNKNOWN_FOREACH (x, y)\n");
 }
 
 TEST_F(FormatTest, FormatsWhileLoop) {
@@ -1337,6 +1349,16 @@ TEST_F(FormatTest, SplitsLongCxxComments) {
             "// one line",
             format("// A comment that doesn't fit on one line",
                    getLLVMStyleWithColumns(20)));
+  EXPECT_EQ("/// A comment that\n"
+            "/// doesn't fit on\n"
+            "/// one line",
+            format("/// A comment that doesn't fit on one line",
+                   getLLVMStyleWithColumns(20)));
+  EXPECT_EQ("//! A comment that\n"
+            "//! doesn't fit on\n"
+            "//! one line",
+            format("//! A comment that doesn't fit on one line",
+                   getLLVMStyleWithColumns(20)));
   EXPECT_EQ("// a b c d\n"
             "// e f  g\n"
             "// h i j k",
@@ -1357,6 +1379,12 @@ TEST_F(FormatTest, SplitsLongCxxComments) {
   EXPECT_EQ("// Add leading\n"
             "// whitespace",
             format("//Add leading whitespace", getLLVMStyleWithColumns(20)));
+  EXPECT_EQ("/// Add leading\n"
+            "/// whitespace",
+            format("///Add leading whitespace", getLLVMStyleWithColumns(20)));
+  EXPECT_EQ("//! Add leading\n"
+            "//! whitespace",
+            format("//!Add leading whitespace", getLLVMStyleWithColumns(20)));
   EXPECT_EQ("// whitespace", format("//whitespace", getLLVMStyle()));
   EXPECT_EQ("// Even if it makes the line exceed the column\n"
             "// limit",
@@ -3956,6 +3984,9 @@ TEST_F(FormatTest, TrailingReturnType) {
   verifyFormat("auto SomeFunction(A aaaaaaaaaaaaaaaaaaaaa) const\n"
                "    -> decltype(f(aaaaaaaaaaaaaaaaaaaaa)) {}");
   verifyFormat("auto doSomething(Aaaaaa *aaaaaa) -> decltype(aaaaaa->f()) {}");
+  verifyFormat("template <typename T>\n"
+               "auto aaaaaaaaaaaaaaaaaaaaaa(T t)\n"
+               "    -> decltype(eaaaaaaaaaaaaaaa<T>(t.a).aaaaaaaa());");
 
   // Not trailing return types.
   verifyFormat("void f() { auto a = b->c(); }");
@@ -5787,6 +5818,7 @@ TEST_F(FormatTest, FormatsCasts) {
   verifyFormat("my_int a = (const my_int *)-1;");
   verifyFormat("my_int a = (my_int)(my_int)-1;");
   verifyFormat("my_int a = (ns::my_int)-2;");
+  verifyFormat("case (my_int)ONE:");
 
   // FIXME: single value wrapped with paren will be treated as cast.
   verifyFormat("void f(int i = (kValue)*kMask) {}");
@@ -6606,6 +6638,7 @@ TEST_F(FormatTest, UnderstandContextOfRecordTypeKeywords) {
 
   // FIXME: This is still incorrectly handled at the formatter side.
   verifyFormat("template <> struct X < 15, i<3 && 42 < 50 && 33 < 28> {};");
+  verifyFormat("int i = SomeFunction(a<b, a> b);");
 
   // FIXME:
   // This now gets parsed incorrectly as class definition.
@@ -10065,6 +10098,7 @@ TEST_F(FormatTest, FormatsLambdas) {
 
   // Lambdas with return types.
   verifyFormat("int c = []() -> int { return 2; }();\n");
+  verifyFormat("int c = []() -> int * { return 2; }();\n");
   verifyFormat("int c = []() -> vector<int> { return {2}; }();\n");
   verifyFormat("Foo([]() -> std::vector<int> { return {2}; }());");
   verifyGoogleFormat("auto a = [&b, c](D* d) -> D* {};");
@@ -10544,7 +10578,10 @@ TEST_F(FormatTest, DisableRegions) {
                    "   int   k;"));
 }
 
-TEST_F(FormatTest, DoNotCrashOnInvalidInput) { format("? ) ="); }
+TEST_F(FormatTest, DoNotCrashOnInvalidInput) {
+  format("? ) =");
+  verifyNoCrash("#define a\\\n /**/}");
+}
 
 } // end namespace tooling
 } // end namespace clang
