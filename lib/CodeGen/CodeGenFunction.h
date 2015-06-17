@@ -2130,9 +2130,9 @@ public:
   /// \param D Directive that has at least one 'lastprivate' directives.
   /// \param IsLastIterCond Boolean condition that must be set to 'i1 true' if
   /// it is the last iteration of the loop code in associated directive, or to
-  /// 'i1 false' otherwise.
+  /// 'i1 false' otherwise. If this item is nullptr, no final check is required.
   void EmitOMPLastprivateClauseFinal(const OMPExecutableDirective &D,
-                                     llvm::Value *IsLastIterCond);
+                                     llvm::Value *IsLastIterCond = nullptr);
   /// \brief Emit initial code for reduction variables. Creates reduction copies
   /// and initializes them with the values according to OpenMP standard.
   ///
@@ -2189,8 +2189,7 @@ public:
 private:
 
   /// Helpers for the OpenMP loop directives.
-  void EmitOMPLoopBody(const OMPLoopDirective &Directive,
-                       bool SeparateIter = false);
+  void EmitOMPLoopBody(const OMPLoopDirective &Directive);
   void EmitOMPSimdFinal(const OMPLoopDirective &S);
   /// \brief Emit code for the worksharing loop-based directive.
   /// \return true, if this construct has any lastprivate clause, false -

@@ -182,6 +182,8 @@ void simple(float *a, float *b, float *c, float *d) {
   }
 
   int A;
+  // CHECK: store i32 -1, i32* [[A:%.+]],
+  A = -1;
   #pragma omp simd lastprivate(A)
 // Clause 'lastprivate' implementation is not completed yet.
 // Test checks that one iteration is separated in presence of lastprivate.
@@ -190,7 +192,7 @@ void simple(float *a, float *b, float *c, float *d) {
 // CHECK: br label %[[SIMD_LOOP7_COND:[^,]+]]
 // CHECK: [[SIMD_LOOP7_COND]]
 // CHECK-NEXT: [[IV7:%.+]] = load i64, i64* [[OMP_IV7]]{{.*}}!llvm.mem.parallel_loop_access ![[SIMPLE_LOOP7_ID:[0-9]+]]
-// CHECK-NEXT: [[CMP7:%.+]] = icmp slt i64 [[IV7]], 6
+// CHECK-NEXT: [[CMP7:%.+]] = icmp slt i64 [[IV7]], 7
 // CHECK-NEXT: br i1 [[CMP7]], label %[[SIMPLE_LOOP7_BODY:.+]], label %[[SIMPLE_LOOP7_END:[^,]+]]
   for (long long i = -10; i < 10; i += 3) {
 // CHECK: [[SIMPLE_LOOP7_BODY]]
@@ -198,23 +200,19 @@ void simple(float *a, float *b, float *c, float *d) {
 // CHECK: [[IV7_0:%.+]] = load i64, i64* [[OMP_IV7]]{{.*}}!llvm.mem.parallel_loop_access ![[SIMPLE_LOOP7_ID]]
 // CHECK-NEXT: [[LC_IT_1:%.+]] = mul nsw i64 [[IV7_0]], 3
 // CHECK-NEXT: [[LC_IT_2:%.+]] = add nsw i64 -10, [[LC_IT_1]]
-// CHECK-NEXT: store i64 [[LC_IT_2]], i64* {{.+}}, !llvm.mem.parallel_loop_access ![[SIMPLE_LOOP7_ID]]
+// CHECK-NEXT: store i64 [[LC_IT_2]], i64* [[LC:%[^,]+]],{{.+}}!llvm.mem.parallel_loop_access ![[SIMPLE_LOOP7_ID]]
+// CHECK-NEXT: [[LC_VAL:%.+]] = load i64, i64* [[LC]]{{.+}}!llvm.mem.parallel_loop_access ![[SIMPLE_LOOP7_ID]]
+// CHECK-NEXT: [[CONV:%.+]] = trunc i64 [[LC_VAL]] to i32
+// CHECK-NEXT: store i32 [[CONV]], i32* [[A_PRIV:%[^,]+]],{{.+}}!llvm.mem.parallel_loop_access ![[SIMPLE_LOOP7_ID]]
     A = i;
 // CHECK: [[IV7_2:%.+]] = load i64, i64* [[OMP_IV7]]{{.*}}!llvm.mem.parallel_loop_access ![[SIMPLE_LOOP7_ID]]
 // CHECK-NEXT: [[ADD7_2:%.+]] = add nsw i64 [[IV7_2]], 1
 // CHECK-NEXT: store i64 [[ADD7_2]], i64* [[OMP_IV7]]{{.*}}!llvm.mem.parallel_loop_access ![[SIMPLE_LOOP7_ID]]
   }
 // CHECK: [[SIMPLE_LOOP7_END]]
-// Separated last iteration.
-// CHECK: [[IV7_4:%.+]] = load i64, i64* [[OMP_IV7]]
-// CHECK-NEXT: [[LC_FIN_1:%.+]] = mul nsw i64 [[IV7_4]], 3
-// CHECK-NEXT: [[LC_FIN_2:%.+]] = add nsw i64 -10, [[LC_FIN_1]]
-// CHECK-NEXT: store i64 [[LC_FIN_2]], i64* [[ADDR_I:%[^,]+]]
-// CHECK: [[LOAD_I:%.+]] = load i64, i64* [[ADDR_I]]
-// CHECK-NEXT: [[CONV_I:%.+]] = trunc i64 [[LOAD_I]] to i32
-//
-
-// CHECK: ret void
+// CHECK-NEXT: [[A_PRIV_VAL:%.+]] = load i32, i32* [[A_PRIV]],
+// CHECK-NEXT: store i32 [[A_PRIV_VAL]], i32* [[A]],
+// CHECK-NEXT: ret void
 }
 
 template <class T, unsigned K> T tfoo(T a) { return a + K; }

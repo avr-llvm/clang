@@ -5694,6 +5694,10 @@ public:
       return "vector";
     return "";
   }
+
+  bool useFloat128ManglingForLongDouble() const override {
+    return true;
+  }
 };
 
 const Builtin::Info SystemZTargetInfo::BuiltinInfo[] = {
@@ -7568,6 +7572,8 @@ static TargetInfo *AllocateTarget(const llvm::Triple &Triple) {
       return new DarwinI386TargetInfo(Triple);
 
     switch (os) {
+    case llvm::Triple::CloudABI:
+      return new CloudABITargetInfo<X86_32TargetInfo>(Triple);
     case llvm::Triple::Linux: {
       switch (Triple.getEnvironment()) {
       default:

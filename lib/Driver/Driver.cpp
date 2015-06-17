@@ -1569,8 +1569,9 @@ void Driver::BuildJobsForAction(Compilation &C,
     if (Input.getOption().matches(options::OPT_INPUT)) {
       const char *Name = Input.getValue();
       Result = InputInfo(Name, A->getType(), Name);
-    } else
+    } else {
       Result = InputInfo(&Input, A->getType(), "");
+    }
     return;
   }
 
@@ -1744,7 +1745,7 @@ const char *Driver::GetNamedOutputPath(Compilation &C,
   // Determine what the derived output name should be.
   const char *NamedOutput;
 
-  if ((JA.getType() == types::TY_Object || JA.getType() == types::TY_LTO_BC) &&
+  if (JA.getType() == types::TY_Object &&
       C.getArgs().hasArg(options::OPT__SLASH_Fo, options::OPT__SLASH_o)) {
     // The /Fo or /o flag decides the object filename.
     StringRef Val = C.getArgs().getLastArg(options::OPT__SLASH_Fo,
