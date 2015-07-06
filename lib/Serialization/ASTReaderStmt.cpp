@@ -1785,6 +1785,9 @@ OMPClause *OMPClauseReader::readClause() {
   case OMPC_flush:
     C = OMPFlushClause::CreateEmpty(Context, Record[Idx++]);
     break;
+  case OMPC_depend:
+    C = OMPDependClause::CreateEmpty(Context, Record[Idx++]);
+    break;
   }
   Visit(C);
   C->setLocStart(Reader->ReadSourceLocation(Record, Idx));
@@ -2049,6 +2052,19 @@ void OMPClauseReader::VisitOMPFlushClause(OMPFlushClause *C) {
   C->setVarRefs(Vars);
 }
 
+void OMPClauseReader::VisitOMPDependClause(OMPDependClause *C) {
+  C->setLParenLoc(Reader->ReadSourceLocation(Record, Idx));
+  C->setDependencyKind(static_cast<OpenMPDependClauseKind>(Record[Idx++]));
+  C->setDependencyLoc(Reader->ReadSourceLocation(Record, Idx));
+  C->setColonLoc(Reader->ReadSourceLocation(Record, Idx));
+  unsigned NumVars = C->varlist_size();
+  SmallVector<Expr *, 16> Vars;
+  Vars.reserve(NumVars);
+  for (unsigned i = 0; i != NumVars; ++i)
+    Vars.push_back(Reader->Reader.ReadSubExpr());
+  C->setVarRefs(Vars);
+}
+
 //===----------------------------------------------------------------------===//
 // OpenMP Directives.
 //===----------------------------------------------------------------------===//
@@ -2189,6 +2205,11 @@ void ASTStmtReader::VisitOMPTaskwaitDirective(OMPTaskwaitDirective *D) {
   VisitOMPExecutableDirective(D);
 }
 
+void ASTStmtReader::VisitOMPTaskgroupDirective(OMPTaskgroupDirective *D) {
+  VisitStmt(D);
+  VisitOMPExecutableDirective(D);
+}
+
 void ASTStmtReader::VisitOMPFlushDirective(OMPFlushDirective *D) {
   VisitStmt(D);
   // The NumClauses field was read in ReadStmtFromStream.
@@ -2226,6 +2247,19 @@ void ASTStmtReader::VisitOMPTeamsDirective(OMPTeamsDirective *D) {
   // The NumClauses field was read in ReadStmtFromStream.
   ++Idx;
   VisitOMPExecutableDirective(D);
+}
+
+void ASTStmtReader::VisitOMPCancellationPointDirective(
+    OMPCancellationPointDirective *D) {
+  VisitStmt(D);
+  VisitOMPExecutableDirective(D);
+  D->setCancelRegion(static_cast<OpenMPDirectiveKind>(Record[Idx++]));
+}
+
+void ASTStmtReader::VisitOMPCancelDirective(OMPCancelDirective *D) {
+  VisitStmt(D);
+  VisitOMPExecutableDirective(D);
+  D->setCancelRegion(static_cast<OpenMPDirectiveKind>(Record[Idx++]));
 }
 
 //===----------------------------------------------------------------------===//
@@ -2803,6 +2837,10 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
       S = OMPTaskwaitDirective::CreateEmpty(Context, Empty);
       break;
 
+    case STMT_OMP_TASKGROUP_DIRECTIVE:
+      S = OMPTaskgroupDirective::CreateEmpty(Context, Empty);
+      break;
+
     case STMT_OMP_FLUSH_DIRECTIVE:
       S = OMPFlushDirective::CreateEmpty(
           Context, Record[ASTStmtReader::NumStmtFields], Empty);
@@ -2825,6 +2863,14 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
     case STMT_OMP_TEAMS_DIRECTIVE:
       S = OMPTeamsDirective::CreateEmpty(
           Context, Record[ASTStmtReader::NumStmtFields], Empty);
+      break;
+
+    case STMT_OMP_CANCELLATION_POINT_DIRECTIVE:
+      S = OMPCancellationPointDirective::CreateEmpty(Context, Empty);
+      break;
+
+    case STMT_OMP_CANCEL_DIRECTIVE:
+      S = OMPCancelDirective::CreateEmpty(Context, Empty);
       break;
 
     case EXPR_CXX_OPERATOR_CALL:

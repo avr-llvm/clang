@@ -16,6 +16,7 @@
 #include "CGDebugInfo.h"
 #include "CGObjCRuntime.h"
 #include "CodeGenModule.h"
+#include "TargetInfo.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/RecordLayout.h"
@@ -1386,7 +1387,9 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
     if (CGF.SanOpts.has(SanitizerKind::CFIUnrelatedCast)) {
       if (auto PT = DestTy->getAs<PointerType>())
         CGF.EmitVTablePtrCheckForCast(PT->getPointeeType(), Src,
-                                      /*MayBeNull=*/true);
+                                      /*MayBeNull=*/true,
+                                      CodeGenFunction::CFITCK_UnrelatedCast,
+                                      CE->getLocStart());
     }
 
     return Builder.CreateBitCast(Src, DstTy);
@@ -1420,7 +1423,9 @@ Value *ScalarExprEmitter::VisitCastExpr(CastExpr *CE) {
 
     if (CGF.SanOpts.has(SanitizerKind::CFIDerivedCast))
       CGF.EmitVTablePtrCheckForCast(DestTy->getPointeeType(), Derived,
-                                    /*MayBeNull=*/true);
+                                    /*MayBeNull=*/true,
+                                    CodeGenFunction::CFITCK_DerivedCast,
+                                    CE->getLocStart());
 
     return Derived;
   }
@@ -2033,6 +2038,13 @@ ScalarExprEmitter::VisitUnaryExprOrTypeTraitExpr(
 
       return size;
     }
+  } else if (E->getKind() == UETT_OpenMPRequiredSimdAlign) {
+    auto Alignment =
+        CGF.getContext()
+            .toCharUnitsFromBits(CGF.getContext().getOpenMPDefaultSimdAlign(
+                E->getTypeOfArgument()->getPointeeType()))
+            .getQuantity();
+    return llvm::ConstantInt::get(CGF.SizeTy, Alignment);
   }
 
   // If this isn't sizeof(vla), the result must be constant; use the constant

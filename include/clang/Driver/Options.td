@@ -561,8 +561,13 @@ def fno_sanitize_recover_EQ
     : CommaJoined<["-"], "fno-sanitize-recover=">,
       Group<f_clang_Group>,
       HelpText<"Disable recovery for specified sanitizers">;
+def fsanitize_trap_EQ : CommaJoined<["-"], "fsanitize-trap=">, Group<f_clang_Group>,
+                        Flags<[CC1Option, CoreOption]>,
+                        HelpText<"Enable trapping for specified sanitizers">;
+def fno_sanitize_trap_EQ : CommaJoined<["-"], "fno-sanitize-trap=">, Group<f_clang_Group>,
+                           HelpText<"Disable trapping for specified sanitizers">;
 def fsanitize_undefined_trap_on_error : Flag<["-"], "fsanitize-undefined-trap-on-error">,
-                                        Group<f_clang_Group>, Flags<[CC1Option]>;
+                                        Group<f_clang_Group>;
 def fno_sanitize_undefined_trap_on_error : Flag<["-"], "fno-sanitize-undefined-trap-on-error">,
                                            Group<f_clang_Group>;
 def fsanitize_link_cxx_runtime : Flag<["-"], "fsanitize-link-c++-runtime">,
@@ -1148,6 +1153,11 @@ def march_EQ : Joined<["-"], "march=">, Group<m_Group>;
 def masm_EQ : Joined<["-"], "masm=">, Group<m_Group>, Flags<[DriverOption]>;
 def mcmodel_EQ : Joined<["-"], "mcmodel=">, Group<m_Group>;
 def mconstant_cfstrings : Flag<["-"], "mconstant-cfstrings">, Group<clang_ignored_m_Group>;
+def mconsole : Joined<["-"], "mconsole">, Group<m_Group>, Flags<[DriverOption]>;
+def mwindows : Joined<["-"], "mwindows">, Group<m_Group>, Flags<[DriverOption]>;
+def mdll : Joined<["-"], "mdll">, Group<m_Group>, Flags<[DriverOption]>;
+def municode : Joined<["-"], "municode">, Group<m_Group>, Flags<[DriverOption]>;
+def mthreads : Joined<["-"], "mthreads">, Group<m_Group>, Flags<[DriverOption]>;
 def mcpu_EQ : Joined<["-"], "mcpu=">, Group<m_Group>;
 def mmcu_EQ : Joined<["-"], "mmcu=">, Group<m_Group>;
 def mdynamic_no_pic : Joined<["-"], "mdynamic-no-pic">, Group<m_Group>;
@@ -1166,6 +1176,7 @@ def miphoneos_version_min_EQ : Joined<["-"], "miphoneos-version-min=">, Group<m_
 def mios_version_min_EQ : Joined<["-"], "mios-version-min=">,
   Alias<miphoneos_version_min_EQ>, HelpText<"Set iOS deployment target">;
 def mios_simulator_version_min_EQ : Joined<["-"], "mios-simulator-version-min=">, Alias<miphoneos_version_min_EQ>;
+def miphonesimulator_version_min_EQ : Joined<["-"], "miphonesimulator-version-min=">, Alias<miphoneos_version_min_EQ>;
 def mkernel : Flag<["-"], "mkernel">, Group<m_Group>;
 def mlinker_version_EQ : Joined<["-"], "mlinker-version=">,
   Flags<[DriverOption]>;
@@ -1738,6 +1749,7 @@ def _warn_ : Joined<["--"], "warn-">, Alias<W_Joined>;
 def _write_dependencies : Flag<["--"], "write-dependencies">, Alias<MD>;
 def _write_user_dependencies : Flag<["--"], "write-user-dependencies">, Alias<MMD>;
 def _ : Joined<["--"], "">, Flags<[Unsupported]>;
+
 def mieee_rnd_near : Flag<["-"], "mieee-rnd-near">, Group<m_hexagon_Features_Group>;
 def mv1 : Flag<["-"], "mv1">, Group<m_hexagon_Features_Group>, Alias<march_EQ>,
           AliasArgs<["v1"]>;

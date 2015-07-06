@@ -254,12 +254,13 @@ RValue CodeGenFunction::EmitCXXMemberOrOperatorMemberCallExpr(
   if (const CXXConstructorDecl *Ctor = dyn_cast<CXXConstructorDecl>(MD)) {
     Callee = CGM.GetAddrOfFunction(GlobalDecl(Ctor, Ctor_Complete), Ty);
   } else if (UseVirtualCall) {
-    Callee = CGM.getCXXABI().getVirtualFunctionPointer(*this, MD, This, Ty);
+    Callee = CGM.getCXXABI().getVirtualFunctionPointer(*this, MD, This, Ty,
+                                                       CE->getLocStart());
   } else {
     if (SanOpts.has(SanitizerKind::CFINVCall) &&
         MD->getParent()->isDynamicClass()) {
       llvm::Value *VTable = GetVTablePtr(This, Int8PtrTy);
-      EmitVTablePtrCheckForCall(MD, VTable);
+      EmitVTablePtrCheckForCall(MD, VTable, CFITCK_NVCall, CE->getLocStart());
     }
 
     if (getLangOpts().AppleKext && MD->isVirtual() && HasQualifier)
@@ -1547,7 +1548,8 @@ namespace {
         // The size of an element, multiplied by the number of elements.
         llvm::Value *Size
           = llvm::ConstantInt::get(SizeTy, ElementTypeSize.getQuantity());
-        Size = CGF.Builder.CreateMul(Size, NumElements);
+        if (NumElements)
+          Size = CGF.Builder.CreateMul(Size, NumElements);
 
         // Plus the size of the cookie if applicable.
         if (!CookieSize.isZero()) {
