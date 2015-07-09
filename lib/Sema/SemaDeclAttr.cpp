@@ -4222,19 +4222,26 @@ static void handleMSP430InterruptAttr(Sema &S, Decl *D,
   D->addAttr(UsedAttr::CreateImplicit(S.Context));
 }
 
-static void handleAVRSignalAttr(Sema &S, Decl *D,
-                                      const AttributeList &Attr) {
-
-    D->addAttr(::new (S.Context)
-        AVRSignalAttr(Attr.getLoc(), S.Context, Attr.getAttributeSpellingListIndex()));
-}
-
 static void handleInterruptAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   // Dispatch the interrupt attribute based on the current target.
   if (S.Context.getTargetInfo().getTriple().getArch() == llvm::Triple::msp430)
     handleMSP430InterruptAttr(S, D, Attr);
   else
     handleARMInterruptAttr(S, D, Attr);
+}
+
+static void handleAVRSignalAttr(Sema &S, Decl *D,
+                                const AttributeList &Attr) {
+
+    D->addAttr(::new (S.Context)
+        AVRSignalAttr(Attr.getLoc(), S.Context, Attr.getAttributeSpellingListIndex()));
+}
+
+static void handleExternallyVisibleAttr(Sema &S, Decl *D,
+                                        const AttributeList &Attr) {
+
+    D->addAttr(::new (S.Context)
+        AVRSignalAttr(Attr.getLoc(), S.Context, Attr.getAttributeSpellingListIndex()));
 }
 
 static void handleAMDGPUNumVGPRAttr(Sema &S, Decl *D,
@@ -4601,7 +4608,10 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
     handleInterruptAttr(S, D, Attr);
     break;
   case AttributeList::AT_AVRSignal:
-    handleAVRSignalAttr(S, D,Attr);
+    handleAVRSignalAttr(S, D, Attr);
+    break;
+  case AttributeList::AT_ExternallyVisible:
+    handleExternallyVisibleAttr(S, D, Attr);
     break;
   case AttributeList::AT_X86ForceAlignArgPointer:
     handleX86ForceAlignArgPointerAttr(S, D, Attr);
