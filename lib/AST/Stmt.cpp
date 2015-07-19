@@ -822,7 +822,7 @@ SourceLocation ObjCAtTryStmt::getLocEnd() const {
 CXXTryStmt *CXXTryStmt::Create(const ASTContext &C, SourceLocation tryLoc,
                                Stmt *tryBlock, ArrayRef<Stmt*> handlers) {
   std::size_t Size = sizeof(CXXTryStmt);
-  Size += ((handlers.size() + 1) * sizeof(Stmt));
+  Size += ((handlers.size() + 1) * sizeof(Stmt *));
 
   void *Mem = C.Allocate(Size, llvm::alignOf<CXXTryStmt>());
   return new (Mem) CXXTryStmt(tryLoc, tryBlock, handlers);
@@ -831,7 +831,7 @@ CXXTryStmt *CXXTryStmt::Create(const ASTContext &C, SourceLocation tryLoc,
 CXXTryStmt *CXXTryStmt::Create(const ASTContext &C, EmptyShell Empty,
                                unsigned numHandlers) {
   std::size_t Size = sizeof(CXXTryStmt);
-  Size += ((numHandlers + 1) * sizeof(Stmt));
+  Size += ((numHandlers + 1) * sizeof(Stmt *));
 
   void *Mem = C.Allocate(Size, llvm::alignOf<CXXTryStmt>());
   return new (Mem) CXXTryStmt(Empty, numHandlers);
@@ -1171,7 +1171,7 @@ bool CapturedStmt::capturesVariable(const VarDecl *Var) const {
   return false;
 }
 
-StmtRange OMPClause::children() {
+OMPClause::child_range OMPClause::children() {
   switch(getClauseKind()) {
   default : break;
 #define OPENMP_CLAUSE(Name, Class)                                       \
@@ -2250,4 +2250,3 @@ OMPTeamsDirective *OMPTeamsDirective::CreateEmpty(const ASTContext &C,
       C.Allocate(Size + sizeof(OMPClause *) * NumClauses + sizeof(Stmt *));
   return new (Mem) OMPTeamsDirective(NumClauses);
 }
-

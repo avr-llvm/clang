@@ -353,6 +353,7 @@ void ASTUnit::CacheCodeCompletionResults() {
   
   // Translate global code completions into cached completions.
   llvm::DenseMap<CanQualType, unsigned> CompletionTypes;
+  CodeCompletionContext CCContext(CodeCompletionContext::CCC_TopLevel);
 
   for (Result &R : Results) {
     switch (R.Kind) {
@@ -360,7 +361,7 @@ void ASTUnit::CacheCodeCompletionResults() {
       bool IsNestedNameSpecifier = false;
       CachedCodeCompletionResult CachedResult;
       CachedResult.Completion = R.CreateCodeCompletionString(
-          *TheSema, *CachedCompletionAllocator, CCTUInfo,
+          *TheSema, CCContext, *CachedCompletionAllocator, CCTUInfo,
           IncludeBriefCommentsInCodeCompletion);
       CachedResult.ShowInContexts = getDeclShowContexts(
           R.Declaration, Ctx->getLangOpts(), IsNestedNameSpecifier);
@@ -423,7 +424,7 @@ void ASTUnit::CacheCodeCompletionResults() {
           // nested-name-specifier completion.
           R.StartsNestedNameSpecifier = true;
           CachedResult.Completion = R.CreateCodeCompletionString(
-              *TheSema, *CachedCompletionAllocator, CCTUInfo,
+              *TheSema, CCContext, *CachedCompletionAllocator, CCTUInfo,
               IncludeBriefCommentsInCodeCompletion);
           CachedResult.ShowInContexts = RemainingContexts;
           CachedResult.Priority = CCP_NestedNameSpecifier;
@@ -444,7 +445,7 @@ void ASTUnit::CacheCodeCompletionResults() {
     case Result::RK_Macro: {
       CachedCodeCompletionResult CachedResult;
       CachedResult.Completion = R.CreateCodeCompletionString(
-          *TheSema, *CachedCompletionAllocator, CCTUInfo,
+          *TheSema, CCContext, *CachedCompletionAllocator, CCTUInfo,
           IncludeBriefCommentsInCodeCompletion);
       CachedResult.ShowInContexts
         = (1LL << CodeCompletionContext::CCC_TopLevel)
@@ -649,7 +650,7 @@ void ASTUnit::ConfigureDiags(IntrusiveRefCntPtr<DiagnosticsEngine> Diags,
 
 std::unique_ptr<ASTUnit> ASTUnit::LoadFromASTFile(
     const std::string &Filename,
-    std::shared_ptr<PCHContainerOperations> PCHContainerOps,
+    const PCHContainerReader &PCHContainerRdr,
     IntrusiveRefCntPtr<DiagnosticsEngine> Diags,
     const FileSystemOptions &FileSystemOpts, bool OnlyLocalDecls,
     ArrayRef<RemappedFile> RemappedFiles, bool CaptureDiagnostics,
@@ -675,7 +676,7 @@ std::unique_ptr<ASTUnit> ASTUnit::LoadFromASTFile(
                                      AST->getFileManager(),
                                      UserFilesAreVolatile);
   AST->HSOpts = new HeaderSearchOptions();
-
+  AST->HSOpts->ModuleFormat = PCHContainerRdr.getFormat();
   AST->HeaderInfo.reset(new HeaderSearch(AST->HSOpts,
                                          AST->getSourceManager(),
                                          AST->getDiagnostics(),
@@ -707,7 +708,7 @@ std::unique_ptr<ASTUnit> ASTUnit::LoadFromASTFile(
   bool disableValid = false;
   if (::getenv("LIBCLANG_DISABLE_PCH_VALIDATION"))
     disableValid = true;
-  AST->Reader = new ASTReader(PP, Context, *PCHContainerOps,
+  AST->Reader = new ASTReader(PP, Context, PCHContainerRdr,
                               /*isysroot=*/"",
                               /*DisableValidation=*/disableValid,
                               AllowPCHWithCompilerErrors);

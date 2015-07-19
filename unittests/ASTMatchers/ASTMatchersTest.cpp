@@ -453,6 +453,16 @@ TEST(AllOf, AllOverloadsWork) {
                      hasArgument(3, integerLiteral(equals(4)))))));
 }
 
+TEST(ConstructVariadic, MismatchedTypes_Regression) {
+  EXPECT_TRUE(
+      matches("const int a = 0;",
+              internal::DynTypedMatcher::constructVariadic(
+                  internal::DynTypedMatcher::VO_AnyOf,
+                  ast_type_traits::ASTNodeKind::getFromNodeKind<QualType>(),
+                  {isConstQualified(), arrayType()})
+                  .convertTo<QualType>()));
+}
+
 TEST(DeclarationMatcher, MatchAnyOf) {
   DeclarationMatcher YOrZDerivedFromX =
       recordDecl(anyOf(hasName("Y"), allOf(isDerivedFrom("X"), hasName("Z"))));
@@ -3329,6 +3339,10 @@ TEST(ExceptionHandling, SimpleCases) {
                       catchStmt(isCatchAll())));
   EXPECT_TRUE(notMatches("void foo() try { throw; } catch(int) { }",
                          catchStmt(isCatchAll())));
+  EXPECT_TRUE(matches("void foo() try {} catch(int X) { }",
+                      varDecl(isExceptionVariable())));
+  EXPECT_TRUE(notMatches("void foo() try { int X; } catch (...) { }",
+                         varDecl(isExceptionVariable())));
 }
 
 TEST(HasConditionVariableStatement, DoesNotMatchCondition) {

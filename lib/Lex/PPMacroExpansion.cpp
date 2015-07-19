@@ -1057,6 +1057,7 @@ static bool HasFeature(const Preprocessor &PP, const IdentifierInfo *II) {
       .Case("attribute_availability", true)
       .Case("attribute_availability_with_message", true)
       .Case("attribute_availability_app_extension", true)
+      .Case("attribute_availability_with_version_underscores", true)
       .Case("attribute_cf_returns_not_retained", true)
       .Case("attribute_cf_returns_retained", true)
       .Case("attribute_cf_returns_on_parameters", true)
@@ -1088,6 +1089,7 @@ static bool HasFeature(const Preprocessor &PP, const IdentifierInfo *II) {
       .Case("objc_default_synthesize_properties", LangOpts.ObjC2)
       .Case("objc_fixed_enum", LangOpts.ObjC2)
       .Case("objc_instancetype", LangOpts.ObjC2)
+      .Case("objc_kindof", LangOpts.ObjC2)
       .Case("objc_modules", LangOpts.ObjC2 && LangOpts.Modules)
       .Case("objc_nonfragile_abi", LangOpts.ObjCRuntime.isNonFragile())
       .Case("objc_property_explicit_atomic",
@@ -1106,6 +1108,8 @@ static bool HasFeature(const Preprocessor &PP, const IdentifierInfo *II) {
       .Case("arc_cf_code_audited", true)
       .Case("objc_bridge_id", true)
       .Case("objc_bridge_id_on_typedefs", true)
+      .Case("objc_generics", LangOpts.ObjC2)
+      .Case("objc_generics_variance", LangOpts.ObjC2)
       // C11 features
       .Case("c_alignas", LangOpts.C11)
       .Case("c_alignof", LangOpts.C11)

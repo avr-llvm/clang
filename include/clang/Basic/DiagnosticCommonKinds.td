@@ -179,6 +179,8 @@ def err_target_unsupported_fpmath : Error<
     "the '%0' unit is not supported with this instruction set">;
 def err_target_unsupported_unaligned : Error<
   "the %0 sub-architecture does not support unaligned accesses">;
+def err_opt_not_valid_with_opt : Error<
+  "option '%0' cannot be specified with '%1'">;
 
 // Source manager
 def err_cannot_open_file : Error<"cannot open file '%0': %1">, DefaultFatal;
@@ -193,6 +195,8 @@ def err_unable_to_make_temp : Error<
   
 // Modules
 def err_module_file_conflict : Error<"module '%0' found in both '%1' and '%2'">;
+def err_module_format_unhandled : Error<
+  "no handler registered for module format '%0'">;
 
 // TransformActions
 // TODO: Use a custom category name to distinguish rewriter errors.

@@ -397,7 +397,7 @@ bool Sema::CheckEquivalentExceptionSpec(const PartialDiagnostic &DiagID,
   //   - both are dynamic-exception-specifications that have the same set of
   //     adjusted types.
   //
-  // C++0x [except.spec]p12: An exception-specifcation is non-throwing if it is
+  // C++0x [except.spec]p12: An exception-specification is non-throwing if it is
   //   of the form throw(), noexcept, or noexcept(constant-expression) where the
   //   constant-expression yields true.
   //
@@ -973,8 +973,9 @@ CanThrowResult Sema::canThrow(const Expr *E) {
   case Expr::LambdaExprClass: {
     const LambdaExpr *Lambda = cast<LambdaExpr>(E);
     CanThrowResult CT = CT_Cannot;
-    for (LambdaExpr::capture_init_iterator Cap = Lambda->capture_init_begin(),
-                                        CapEnd = Lambda->capture_init_end();
+    for (LambdaExpr::const_capture_init_iterator
+             Cap = Lambda->capture_init_begin(),
+             CapEnd = Lambda->capture_init_end();
          Cap != CapEnd; ++Cap)
       CT = mergeCanThrow(CT, canThrow(*Cap));
     return CT;
