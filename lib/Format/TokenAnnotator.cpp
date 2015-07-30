@@ -836,7 +836,8 @@ private:
       Contexts.back().IsExpression = true;
       if (!Line.startsWith(TT_UnaryOperator)) {
         for (FormatToken *Previous = Current.Previous;
-             Previous && !Previous->isOneOf(tok::comma, tok::semi);
+             Previous && Previous->Previous &&
+             !Previous->Previous->isOneOf(tok::comma, tok::semi);
              Previous = Previous->Previous) {
           if (Previous->isOneOf(tok::r_square, tok::r_paren)) {
             Previous = Previous->MatchingParen;
@@ -2064,7 +2065,7 @@ static bool isAllmanBrace(const FormatToken &Tok) {
 bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
                                      const FormatToken &Right) {
   const FormatToken &Left = *Right.Previous;
-  if (Right.NewlinesBefore > 1)
+  if (Right.NewlinesBefore > 1 && Style.MaxEmptyLinesToKeep > 0)
     return true;
 
   if (Style.Language == FormatStyle::LK_JavaScript) {

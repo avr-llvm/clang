@@ -476,11 +476,15 @@ void Parser::Initialize() {
 
   Ident_super = &PP.getIdentifierTable().get("super");
 
-  if (getLangOpts().AltiVec) {
+  Ident_vector = nullptr;
+  Ident_bool = nullptr;
+  Ident_pixel = nullptr;
+  if (getLangOpts().AltiVec || getLangOpts().ZVector) {
     Ident_vector = &PP.getIdentifierTable().get("vector");
-    Ident_pixel = &PP.getIdentifierTable().get("pixel");
     Ident_bool = &PP.getIdentifierTable().get("bool");
   }
+  if (getLangOpts().AltiVec)
+    Ident_pixel = &PP.getIdentifierTable().get("pixel");
 
   Ident_introduced = nullptr;
   Ident_deprecated = nullptr;
@@ -1489,7 +1493,7 @@ bool Parser::TryKeywordIdentFallback(bool DisableKeyword) {
     << PP.getSpelling(Tok)
     << DisableKeyword;
   if (DisableKeyword)
-    Tok.getIdentifierInfo()->RevertTokenIDToIdentifier();
+    Tok.getIdentifierInfo()->revertTokenIDToIdentifier();
   Tok.setKind(tok::identifier);
   return true;
 }

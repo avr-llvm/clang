@@ -2437,6 +2437,9 @@ DEF_TRAVERSE_STMT(OMPAtomicDirective,
 DEF_TRAVERSE_STMT(OMPTargetDirective,
                   { TRY_TO(TraverseOMPExecutableDirective(S)); })
 
+DEF_TRAVERSE_STMT(OMPTargetDataDirective,
+                  { TRY_TO(TraverseOMPExecutableDirective(S)); })
+
 DEF_TRAVERSE_STMT(OMPTeamsDirective,
                   { TRY_TO(TraverseOMPExecutableDirective(S)); })
 
@@ -2509,7 +2512,8 @@ RecursiveASTVisitor<Derived>::VisitOMPScheduleClause(OMPScheduleClause *C) {
 }
 
 template <typename Derived>
-bool RecursiveASTVisitor<Derived>::VisitOMPOrderedClause(OMPOrderedClause *) {
+bool RecursiveASTVisitor<Derived>::VisitOMPOrderedClause(OMPOrderedClause *C) {
+  TRY_TO(TraverseStmt(C->getNumForLoops()));
   return true;
 }
 

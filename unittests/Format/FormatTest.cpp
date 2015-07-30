@@ -5458,6 +5458,7 @@ TEST_F(FormatTest, UnderstandsUsesOfStarAndAmp) {
   FormatStyle Left = getLLVMStyle();
   Left.PointerAlignment = FormatStyle::PAS_Left;
   verifyFormat("x = *a(x) = *a(y);", Left);
+  verifyFormat("for (;; * = b) {\n}", Left);
 
   verifyIndependentOfContext("a = *(x + y);");
   verifyIndependentOfContext("a = &(x + y);");
@@ -7683,6 +7684,13 @@ TEST_F(FormatTest, BreaksStringLiterals) {
             format("#define A \"some text other\";", AlignLeft));
 }
 
+TEST_F(FormatTest, FullyRemoveEmptyLines) {
+  FormatStyle NoEmptyLines = getLLVMStyleWithColumns(80);
+  NoEmptyLines.MaxEmptyLinesToKeep = 0;
+  EXPECT_EQ("int i = a(b());",
+            format("int i=a(\n\n b(\n\n\n )\n\n);", NoEmptyLines));
+}
+
 TEST_F(FormatTest, BreaksStringLiteralsWithTabs) {
   EXPECT_EQ(
       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -9555,6 +9563,11 @@ TEST_F(FormatTest, SplitsUTF8Strings) {
             "\"八九十\tqq\"",
             format("\"一\t二 \t三 四 五\t六 \t七 八九十\tqq\"",
                    getLLVMStyleWithColumns(11)));
+
+  // UTF8 character in an escape sequence.
+  EXPECT_EQ("\"aaaaaa\"\n"
+            "\"\\\xC2\x8D\"",
+            format("\"aaaaaa\\\xC2\x8D\"", getLLVMStyleWithColumns(10)));
 }
 
 TEST_F(FormatTest, HandlesDoubleWidthCharsInMultiLineStrings) {

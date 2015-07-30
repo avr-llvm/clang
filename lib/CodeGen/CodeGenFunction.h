@@ -2018,8 +2018,6 @@ public:
   void EmitIndirectGotoStmt(const IndirectGotoStmt &S);
   void EmitIfStmt(const IfStmt &S);
 
-  void EmitCondBrHints(llvm::LLVMContext &Context, llvm::BranchInst *CondBr,
-                       ArrayRef<const Attr *> Attrs);
   void EmitWhileStmt(const WhileStmt &S,
                      ArrayRef<const Attr *> Attrs = None);
   void EmitDoStmt(const DoStmt &S, ArrayRef<const Attr *> Attrs = None);
@@ -2213,6 +2211,7 @@ public:
   void EmitOMPOrderedDirective(const OMPOrderedDirective &S);
   void EmitOMPAtomicDirective(const OMPAtomicDirective &S);
   void EmitOMPTargetDirective(const OMPTargetDirective &S);
+  void EmitOMPTargetDataDirective(const OMPTargetDataDirective &S);
   void EmitOMPTeamsDirective(const OMPTeamsDirective &S);
   void
   EmitOMPCancellationPointDirective(const OMPCancellationPointDirective &S);
@@ -2966,12 +2965,11 @@ public:
   /// EmitCallArgs - Emit call arguments for a function.
   template <typename T>
   void EmitCallArgs(CallArgList &Args, const T *CallArgTypeInfo,
-                    CallExpr::const_arg_iterator ArgBeg,
-                    CallExpr::const_arg_iterator ArgEnd,
+                    llvm::iterator_range<CallExpr::const_arg_iterator> ArgRange,
                     const FunctionDecl *CalleeDecl = nullptr,
                     unsigned ParamsToSkip = 0) {
     SmallVector<QualType, 16> ArgTypes;
-    CallExpr::const_arg_iterator Arg = ArgBeg;
+    CallExpr::const_arg_iterator Arg = ArgRange.begin();
 
     assert((ParamsToSkip == 0 || CallArgTypeInfo) &&
            "Can't skip parameters if type info is not provided");
@@ -2984,7 +2982,7 @@ public:
       for (auto I = CallArgTypeInfo->param_type_begin() + ParamsToSkip,
                 E = CallArgTypeInfo->param_type_end();
            I != E; ++I, ++Arg) {
-        assert(Arg != ArgEnd && "Running over edge of argument list!");
+        assert(Arg != ArgRange.end() && "Running over edge of argument list!");
         assert((isGenericMethod ||
                 ((*I)->isVariablyModifiedType() ||
                  (*I).getNonReferenceType()->isObjCRetainableType() ||
@@ -3001,20 +2999,19 @@ public:
 
     // Either we've emitted all the call args, or we have a call to variadic
     // function.
-    assert(
-        (Arg == ArgEnd || !CallArgTypeInfo || CallArgTypeInfo->isVariadic()) &&
-        "Extra arguments in non-variadic function!");
+    assert((Arg == ArgRange.end() || !CallArgTypeInfo ||
+            CallArgTypeInfo->isVariadic()) &&
+           "Extra arguments in non-variadic function!");
 
     // If we still have any arguments, emit them using the type of the argument.
-    for (; Arg != ArgEnd; ++Arg)
-      ArgTypes.push_back(getVarArgType(*Arg));
+    for (auto *A : llvm::make_range(Arg, ArgRange.end()))
+      ArgTypes.push_back(getVarArgType(A));
 
-    EmitCallArgs(Args, ArgTypes, ArgBeg, ArgEnd, CalleeDecl, ParamsToSkip);
+    EmitCallArgs(Args, ArgTypes, ArgRange, CalleeDecl, ParamsToSkip);
   }
 
   void EmitCallArgs(CallArgList &Args, ArrayRef<QualType> ArgTypes,
-                    CallExpr::const_arg_iterator ArgBeg,
-                    CallExpr::const_arg_iterator ArgEnd,
+                    llvm::iterator_range<CallExpr::const_arg_iterator> ArgRange,
                     const FunctionDecl *CalleeDecl = nullptr,
                     unsigned ParamsToSkip = 0);
 

@@ -1763,7 +1763,10 @@ void OMPClauseWriter::VisitOMPScheduleClause(OMPScheduleClause *C) {
   Writer->Writer.AddSourceLocation(C->getCommaLoc(), Record);
 }
 
-void OMPClauseWriter::VisitOMPOrderedClause(OMPOrderedClause *) {}
+void OMPClauseWriter::VisitOMPOrderedClause(OMPOrderedClause *C) {
+  Writer->Writer.AddStmt(C->getNumForLoops());
+  Writer->Writer.AddSourceLocation(C->getLParenLoc(), Record);
+}
 
 void OMPClauseWriter::VisitOMPNowaitClause(OMPNowaitClause *) {}
 
@@ -2061,6 +2064,13 @@ void ASTStmtWriter::VisitOMPTargetDirective(OMPTargetDirective *D) {
   Record.push_back(D->getNumClauses());
   VisitOMPExecutableDirective(D);
   Code = serialization::STMT_OMP_TARGET_DIRECTIVE;
+}
+
+void ASTStmtWriter::VisitOMPTargetDataDirective(OMPTargetDataDirective *D) {
+  VisitStmt(D);
+  Record.push_back(D->getNumClauses());
+  VisitOMPExecutableDirective(D);
+  Code = serialization::STMT_OMP_TARGET_DATA_DIRECTIVE;
 }
 
 void ASTStmtWriter::VisitOMPTaskyieldDirective(OMPTaskyieldDirective *D) {
