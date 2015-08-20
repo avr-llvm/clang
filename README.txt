@@ -1,6 +1,8 @@
 //===----------------------------------------------------------------------===//
-// C Language Family Front-end
+// AVR C Language Family Front-end
 //===----------------------------------------------------------------------===//
+
+[![Build Status](https://travis-ci.org/avr-llvm/llvm.svg?branch=improve-testing)](https://travis-ci.org/avr-llvm/llvm)
 
 Welcome to Clang.  This is a compiler front-end for the C family of languages
 (C, C++, Objective-C, and Objective-C++) which is built as part of the LLVM
