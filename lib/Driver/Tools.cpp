@@ -5981,6 +5981,84 @@ void hexagon::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 }
 // Hexagon tools end.
 
+// Example:
+// avr-ld -m avr5 -Tdata 0x800100 -o prog.elf <crt> --gc-sections <obj-files> -lm -lgcc -lm -lc
+// TODO:
+//     - Link a CRT
+//     - Pass correct data section address
+//     - Pass correct architecture
+void avr::Linker::ConstructJob(Compilation &C, const JobAction &JA,
+                               const InputInfo &Output,
+                               const InputInfoList &Inputs,
+                               const ArgList &Args,
+                               const char *LinkingOutput) const {
+
+  const ToolChain &ToolChain = getToolChain();
+  const Driver &D = C.getDriver();
+
+  ArgStringList CmdArgs;
+
+  // Silence warning for "clang -g foo.o -o foo"
+  // and "clang -emit-llvm foo.o -o foo"
+  Args.ClaimAllArgs(options::OPT_emit_llvm);
+  // and for "clang -w foo.o -o foo". Other warning options are already
+  // handled somewhere else.
+  Args.ClaimAllArgs(options::OPT_w);
+
+  if (!D.SysRoot.empty())
+    CmdArgs.push_back(Args.MakeArgString("--sysroot=" + D.SysRoot));
+
+  // CloudABI only supports static linkage.
+  CmdArgs.push_back("-Bstatic");
+  CmdArgs.push_back("--gc-sections");
+
+  if (Output.isFilename()) {
+    CmdArgs.push_back("-o");
+    CmdArgs.push_back(Output.getFilename());
+  } else {
+    assert(Output.isNothing() && "Invalid output.");
+  }
+
+  if (!Args.hasArg(options::OPT_nostdlib) &&
+      !Args.hasArg(options::OPT_nostartfiles)) {
+    // FIXME: Link correct CRT.
+    //CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath("crt0.o")));
+    //CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath("crtbegin.o")));
+  }
+
+  Args.AddAllArgs(CmdArgs, options::OPT_L);
+  const ToolChain::path_list &Paths = ToolChain.getFilePaths();
+  for (const auto &Path : Paths)
+    CmdArgs.push_back(Args.MakeArgString(StringRef("-L") + Path));
+  Args.AddAllArgs(CmdArgs,
+                  {options::OPT_T_Group, options::OPT_e, options::OPT_s,
+                   options::OPT_t, options::OPT_Z_Flag, options::OPT_r});
+
+  if (D.IsUsingLTO(Args))
+    AddGoldPlugin(ToolChain, Args, CmdArgs);
+
+  AddLinkerInputs(ToolChain, Inputs, Args, CmdArgs);
+
+  if (!Args.hasArg(options::OPT_nostdlib) &&
+      !Args.hasArg(options::OPT_nodefaultlibs)) {
+    if (D.CCCIsCXX())
+      ToolChain.AddCXXStdlibLibArgs(Args, CmdArgs);
+    CmdArgs.push_back("-lm");
+    CmdArgs.push_back("-lc");
+    CmdArgs.push_back("-lcompiler_rt");
+  }
+
+  if (!Args.hasArg(options::OPT_nostdlib) &&
+      !Args.hasArg(options::OPT_nostartfiles)) {
+    // FIXME: Link correct crts
+    //CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath("crtend.o")));
+  }
+
+  const char *Exec = Args.MakeArgString(ToolChain.GetProgramPath("avr-ld"));
+  C.addCommand(llvm::make_unique<Command>(JA, *this, Exec, CmdArgs, Inputs));
+}
+// AVR tools end.
+
 void amdgpu::Linker::ConstructJob(Compilation &C, const JobAction &JA,
                                   const InputInfo &Output,
                                   const InputInfoList &Inputs,

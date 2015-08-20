@@ -2039,6 +2039,7 @@ bool Generic_GCC::IsIntegratedAssemblerDefault() const {
   case llvm::Triple::aarch64:
   case llvm::Triple::aarch64_be:
   case llvm::Triple::arm:
+  case llvm::Triple::avr:
   case llvm::Triple::armeb:
   case llvm::Triple::bpfel:
   case llvm::Triple::bpfeb:
@@ -2201,6 +2202,10 @@ Tool *HexagonToolChain::buildAssembler() const {
 
 Tool *HexagonToolChain::buildLinker() const {
   return new tools::hexagon::Linker(*this);
+}
+
+Tool *AVRToolChain::buildLinker() const {
+  return new tools::avr::Linker(*this);
 }
 
 void HexagonToolChain::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
