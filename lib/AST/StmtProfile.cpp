@@ -384,6 +384,9 @@ void OMPClauseProfiler::VisitOMPReductionClause(
 }
 void OMPClauseProfiler::VisitOMPLinearClause(const OMPLinearClause *C) {
   VisitOMPClauseList(C);
+  for (auto *E : C->privates()) {
+    Profiler->VisitStmt(E);
+  }
   for (auto *E : C->inits()) {
     Profiler->VisitStmt(E);
   }
@@ -430,6 +433,9 @@ void OMPClauseProfiler::VisitOMPFlushClause(const OMPFlushClause *C) {
 }
 void OMPClauseProfiler::VisitOMPDependClause(const OMPDependClause *C) {
   VisitOMPClauseList(C);
+}
+void OMPClauseProfiler::VisitOMPDeviceClause(const OMPDeviceClause *C) {
+  Profiler->VisitStmt(C->getDevice());
 }
 }
 
