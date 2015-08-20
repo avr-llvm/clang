@@ -6078,6 +6078,7 @@ validateAsmConstraint(const char *&Name,
       IntWidth = 16; IntAlign = 16;
       LongWidth = 32; LongLongWidth = 64;
       LongAlign = LongLongAlign = 16;
+      DoubleWidth = 32; DoubleAlign = 32;
       PointerWidth = 16; PointerAlign = 16;
       SuitableAlign = 16;
       SizeType = UnsignedInt;
@@ -6085,6 +6086,7 @@ validateAsmConstraint(const char *&Name,
       IntPtrType = SignedInt;
       PtrDiffType = SignedInt;
       SigAtomicType = SignedLong;
+      DoubleFormat = &llvm::APFloat::IEEEsingle;
       DataLayoutString = "e-p:16:8:8-i8:8:8-i16:8:8-i32:8:8-i64:8:8-f32:8:8-f64:8:8-n8";
     }
 
