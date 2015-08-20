@@ -2247,7 +2247,7 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
         TC = new toolchains::SHAVEToolChain(*this, Target, Args);
         break;
       case llvm::Triple::avr:
-        TC = new toolchains::AvrToolchain(*this, Target, Args);
+        TC = new toolchains::AVRToolchain(*this, Target, Args);
         break;
       default:
         if (Target.isOSBinFormatELF())

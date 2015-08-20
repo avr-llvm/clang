@@ -560,13 +560,15 @@ private:
   void findGccLibDir();
 };
 
-class LLVM_LIBRARY_VISIBILITY AvrToolchain : public Generic_ELF {
+class LLVM_LIBRARY_VISIBILITY AVRToolchain : public Generic_ELF {
 public:
-    AvrToolchain(const Driver &D, const llvm::Triple &Triple,
-            const llvm::opt::ArgList &Args)
-    : Generic_ELF(D, Triple, Args) {};
+  AVRToolchain(const Driver &D, const llvm::Triple &Triple,
+               const llvm::opt::ArgList &Args)
+               : Generic_ELF(D, Triple, Args) {};
 
-    bool IsIntegratedAssemblerDefault() const override { return true; }
+  bool IsIntegratedAssemblerDefault() const override { return true; }
+
+
 };
 
 class LLVM_LIBRARY_VISIBILITY OpenBSD : public Generic_ELF {
