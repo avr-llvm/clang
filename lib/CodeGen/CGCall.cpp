@@ -1496,70 +1496,77 @@ void CodeGenModule::ConstructAttributeList(const CGFunctionInfo &FI,
     // we have a decl for the function and it has a target attribute then
     // parse that and add it to the feature set.
     StringRef TargetCPU = getTarget().getTargetOpts().CPU;
-
-    // TODO: Features gets us the features on the command line including
-    // feature dependencies. For canonicalization purposes we might want to
-    // avoid putting features in the target-features set if we know it'll be
-    // one of the default features in the backend, e.g. corei7-avx and +avx or
-    // figure out non-explicit dependencies.
-    // Canonicalize the existing features in a new feature map.
-    // TODO: Migrate the existing backends to keep the map around rather than
-    // the vector.
-    llvm::StringMap<bool> FeatureMap;
-    for (auto F : getTarget().getTargetOpts().Features) {
-      const char *Name = F.c_str();
-      bool Enabled = Name[0] == '+';
-      getTarget().setFeatureEnabled(FeatureMap, Name + 1, Enabled);
-    }
-
     const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(TargetDecl);
-    if (FD) {
-      if (const auto *TD = FD->getAttr<TargetAttr>()) {
-        StringRef FeaturesStr = TD->getFeatures();
-        SmallVector<StringRef, 1> AttrFeatures;
-        FeaturesStr.split(AttrFeatures, ",");
+    if (FD && FD->getAttr<TargetAttr>()) {
+      llvm::StringMap<bool> FeatureMap;
+      const auto *TD = FD->getAttr<TargetAttr>();
 
-        // Grab the various features and prepend a "+" to turn on the feature to
-        // the backend and add them to our existing set of features.
-        for (auto &Feature : AttrFeatures) {
-          // Go ahead and trim whitespace rather than either erroring or
-          // accepting it weirdly.
-          Feature = Feature.trim();
+      // Make a copy of the features as passed on the command line.
+      std::vector<std::string> FnFeatures =
+          getTarget().getTargetOpts().FeaturesAsWritten;
 
-          // While we're here iterating check for a different target cpu.
-          if (Feature.startswith("arch="))
-            TargetCPU = Feature.split("=").second.trim();
-          else if (Feature.startswith("tune="))
-            // We don't support cpu tuning this way currently.
-            ;
-          else if (Feature.startswith("fpmath="))
-            // TODO: Support the fpmath option this way. It will require checking
-            // overall feature validity for the function with the rest of the
-            // attributes on the function.
-            ;
-          else if (Feature.startswith("mno-"))
-            getTarget().setFeatureEnabled(FeatureMap, Feature.split("-").second,
-                                          false);
-          else
-            getTarget().setFeatureEnabled(FeatureMap, Feature, true);
-        }
+      // Grab the target attribute string.
+      StringRef FeaturesStr = TD->getFeatures();
+      SmallVector<StringRef, 1> AttrFeatures;
+      FeaturesStr.split(AttrFeatures, ",");
+
+      // Grab the various features and prepend a "+" to turn on the feature to
+      // the backend and add them to our existing set of features.
+      for (auto &Feature : AttrFeatures) {
+        // Go ahead and trim whitespace rather than either erroring or
+        // accepting it weirdly.
+        Feature = Feature.trim();
+
+        // While we're here iterating check for a different target cpu.
+        if (Feature.startswith("arch="))
+          TargetCPU = Feature.split("=").second.trim();
+        else if (Feature.startswith("tune="))
+          // We don't support cpu tuning this way currently.
+          ;
+        else if (Feature.startswith("fpmath="))
+          // TODO: Support the fpmath option this way. It will require checking
+          // overall feature validity for the function with the rest of the
+          // attributes on the function.
+          ;
+        else if (Feature.startswith("no-"))
+          FnFeatures.push_back("-" + Feature.split("-").second.str());
+        else
+          FnFeatures.push_back("+" + Feature.str());
       }
-    }
+      // Now populate the feature map, first with the TargetCPU which is either
+      // the default or a new one from the target attribute string. Then we'll
+      // use the passed in features (FeaturesAsWritten) along with the new ones
+      // from the attribute.
+      getTarget().initFeatureMap(FeatureMap, Diags, TargetCPU, FnFeatures);
 
-    // Produce the canonical string for this set of features.
-    std::vector<std::string> Features;
-    for (llvm::StringMap<bool>::const_iterator it = FeatureMap.begin(),
-                                               ie = FeatureMap.end();
-         it != ie; ++it)
-      Features.push_back((it->second ? "+" : "-") + it->first().str());
+      // Produce the canonical string for this set of features.
+      std::vector<std::string> Features;
+      for (llvm::StringMap<bool>::const_iterator it = FeatureMap.begin(),
+                                                 ie = FeatureMap.end();
+           it != ie; ++it)
+        Features.push_back((it->second ? "+" : "-") + it->first().str());
 
-    // Now add the target-cpu and target-features to the function.
-    if (TargetCPU != "")
-      FuncAttrs.addAttribute("target-cpu", TargetCPU);
-    if (!Features.empty()) {
-      std::sort(Features.begin(), Features.end());
-      FuncAttrs.addAttribute("target-features",
-                             llvm::join(Features.begin(), Features.end(), ","));
+      // Now add the target-cpu and target-features to the function.
+      if (TargetCPU != "")
+        FuncAttrs.addAttribute("target-cpu", TargetCPU);
+      if (!Features.empty()) {
+        std::sort(Features.begin(), Features.end());
+        FuncAttrs.addAttribute(
+            "target-features",
+            llvm::join(Features.begin(), Features.end(), ","));
+      }
+    } else {
+      // Otherwise just add the existing target cpu and target features to the
+      // function.
+      std::vector<std::string> &Features = getTarget().getTargetOpts().Features;
+      if (TargetCPU != "")
+        FuncAttrs.addAttribute("target-cpu", TargetCPU);
+      if (!Features.empty()) {
+        std::sort(Features.begin(), Features.end());
+        FuncAttrs.addAttribute(
+            "target-features",
+            llvm::join(Features.begin(), Features.end(), ","));
+      }
     }
   }
 
@@ -1663,20 +1670,35 @@ void CodeGenModule::ConstructAttributeList(const CGFunctionInfo &FI,
         Attrs.addAttribute(llvm::Attribute::InReg);
       break;
 
-    case ABIArgInfo::Indirect:
+    case ABIArgInfo::Indirect: {
       if (AI.getInReg())
         Attrs.addAttribute(llvm::Attribute::InReg);
 
       if (AI.getIndirectByVal())
         Attrs.addAttribute(llvm::Attribute::ByVal);
 
-      Attrs.addAlignmentAttr(AI.getIndirectAlign());
+      unsigned Align = AI.getIndirectAlign();
+
+      // In a byval argument, it is important that the required
+      // alignment of the type is honored, as LLVM might be creating a
+      // *new* stack object, and needs to know what alignment to give
+      // it. (Sometimes it can deduce a sensible alignment on its own,
+      // but not if clang decides it must emit a packed struct, or the
+      // user specifies increased alignment requirements.)
+      //
+      // This is different from indirect *not* byval, where the object
+      // exists already, and the align attribute is purely
+      // informative.
+      if (Align == 0 && AI.getIndirectByVal())
+        Align = getContext().getTypeAlignInChars(ParamType).getQuantity();
+
+      Attrs.addAlignmentAttr(Align);
 
       // byval disables readnone and readonly.
       FuncAttrs.removeAttribute(llvm::Attribute::ReadOnly)
         .removeAttribute(llvm::Attribute::ReadNone);
       break;
-
+    }
     case ABIArgInfo::Ignore:
     case ABIArgInfo::Expand:
       continue;

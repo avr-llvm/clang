@@ -14,6 +14,7 @@
 
 #include "ClangSACheckers.h"
 #include "clang/AST/ExprObjC.h"
+#include "clang/AST/ExprOpenMP.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
 #include "clang/StaticAnalyzer/Core/CheckerManager.h"
@@ -130,6 +131,14 @@ void DereferenceChecker::reportBug(ProgramStateRef State, const Stmt *S,
     os << " results in a null pointer dereference";
     break;
   }
+  case Stmt::OMPArraySectionExprClass: {
+    os << "Array access";
+    const OMPArraySectionExpr *AE = cast<OMPArraySectionExpr>(S);
+    AddDerefSource(os, Ranges, AE->getBase()->IgnoreParenCasts(),
+                   State.get(), N->getLocationContext());
+    os << " results in a null pointer dereference";
+    break;
+  }
   case Stmt::UnaryOperatorClass: {
     os << "Dereference of null pointer";
     const UnaryOperator *U = cast<UnaryOperator>(S);
@@ -211,7 +220,8 @@ void DereferenceChecker::checkLocation(SVal l, bool isLoad, const Stmt* S,
     // null or not-null.  Record the error node as an "implicit" null
     // dereference.
     if (ExplodedNode *N = C.generateSink(nullState)) {
-      ImplicitNullDerefEvent event = { l, isLoad, N, &C.getBugReporter() };
+      ImplicitNullDerefEvent event = {l, isLoad, N, &C.getBugReporter(),
+                                      /*IsDirectDereference=*/false};
       dispatchEvent(event);
     }
   }
@@ -248,8 +258,9 @@ void DereferenceChecker::checkBind(SVal L, SVal V, const Stmt *S,
     // At this point the value could be either null or non-null.
     // Record this as an "implicit" null dereference.
     if (ExplodedNode *N = C.generateSink(StNull)) {
-      ImplicitNullDerefEvent event = { V, /*isLoad=*/true, N,
-                                       &C.getBugReporter() };
+      ImplicitNullDerefEvent event = {V, /*isLoad=*/true, N,
+                                      &C.getBugReporter(),
+                                      /*IsDirectDereference=*/false};
       dispatchEvent(event);
     }
   }

@@ -282,9 +282,8 @@ class ReadMethodPoolVisitor;
 
 namespace reader {
   class ASTIdentifierLookupTrait;
-  /// \brief The on-disk hash table used for the DeclContext's Name lookup table.
-  typedef llvm::OnDiskIterableChainedHashTable<ASTDeclContextNameLookupTrait>
-    ASTDeclContextNameLookupTable;
+  /// \brief The on-disk hash table(s) used for DeclContext name lookup.
+  struct DeclContextLookupTable;
 }
 
 } // end namespace serialization
@@ -507,6 +506,10 @@ private:
   /// \brief Map from the TU to its lexical contents from each module file.
   std::vector<std::pair<ModuleFile*, LexicalContents>> TULexicalDecls;
 
+  /// \brief Map from a DeclContext to its lookup tables.
+  llvm::DenseMap<const DeclContext *,
+                 serialization::reader::DeclContextLookupTable> Lookups;
+
   // Updates for visible decls can occur for other contexts than just the
   // TU, and when we read those update records, the actual context may not
   // be available yet, so have this pending map using the ID as a key. It
@@ -514,7 +517,6 @@ private:
   struct PendingVisibleUpdate {
     ModuleFile *Mod;
     const unsigned char *Data;
-    unsigned BucketOffset;
   };
   typedef SmallVector<PendingVisibleUpdate, 1> DeclContextVisibleUpdates;
 
@@ -932,20 +934,10 @@ private:
   /// Objective-C protocols.
   std::deque<Decl *> InterestingDecls;
 
-  /// \brief The set of redeclarable declarations that have been deserialized
-  /// since the last time the declaration chains were linked.
-  llvm::SmallPtrSet<Decl *, 16> RedeclsDeserialized;
-  
   /// \brief The list of redeclaration chains that still need to be 
-  /// reconstructed.
-  ///
-  /// Each element is the canonical declaration of the chain.
-  /// Elements in this vector should be unique; use 
-  /// PendingDeclChainsKnown to ensure uniqueness.
-  SmallVector<Decl *, 16> PendingDeclChains;
-
-  /// \brief Keeps track of the elements added to PendingDeclChains.
-  llvm::SmallSet<Decl *, 16> PendingDeclChainsKnown;
+  /// reconstructed, and the local offset to the corresponding list
+  /// of redeclarations.
+  SmallVector<std::pair<Decl *, uint64_t>, 16> PendingDeclChains;
 
   /// \brief The list of canonical declarations whose redeclaration chains
   /// need to be marked as incomplete once we're done deserializing things.
@@ -1099,6 +1091,10 @@ public:
         Visit(GetExistingDecl(ID));
   }
 
+  /// \brief Get the loaded lookup tables for \p Primary, if any.
+  const serialization::reader::DeclContextLookupTable *
+  getLoadedLookupTables(DeclContext *Primary) const;
+
 private:
   struct ImportedModule {
     ModuleFile *Mod;
@@ -1172,7 +1168,7 @@ private:
   RecordLocation DeclCursorForID(serialization::DeclID ID,
                                  unsigned &RawLocation);
   void loadDeclUpdateRecords(serialization::DeclID ID, Decl *D);
-  void loadPendingDeclChain(Decl *D);
+  void loadPendingDeclChain(Decl *D, uint64_t LocalOffset);
   void loadObjCCategories(serialization::GlobalDeclID ID, ObjCInterfaceDecl *D,
                           unsigned PreviousGeneration = 0);
 
@@ -1879,6 +1875,13 @@ public:
   ///
   /// Note: overrides method in ExternalASTSource
   Module *getModule(unsigned ID) override;
+
+  /// \brief Retrieve the module file with a given local ID within the specified
+  /// ModuleFile.
+  ModuleFile *getLocalModuleFile(ModuleFile &M, unsigned ID);
+
+  /// \brief Get an ID for the given module file.
+  unsigned getModuleFileID(ModuleFile *M);
 
   /// \brief Return a descriptor for the corresponding module.
   llvm::Optional<ASTSourceDescriptor> getSourceDescriptor(unsigned ID) override;

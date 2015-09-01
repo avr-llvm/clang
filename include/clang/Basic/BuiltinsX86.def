@@ -30,6 +30,12 @@
 // can use it?
 BUILTIN(__builtin_cpu_supports, "bcC*", "nc")
 
+// Undefined Values
+//
+TARGET_BUILTIN(__builtin_ia32_undef128, "V2d", "nc", "")
+TARGET_BUILTIN(__builtin_ia32_undef256, "V4d", "nc", "")
+TARGET_BUILTIN(__builtin_ia32_undef512, "V8d", "nc", "")
+
 // 3DNow!
 //
 TARGET_BUILTIN(__builtin_ia32_femms, "v", "", "3dnow")
@@ -590,17 +596,6 @@ TARGET_BUILTIN(__builtin_ia32_psrld256, "V8iV8iV4i", "", "avx2")
 TARGET_BUILTIN(__builtin_ia32_psrlqi256, "V4LLiV4LLii", "", "avx2")
 TARGET_BUILTIN(__builtin_ia32_psrlq256, "V4LLiV4LLiV2LLi", "", "avx2")
 TARGET_BUILTIN(__builtin_ia32_movntdqa256, "V4LLiV4LLi*", "", "avx2")
-TARGET_BUILTIN(__builtin_ia32_vbroadcastss_ps, "V4fV4f", "", "avx2")
-TARGET_BUILTIN(__builtin_ia32_vbroadcastss_ps256, "V8fV4f", "", "avx2")
-TARGET_BUILTIN(__builtin_ia32_vbroadcastsd_pd256, "V4dV2d", "", "avx2")
-TARGET_BUILTIN(__builtin_ia32_pbroadcastb256, "V32cV16c", "", "avx2")
-TARGET_BUILTIN(__builtin_ia32_pbroadcastw256, "V16sV8s", "", "avx2")
-TARGET_BUILTIN(__builtin_ia32_pbroadcastd256, "V8iV4i", "", "avx2")
-TARGET_BUILTIN(__builtin_ia32_pbroadcastq256, "V4LLiV2LLi", "", "avx2")
-TARGET_BUILTIN(__builtin_ia32_pbroadcastb128, "V16cV16c", "", "avx2")
-TARGET_BUILTIN(__builtin_ia32_pbroadcastw128, "V8sV8s", "", "avx2")
-TARGET_BUILTIN(__builtin_ia32_pbroadcastd128, "V4iV4i", "", "avx2")
-TARGET_BUILTIN(__builtin_ia32_pbroadcastq128, "V2LLiV2LLi", "", "avx2")
 TARGET_BUILTIN(__builtin_ia32_permvarsi256, "V8iV8iV8i", "", "avx2")
 TARGET_BUILTIN(__builtin_ia32_permvarsf256, "V8fV8fV8f", "", "avx2")
 TARGET_BUILTIN(__builtin_ia32_permti256, "V4LLiV4LLiV4LLiIc", "", "avx2")
@@ -1035,8 +1030,8 @@ TARGET_BUILTIN(__builtin_ia32_vpermt2vard512_mask, "V16iV16iV16iV16iUs", "", "av
 TARGET_BUILTIN(__builtin_ia32_vpermt2varq512_mask, "V8LLiV8LLiV8LLiV8LLiUc", "", "avx512f")
 TARGET_BUILTIN(__builtin_ia32_vpermt2varps512_mask, "V16fV16iV16fV16fUs", "", "avx512f")
 TARGET_BUILTIN(__builtin_ia32_vpermt2varpd512_mask, "V8dV8LLiV8dV8dUc", "", "avx512f")
-TARGET_BUILTIN(__builtin_ia32_alignq512_mask, "V8LLiV8LLiV8LLiIcV8LLiUc", "", "avx512f")
-TARGET_BUILTIN(__builtin_ia32_alignd512_mask, "V16iV16iV16iIcV16iUs", "", "avx512f")
+TARGET_BUILTIN(__builtin_ia32_alignq512_mask, "V8LLiV8LLiV8LLiIiV8LLiUc", "", "avx512f")
+TARGET_BUILTIN(__builtin_ia32_alignd512_mask, "V16iV16iV16iIiV16iUs", "", "avx512f")
 TARGET_BUILTIN(__builtin_ia32_extractf64x4_mask, "V4dV8dIcV4dUc", "", "avx512f")
 TARGET_BUILTIN(__builtin_ia32_extractf32x4_mask, "V4fV16fIcV4fUc", "", "avx512f")
 

@@ -1047,6 +1047,10 @@ void ASTContext::InitBuiltinTypes(const TargetInfo &Target) {
   // Placeholder type for builtin functions.
   InitBuiltinType(BuiltinFnTy,  BuiltinType::BuiltinFn);
 
+  // Placeholder type for OMP array sections.
+  if (LangOpts.OpenMP)
+    InitBuiltinType(OMPArraySectionTy, BuiltinType::OMPArraySection);
+
   // C99 6.2.5p11.
   FloatComplexTy      = getComplexType(FloatTy);
   DoubleComplexTy     = getComplexType(DoubleTy);
@@ -8543,6 +8547,25 @@ Expr *ASTContext::getDefaultArgExprForConstructor(const CXXConstructorDecl *CD,
                                                   unsigned ParmIdx) {
   return ABI->getDefaultArgExprForConstructor(
       cast<CXXConstructorDecl>(CD->getFirstDecl()), ParmIdx);
+}
+
+void ASTContext::addTypedefNameForUnnamedTagDecl(TagDecl *TD,
+                                                 TypedefNameDecl *DD) {
+  return ABI->addTypedefNameForUnnamedTagDecl(TD, DD);
+}
+
+TypedefNameDecl *
+ASTContext::getTypedefNameForUnnamedTagDecl(const TagDecl *TD) {
+  return ABI->getTypedefNameForUnnamedTagDecl(TD);
+}
+
+void ASTContext::addDeclaratorForUnnamedTagDecl(TagDecl *TD,
+                                                DeclaratorDecl *DD) {
+  return ABI->addDeclaratorForUnnamedTagDecl(TD, DD);
+}
+
+DeclaratorDecl *ASTContext::getDeclaratorForUnnamedTagDecl(const TagDecl *TD) {
+  return ABI->getDeclaratorForUnnamedTagDecl(TD);
 }
 
 void ASTContext::setParameterIndex(const ParmVarDecl *D, unsigned int index) {
