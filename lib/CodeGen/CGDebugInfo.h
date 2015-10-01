@@ -32,12 +32,13 @@ class MDNode;
 
 namespace clang {
 class CXXMethodDecl;
-class VarDecl;
-class ObjCInterfaceDecl;
-class ObjCIvarDecl;
 class ClassTemplateSpecializationDecl;
 class GlobalDecl;
+class ModuleMap;
+class ObjCInterfaceDecl;
+class ObjCIvarDecl;
 class UsingDecl;
+class VarDecl;
 
 namespace CodeGen {
 class CodeGenModule;
@@ -55,6 +56,7 @@ class CGDebugInfo {
   bool DebugTypeExtRefs;
   llvm::DIBuilder DBuilder;
   llvm::DICompileUnit *TheCU = nullptr;
+  ModuleMap *ClangModuleMap = nullptr;
   SourceLocation CurLoc;
   llvm::DIType *VTablePtrType = nullptr;
   llvm::DIType *ClassTy = nullptr;
@@ -65,8 +67,18 @@ class CGDebugInfo {
   llvm::DIType *OCLImage1dBufferDITy = nullptr;
   llvm::DIType *OCLImage2dDITy = nullptr;
   llvm::DIType *OCLImage2dArrayDITy = nullptr;
+  llvm::DIType *OCLImage2dDepthDITy = nullptr;
+  llvm::DIType *OCLImage2dArrayDepthDITy = nullptr;
+  llvm::DIType *OCLImage2dMSAADITy = nullptr;
+  llvm::DIType *OCLImage2dArrayMSAADITy = nullptr;
+  llvm::DIType *OCLImage2dMSAADepthDITy = nullptr;
+  llvm::DIType *OCLImage2dArrayMSAADepthDITy = nullptr;
   llvm::DIType *OCLImage3dDITy = nullptr;
   llvm::DIType *OCLEventDITy = nullptr;
+  llvm::DIType *OCLClkEventDITy = nullptr;
+  llvm::DIType *OCLQueueDITy = nullptr;
+  llvm::DIType *OCLNDRangeDITy = nullptr;
+  llvm::DIType *OCLReserveIDDITy = nullptr;
 
   /// Cache of previously constructed Types.
   llvm::DenseMap<const void *, llvm::TrackingMDRef> TypeCache;
@@ -83,8 +95,8 @@ class CGDebugInfo {
   /// Cache of previously constructed interfaces which may change.
   llvm::SmallVector<ObjCInterfaceCacheEntry, 32> ObjCInterfaceCache;
 
-  /// Cache of references to AST files such as PCHs or modules.
-  llvm::DenseMap<uint64_t, llvm::DIModule *> ModuleRefCache;
+  /// Cache of references to clang modules and precompiled headers.
+  llvm::DenseMap<const Module *, llvm::TrackingMDRef> ModuleCache;
 
   /// List of interfaces we want to keep even if orphaned.
   std::vector<void *> RetainedTypes;
@@ -264,6 +276,14 @@ public:
 
   void finalize();
 
+  /// Set the main CU's DwoId field to \p Signature.
+  void setDwoId(uint64_t Signature);
+
+  /// When generating debug information for a clang module or
+  /// precompiled header, this module map will be used to determine
+  /// the module of origin of each Decl.
+  void setModuleMap(ModuleMap &MMap) { ClangModuleMap = &MMap; }
+
   /// Update the current source location. If \arg loc is invalid it is
   /// ignored.
   void setLocation(SourceLocation Loc);
@@ -280,6 +300,9 @@ public:
   void EmitFunctionStart(GlobalDecl GD, SourceLocation Loc,
                          SourceLocation ScopeLoc, QualType FnType,
                          llvm::Function *Fn, CGBuilderTy &Builder);
+
+  /// Emit debug info for a function declaration.
+  void EmitFunctionDecl(GlobalDecl GD, SourceLocation Loc, QualType FnType);
 
   /// Constructs the debug code for exiting a function.
   void EmitFunctionEnd(CGBuilderTy &Builder);
@@ -303,7 +326,7 @@ public:
                                          llvm::Value *storage,
                                          CGBuilderTy &Builder,
                                          const CGBlockInfo &blockInfo,
-                                         llvm::Instruction *InsertPoint = 0);
+                                         llvm::Instruction *InsertPoint = nullptr);
 
   /// Emit call to \c llvm.dbg.declare for an argument variable
   /// declaration.
@@ -363,8 +386,11 @@ private:
   llvm::DIType *EmitTypeForVarWithBlocksAttr(const VarDecl *VD,
                                              uint64_t *OffSet);
 
-  /// Get context info for the decl.
-  llvm::DIScope *getContextDescriptor(const Decl *Decl);
+  /// Get context info for the DeclContext of \p Decl.
+  llvm::DIScope *getDeclContextDescriptor(const Decl *D);
+  /// Get context info for a given DeclContext \p Decl.
+  llvm::DIScope *getContextDescriptor(const Decl *Context,
+                                      llvm::DIScope *Default);
 
   llvm::DIScope *getCurrentContextDescriptor(const Decl *Decl);
 
@@ -387,9 +413,14 @@ private:
   /// Get the type from the cache or create a new type if necessary.
   llvm::DIType *getOrCreateType(QualType Ty, llvm::DIFile *Fg);
 
-  /// Get a reference to a clang module.
+  /// Get a reference to a clang module.  If \p CreateSkeletonCU is true,
+  /// this also creates a split dwarf skeleton compile unit.
   llvm::DIModule *
-  getOrCreateModuleRef(ExternalASTSource::ASTSourceDescriptor Mod);
+  getOrCreateModuleRef(ExternalASTSource::ASTSourceDescriptor Mod,
+                       bool CreateSkeletonCU);
+
+  /// DebugTypeExtRefs: If \p D originated in a clang module, return it.
+  llvm::DIModule *getParentModuleOrNull(const Decl *D);
 
   /// Get the type from the cache or create a new partial type if
   /// necessary.
@@ -562,4 +593,4 @@ public:
 } // namespace CodeGen
 } // namespace clang
 
-#endif
+#endif // LLVM_CLANG_LIB_CODEGEN_CGDEBUGINFO_H

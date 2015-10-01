@@ -494,6 +494,7 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   Opts.NoDwarfDirectoryAsm = Args.hasArg(OPT_fno_dwarf_directory_asm);
   Opts.SoftFloat = Args.hasArg(OPT_msoft_float);
   Opts.StrictEnums = Args.hasArg(OPT_fstrict_enums);
+  Opts.StrictVTablePointers = Args.hasArg(OPT_fstrict_vtable_pointers);
   Opts.UnsafeFPMath = Args.hasArg(OPT_menable_unsafe_fp_math) ||
                       Args.hasArg(OPT_cl_unsafe_math_optimizations) ||
                       Args.hasArg(OPT_cl_fast_relaxed_math);
@@ -709,7 +710,7 @@ static void ParseDependencyOutputArgs(DependencyOutputOptions &Opts,
   // Add sanitizer blacklists as extra dependencies.
   // They won't be discovered by the regular preprocessor, so
   // we let make / ninja to know about this implicit dependency.
-  Opts.ExtraDeps = Args.getAllArgValues(OPT_fsanitize_blacklist);
+  Opts.ExtraDeps = Args.getAllArgValues(OPT_fdepfile_entry);
   auto ModuleFiles = Args.getAllArgValues(OPT_fmodule_file);
   Opts.ExtraDeps.insert(Opts.ExtraDeps.end(), ModuleFiles.begin(),
                         ModuleFiles.end());
@@ -974,6 +975,9 @@ static InputKind ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
 
   Opts.OverrideRecordLayoutsFile
     = Args.getLastArgValue(OPT_foverride_record_layout_EQ);
+  Opts.AuxTriple =
+      llvm::Triple::normalize(Args.getLastArgValue(OPT_aux_triple));
+
   if (const Arg *A = Args.getLastArg(OPT_arcmt_check,
                                      OPT_arcmt_modify,
                                      OPT_arcmt_migrate)) {
@@ -1413,11 +1417,17 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   if (Args.hasArg(OPT_fcuda_is_device))
     Opts.CUDAIsDevice = 1;
 
+  if (Args.hasArg(OPT_fcuda_uses_libdevice))
+    Opts.CUDAUsesLibDevice = 1;
+
   if (Args.hasArg(OPT_fcuda_allow_host_calls_from_host_device))
     Opts.CUDAAllowHostCallsFromHostDevice = 1;
 
   if (Args.hasArg(OPT_fcuda_disable_target_call_checks))
     Opts.CUDADisableTargetCallChecks = 1;
+
+  if (Args.hasArg(OPT_fcuda_target_overloads))
+    Opts.CUDATargetOverloads = 1;
 
   if (Opts.ObjC1) {
     if (Arg *arg = Args.getLastArg(OPT_fobjc_runtime_EQ)) {

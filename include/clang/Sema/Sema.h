@@ -903,6 +903,10 @@ public:
   /// for C++ records.
   llvm::FoldingSet<SpecialMemberOverloadResult> SpecialMemberCache;
 
+  /// \brief A cache of the flags available in enumerations with the flag_bits
+  /// attribute.
+  mutable llvm::DenseMap<const EnumDecl*, llvm::APInt> FlagBitsCache;
+
   /// \brief The kind of translation unit we are processing.
   ///
   /// When we're processing a complete translation unit, Sema will perform
@@ -1794,6 +1798,10 @@ public:
   void ActOnModuleBegin(SourceLocation DirectiveLoc, Module *Mod);
   /// \brief The parser has left a submodule.
   void ActOnModuleEnd(SourceLocation DirectiveLoc, Module *Mod);
+
+  /// \brief Check if module import may be found in the current context,
+  /// emit error if not.
+  void diagnoseMisplacedModuleImport(Module *M, SourceLocation ImportLoc);
 
   /// \brief Create an implicit import of the given module at the given
   /// source location, for error recovery, if possible.
@@ -2915,7 +2923,8 @@ public:
   /// Adjust the calling convention of a method to be the ABI default if it
   /// wasn't specified explicitly.  This handles method types formed from
   /// function type typedefs and typename template arguments.
-  void adjustMemberFunctionCC(QualType &T, bool IsStatic);
+  void adjustMemberFunctionCC(QualType &T, bool IsStatic, bool IsCtorOrDtor,
+                              SourceLocation Loc);
 
   // Check if there is an explicit attribute, but only look through parens.
   // The intent is to look for an attribute on the current declarator, but not
@@ -6728,7 +6737,7 @@ public:
         Sema &SemaRef, ActiveTemplateInstantiation::InstantiationKind Kind,
         SourceLocation PointOfInstantiation, SourceRange InstantiationRange,
         Decl *Entity, NamedDecl *Template = nullptr,
-        ArrayRef<TemplateArgument> TemplateArgs = ArrayRef<TemplateArgument>(),
+        ArrayRef<TemplateArgument> TemplateArgs = None,
         sema::TemplateDeductionInfo *DeductionInfo = nullptr);
 
     InstantiatingTemplate(const InstantiatingTemplate&) = delete;
@@ -7851,7 +7860,8 @@ public:
                                        SourceLocation EndLoc);
   /// \brief Called on well-formed '\#pragma omp ordered' after parsing of the
   /// associated statement.
-  StmtResult ActOnOpenMPOrderedDirective(Stmt *AStmt, SourceLocation StartLoc,
+  StmtResult ActOnOpenMPOrderedDirective(ArrayRef<OMPClause *> Clauses,
+                                         Stmt *AStmt, SourceLocation StartLoc,
                                          SourceLocation EndLoc);
   /// \brief Called on well-formed '\#pragma omp atomic' after parsing of the
   /// associated statement.
@@ -7879,7 +7889,8 @@ public:
                                         SourceLocation EndLoc,
                                         OpenMPDirectiveKind CancelRegion);
   /// \brief Called on well-formed '\#pragma omp cancel'.
-  StmtResult ActOnOpenMPCancelDirective(SourceLocation StartLoc,
+  StmtResult ActOnOpenMPCancelDirective(ArrayRef<OMPClause *> Clauses,
+                                        SourceLocation StartLoc,
                                         SourceLocation EndLoc,
                                         OpenMPDirectiveKind CancelRegion);
 
@@ -7889,8 +7900,11 @@ public:
                                          SourceLocation LParenLoc,
                                          SourceLocation EndLoc);
   /// \brief Called on well-formed 'if' clause.
-  OMPClause *ActOnOpenMPIfClause(Expr *Condition, SourceLocation StartLoc,
+  OMPClause *ActOnOpenMPIfClause(OpenMPDirectiveKind NameModifier,
+                                 Expr *Condition, SourceLocation StartLoc,
                                  SourceLocation LParenLoc,
+                                 SourceLocation NameModifierLoc,
+                                 SourceLocation ColonLoc,
                                  SourceLocation EndLoc);
   /// \brief Called on well-formed 'final' clause.
   OMPClause *ActOnOpenMPFinalClause(Expr *Condition, SourceLocation StartLoc,
@@ -7945,7 +7959,7 @@ public:
                                                 SourceLocation StartLoc,
                                                 SourceLocation LParenLoc,
                                                 SourceLocation ArgumentLoc,
-                                                SourceLocation CommaLoc,
+                                                SourceLocation DelimLoc,
                                                 SourceLocation EndLoc);
   /// \brief Called on well-formed 'schedule' clause.
   OMPClause *ActOnOpenMPScheduleClause(OpenMPScheduleClauseKind Kind,
@@ -7981,6 +7995,12 @@ public:
   /// \brief Called on well-formed 'seq_cst' clause.
   OMPClause *ActOnOpenMPSeqCstClause(SourceLocation StartLoc,
                                      SourceLocation EndLoc);
+  /// \brief Called on well-formed 'threads' clause.
+  OMPClause *ActOnOpenMPThreadsClause(SourceLocation StartLoc,
+                                      SourceLocation EndLoc);
+  /// \brief Called on well-formed 'simd' clause.
+  OMPClause *ActOnOpenMPSIMDClause(SourceLocation StartLoc,
+                                   SourceLocation EndLoc);
 
   OMPClause *ActOnOpenMPVarListClause(
       OpenMPClauseKind Kind, ArrayRef<Expr *> Vars, Expr *TailExpr,
@@ -8600,7 +8620,36 @@ public:
 
   CUDAFunctionTarget IdentifyCUDATarget(const FunctionDecl *D);
 
+  enum CUDAFunctionPreference {
+    CFP_Never,      // Invalid caller/callee combination.
+    CFP_LastResort, // Lowest priority. Only in effect if
+                    // LangOpts.CUDADisableTargetCallChecks is true.
+    CFP_Fallback,   // Low priority caller/callee combination
+    CFP_Best,       // Preferred caller/callee combination
+  };
+
+  /// Identifies relative preference of a given Caller/Callee
+  /// combination, based on their host/device attributes.
+  /// \param Caller function which needs address of \p Callee.
+  ///               nullptr in case of global context.
+  /// \param Callee target function
+  ///
+  /// \returns preference value for particular Caller/Callee combination.
+  CUDAFunctionPreference IdentifyCUDAPreference(const FunctionDecl *Caller,
+                                                const FunctionDecl *Callee);
+
   bool CheckCUDATarget(const FunctionDecl *Caller, const FunctionDecl *Callee);
+
+  /// Finds a function in \p Matches with highest calling priority
+  /// from \p Caller context and erases all functions with lower
+  /// calling priority.
+  void EraseUnwantedCUDAMatches(const FunctionDecl *Caller,
+                                SmallVectorImpl<FunctionDecl *> &Matches);
+  void EraseUnwantedCUDAMatches(const FunctionDecl *Caller,
+                                SmallVectorImpl<DeclAccessPair> &Matches);
+  void EraseUnwantedCUDAMatches(
+      const FunctionDecl *Caller,
+      SmallVectorImpl<std::pair<DeclAccessPair, FunctionDecl *>> &Matches);
 
   /// Given a implicit special member, infer its CUDA target from the
   /// calls it needs to make to underlying base/field special members.
@@ -8812,7 +8861,7 @@ private:
   bool CheckObjCString(Expr *Arg);
 
   ExprResult CheckBuiltinFunctionCall(FunctionDecl *FDecl,
-		                      unsigned BuiltinID, CallExpr *TheCall);
+                                      unsigned BuiltinID, CallExpr *TheCall);
 
   bool CheckARMBuiltinExclusiveCall(unsigned BuiltinID, CallExpr *TheCall,
                                     unsigned MaxWidth);
@@ -8824,8 +8873,10 @@ private:
   bool CheckSystemZBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall);
   bool CheckX86BuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall);
   bool CheckPPCBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall);
-  
+
+  bool SemaBuiltinVAStartImpl(CallExpr *TheCall);
   bool SemaBuiltinVAStart(CallExpr *TheCall);
+  bool SemaBuiltinMSVAStart(CallExpr *TheCall);
   bool SemaBuiltinVAStartARM(CallExpr *Call);
   bool SemaBuiltinUnorderedCompare(CallExpr *TheCall);
   bool SemaBuiltinFPClassification(CallExpr *TheCall, unsigned NumArgs);
@@ -8844,6 +8895,7 @@ private:
   bool SemaBuiltinLongjmp(CallExpr *TheCall);
   bool SemaBuiltinSetjmp(CallExpr *TheCall);
   ExprResult SemaBuiltinAtomicOverloaded(ExprResult TheCallResult);
+  ExprResult SemaBuiltinNontemporalOverloaded(ExprResult TheCallResult);
   ExprResult SemaAtomicOpsOverloaded(ExprResult TheCallResult,
                                      AtomicExpr::AtomicOp Op);
   bool SemaBuiltinConstantArg(CallExpr *TheCall, int ArgNum,

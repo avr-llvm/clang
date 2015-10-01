@@ -113,7 +113,7 @@ def GlobalVar : SubsetSubject<Var,
 // the case of a SubsetSubject, there's no way to express it without this hack.
 def DeclBase : AttrSubject;
 def FunctionLike : SubsetSubject<DeclBase,
-                                  [{S->getFunctionType(false) != NULL}]>;
+                                  [{S->getFunctionType(false) != nullptr}]>;
 
 def OpenCLKernelFunction : SubsetSubject<Function, [{
   S->hasAttr<OpenCLKernelAttr>()
@@ -123,7 +123,7 @@ def OpenCLKernelFunction : SubsetSubject<Function, [{
 // never be specified in a Subjects list along with FunctionLike (due to the
 // inclusive nature of subject testing).
 def HasFunctionProto : SubsetSubject<DeclBase,
-                                     [{(S->getFunctionType(true) != NULL &&
+                                     [{(S->getFunctionType(true) != nullptr &&
                               isa<FunctionProtoType>(S->getFunctionType())) ||
                                        isa<ObjCMethodDecl>(S) ||
                                        isa<BlockDecl>(S)}]>;
@@ -292,6 +292,8 @@ class Attr {
   // attribute to be applicable. If empty, no language options are required.
   list<LangOpt> LangOpts = [];
   // Any additional text that should be included verbatim in the class.
+  // Note: Any additional data members will leak and should be constructed
+  // externally on the ASTContext.
   code AdditionalMembers = [{}];
   // Any documentation that should be associated with the attribute. Since an
   // attribute may be documented under multiple categories, more than one
@@ -823,18 +825,6 @@ def FlagEnum : InheritableAttr {
   let Subjects = SubjectList<[Enum]>;
   let Documentation = [FlagEnumDocs];
   let LangOpts = [COnly];
-  let AdditionalMembers = [{
-private:
-    llvm::APInt FlagBits;
-public:
-    llvm::APInt &getFlagBits() {
-      return FlagBits;
-    }
-
-    const llvm::APInt &getFlagBits() const {
-      return FlagBits;
-    }
-}];
 }
 
 def Flatten : InheritableAttr {
@@ -1397,20 +1387,9 @@ def Target : InheritableAttr {
   let Subjects = SubjectList<[Function], ErrorDiag>;
   let Documentation = [TargetDocs];
   let AdditionalMembers = [{
-    StringRef CPU;
-    std::vector<std::string> Features;
-    bool Parsed = false;
-    StringRef getCPU() {
-      if (!Parsed)
-        parse();
-      return CPU;
-    }
-    std::vector<std::string> &getFeatures() {
-      if (!Parsed)
-        parse();
-      return Features;
-    }
-    void parse() {
+    typedef std::pair<std::vector<std::string>, StringRef> ParsedTargetAttr;
+    ParsedTargetAttr parse() const {
+      ParsedTargetAttr Ret;
       SmallVector<StringRef, 1> AttrFeatures;
       getFeaturesStr().split(AttrFeatures, ",");
 
@@ -1430,13 +1409,13 @@ def Target : InheritableAttr {
 
         // While we're here iterating check for a different target cpu.
         if (Feature.startswith("arch="))
-          CPU = Feature.split("=").second.trim();
+          Ret.second = Feature.split("=").second.trim();
         else if (Feature.startswith("no-"))
-          Features.push_back("-" + Feature.split("-").second.str());
+          Ret.first.push_back("-" + Feature.split("-").second.str());
         else
-          Features.push_back("+" + Feature.str());
+          Ret.first.push_back("+" + Feature.str());
       }
-      Parsed = true;
+      return Ret;
     }
   }];
 }
@@ -1642,8 +1621,8 @@ def Capability : InheritableAttr {
   let Spellings = [GNU<"capability">, CXX11<"clang", "capability">,
                    GNU<"shared_capability">,
                    CXX11<"clang", "shared_capability">];
-  let Subjects = SubjectList<[Struct, TypedefName], ErrorDiag,
-                             "ExpectedStructOrTypedef">;
+  let Subjects = SubjectList<[Record, TypedefName], ErrorDiag,
+                             "ExpectedStructOrUnionOrTypedef">;
   let Args = [StringArgument<"Name">];
   let Accessors = [Accessor<"isShared",
                     [GNU<"shared_capability">,

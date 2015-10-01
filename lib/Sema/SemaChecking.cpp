@@ -441,6 +441,9 @@ Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
   case Builtin::BI__sync_swap_8:
   case Builtin::BI__sync_swap_16:
     return SemaBuiltinAtomicOverloaded(TheCallResult);
+  case Builtin::BI__builtin_nontemporal_load:
+  case Builtin::BI__builtin_nontemporal_store:
+    return SemaBuiltinNontemporalOverloaded(TheCallResult);
 #define BUILTIN(ID, TYPE, ATTRS)
 #define ATOMIC_BUILTIN(ID, TYPE, ATTRS) \
   case Builtin::BI##ID: \
@@ -526,7 +529,7 @@ Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
 
   // Since the target specific builtins for each arch overlap, only check those
   // of the arch we are compiling for.
-  if (BuiltinID >= Builtin::FirstTSBuiltin) {
+  if (Context.BuiltinInfo.isTSBuiltin(BuiltinID)) {
     switch (Context.getTargetInfo().getTriple().getArch()) {
       case llvm::Triple::arm:
       case llvm::Triple::armeb:
@@ -1034,6 +1037,8 @@ bool Sema::CheckX86BuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
   default: return false;
   case X86::BI__builtin_cpu_supports:
     return SemaBuiltinCpuSupports(TheCall);
+  case X86::BI__builtin_ms_va_start:
+    return SemaBuiltinMSVAStart(TheCall);
   case X86::BI_mm_prefetch: i = 1; l = 0; u = 3; break;
   case X86::BI__builtin_ia32_sha1rnds4: i = 2, l = 0; u = 3; break;
   case X86::BI__builtin_ia32_vpermil2pd:
@@ -2210,6 +2215,78 @@ Sema::SemaBuiltinAtomicOverloaded(ExprResult TheCallResult) {
   return TheCallResult;
 }
 
+/// SemaBuiltinNontemporalOverloaded - We have a call to
+/// __builtin_nontemporal_store or __builtin_nontemporal_load, which is an
+/// overloaded function based on the pointer type of its last argument.
+///
+/// This function goes through and does final semantic checking for these
+/// builtins.
+ExprResult Sema::SemaBuiltinNontemporalOverloaded(ExprResult TheCallResult) {
+  CallExpr *TheCall = (CallExpr *)TheCallResult.get();
+  DeclRefExpr *DRE =
+      cast<DeclRefExpr>(TheCall->getCallee()->IgnoreParenCasts());
+  FunctionDecl *FDecl = cast<FunctionDecl>(DRE->getDecl());
+  unsigned BuiltinID = FDecl->getBuiltinID();
+  assert((BuiltinID == Builtin::BI__builtin_nontemporal_store ||
+          BuiltinID == Builtin::BI__builtin_nontemporal_load) &&
+         "Unexpected nontemporal load/store builtin!");
+  bool isStore = BuiltinID == Builtin::BI__builtin_nontemporal_store;
+  unsigned numArgs = isStore ? 2 : 1;
+
+  // Ensure that we have the proper number of arguments.
+  if (checkArgCount(*this, TheCall, numArgs))
+    return ExprError();
+
+  // Inspect the last argument of the nontemporal builtin.  This should always
+  // be a pointer type, from which we imply the type of the memory access.
+  // Because it is a pointer type, we don't have to worry about any implicit
+  // casts here.
+  Expr *PointerArg = TheCall->getArg(numArgs - 1);
+  ExprResult PointerArgResult =
+      DefaultFunctionArrayLvalueConversion(PointerArg);
+
+  if (PointerArgResult.isInvalid())
+    return ExprError();
+  PointerArg = PointerArgResult.get();
+  TheCall->setArg(numArgs - 1, PointerArg);
+
+  const PointerType *pointerType = PointerArg->getType()->getAs<PointerType>();
+  if (!pointerType) {
+    Diag(DRE->getLocStart(), diag::err_nontemporal_builtin_must_be_pointer)
+        << PointerArg->getType() << PointerArg->getSourceRange();
+    return ExprError();
+  }
+
+  QualType ValType = pointerType->getPointeeType();
+
+  // Strip any qualifiers off ValType.
+  ValType = ValType.getUnqualifiedType();
+  if (!ValType->isIntegerType() && !ValType->isAnyPointerType() &&
+      !ValType->isBlockPointerType() && !ValType->isFloatingType() &&
+      !ValType->isVectorType()) {
+    Diag(DRE->getLocStart(),
+         diag::err_nontemporal_builtin_must_be_pointer_intfltptr_or_vector)
+        << PointerArg->getType() << PointerArg->getSourceRange();
+    return ExprError();
+  }
+
+  if (!isStore) {
+    TheCall->setType(ValType);
+    return TheCallResult;
+  }
+
+  ExprResult ValArg = TheCall->getArg(0);
+  InitializedEntity Entity = InitializedEntity::InitializeParameter(
+      Context, ValType, /*consume*/ false);
+  ValArg = PerformCopyInitialization(Entity, SourceLocation(), ValArg);
+  if (ValArg.isInvalid())
+    return ExprError();
+
+  TheCall->setArg(0, ValArg.get());
+  TheCall->setType(Context.VoidTy);
+  return TheCallResult;
+}
+
 /// CheckObjCString - Checks that the argument to the builtin
 /// CFString constructor is correct
 /// Note: It might also make sense to do the UTF-16 conversion here (would
@@ -2242,9 +2319,10 @@ bool Sema::CheckObjCString(Expr *Arg) {
   return false;
 }
 
-/// SemaBuiltinVAStart - Check the arguments to __builtin_va_start for validity.
-/// Emit an error and return true on failure, return false on success.
-bool Sema::SemaBuiltinVAStart(CallExpr *TheCall) {
+/// Check the arguments to '__builtin_va_start' or '__builtin_ms_va_start'
+/// for validity.  Emit an error and return true on failure; return false
+/// on success.
+bool Sema::SemaBuiltinVAStartImpl(CallExpr *TheCall) {
   Expr *Fn = TheCall->getCallee();
   if (TheCall->getNumArgs() > 2) {
     Diag(TheCall->getArg(2)->getLocStart(),
@@ -2320,6 +2398,48 @@ bool Sema::SemaBuiltinVAStart(CallExpr *TheCall) {
 
   TheCall->setType(Context.VoidTy);
   return false;
+}
+
+/// Check the arguments to '__builtin_va_start' for validity, and that
+/// it was called from a function of the native ABI.
+/// Emit an error and return true on failure; return false on success.
+bool Sema::SemaBuiltinVAStart(CallExpr *TheCall) {
+  // On x86-64 Unix, don't allow this in Win64 ABI functions.
+  // On x64 Windows, don't allow this in System V ABI functions.
+  // (Yes, that means there's no corresponding way to support variadic
+  // System V ABI functions on Windows.)
+  if (Context.getTargetInfo().getTriple().getArch() == llvm::Triple::x86_64) {
+    unsigned OS = Context.getTargetInfo().getTriple().getOS();
+    clang::CallingConv CC = CC_C;
+    if (const FunctionDecl *FD = getCurFunctionDecl())
+      CC = FD->getType()->getAs<FunctionType>()->getCallConv();
+    if ((OS == llvm::Triple::Win32 && CC == CC_X86_64SysV) ||
+        (OS != llvm::Triple::Win32 && CC == CC_X86_64Win64))
+      return Diag(TheCall->getCallee()->getLocStart(),
+                  diag::err_va_start_used_in_wrong_abi_function)
+             << (OS != llvm::Triple::Win32);
+  }
+  return SemaBuiltinVAStartImpl(TheCall);
+}
+
+/// Check the arguments to '__builtin_ms_va_start' for validity, and that
+/// it was called from a Win64 ABI function.
+/// Emit an error and return true on failure; return false on success.
+bool Sema::SemaBuiltinMSVAStart(CallExpr *TheCall) {
+  // This only makes sense for x86-64.
+  const llvm::Triple &TT = Context.getTargetInfo().getTriple();
+  Expr *Callee = TheCall->getCallee();
+  if (TT.getArch() != llvm::Triple::x86_64)
+    return Diag(Callee->getLocStart(), diag::err_x86_builtin_32_bit_tgt);
+  // Don't allow this in System V ABI functions.
+  clang::CallingConv CC = CC_C;
+  if (const FunctionDecl *FD = getCurFunctionDecl())
+    CC = FD->getType()->getAs<FunctionType>()->getCallConv();
+  if (CC == CC_X86_64SysV ||
+      (TT.getOS() != llvm::Triple::Win32 && CC != CC_X86_64Win64))
+    return Diag(Callee->getLocStart(),
+                diag::err_ms_va_start_used_in_sysv_function);
+  return SemaBuiltinVAStartImpl(TheCall);
 }
 
 bool Sema::SemaBuiltinVAStartARM(CallExpr *Call) {

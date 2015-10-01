@@ -1802,8 +1802,8 @@ namespace Bitfields {
     unsigned u : 5;
     int n : 5;
     bool b2 : 3;
-    unsigned u2 : 74; // expected-warning {{exceeds the size of its type}}
-    int n2 : 81; // expected-warning {{exceeds the size of its type}}
+    unsigned u2 : 74; // expected-warning {{exceeds the width of its type}}
+    int n2 : 81; // expected-warning {{exceeds the width of its type}}
   };
 
   constexpr A a = { false, 33, 31, false, 0xffffffff, 0x7fffffff }; // expected-warning 2{{truncation}}

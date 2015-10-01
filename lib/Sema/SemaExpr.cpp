@@ -677,6 +677,10 @@ ExprResult Sema::DefaultLvalueConversion(Expr *E) {
   if (T.hasQualifiers())
     T = T.getUnqualifiedType();
 
+  if (T->isMemberPointerType() &&
+      Context.getTargetInfo().getCXXABI().isMicrosoft())
+    RequireCompleteType(E->getExprLoc(), T, 0);
+
   UpdateMarkingForLValueToRValue(E);
   
   // Loading a __weak object implicitly retains the value, so we need a cleanup to 
@@ -3983,28 +3987,6 @@ Sema::ActOnArraySubscriptExpr(Scope *S, Expr *base, SourceLocation lbLoc,
   return CreateBuiltinArraySubscriptExpr(base, lbLoc, idx, rbLoc);
 }
 
-static QualType getNonOMPArraySectionType(Expr *Base) {
-  unsigned ArraySectionCount = 0;
-  while (auto *OASE = dyn_cast<OMPArraySectionExpr>(Base->IgnoreParens())) {
-    Base = OASE->getBase();
-    ++ArraySectionCount;
-  }
-  auto OriginalTy = Base->getType();
-  if (auto *DRE = dyn_cast<DeclRefExpr>(Base))
-    if (auto *PVD = dyn_cast<ParmVarDecl>(DRE->getDecl()))
-      OriginalTy = PVD->getOriginalType().getNonReferenceType();
-
-  for (unsigned Cnt = 0; Cnt < ArraySectionCount; ++Cnt) {
-    if (OriginalTy->isAnyPointerType())
-      OriginalTy = OriginalTy->getPointeeType();
-    else {
-      assert (OriginalTy->isArrayType());
-      OriginalTy = OriginalTy->castAsArrayTypeUnsafe()->getElementType();
-    }
-  }
-  return OriginalTy;
-}
-
 ExprResult Sema::ActOnOMPArraySectionExpr(Expr *Base, SourceLocation LBLoc,
                                           Expr *LowerBound,
                                           SourceLocation ColonLoc, Expr *Length,
@@ -4041,7 +4023,7 @@ ExprResult Sema::ActOnOMPArraySectionExpr(Expr *Base, SourceLocation LBLoc,
   }
 
   // Perform default conversions.
-  QualType OriginalTy = getNonOMPArraySectionType(Base);
+  QualType OriginalTy = OMPArraySectionExpr::getBaseOriginalType(Base);
   QualType ResultTy;
   if (OriginalTy->isAnyPointerType()) {
     ResultTy = OriginalTy->getPointeeType();
@@ -5558,6 +5540,14 @@ static bool breakDownVectorType(QualType type, uint64_t &len,
 /// vector nor a real type.
 bool Sema::areLaxCompatibleVectorTypes(QualType srcTy, QualType destTy) {
   assert(destTy->isVectorType() || srcTy->isVectorType());
+  
+  // Disallow lax conversions between scalars and ExtVectors (these
+  // conversions are allowed for other vector types because common headers
+  // depend on them).  Most scalar OP ExtVector cases are handled by the
+  // splat path anyway, which does what we want (convert, not bitcast).
+  // What this rules out for ExtVectors is crazy things like char4*float.
+  if (srcTy->isScalarType() && destTy->isExtVectorType()) return false;
+  if (destTy->isScalarType() && srcTy->isExtVectorType()) return false;
 
   uint64_t srcLen, destLen;
   QualType srcElt, destElt;
@@ -7764,7 +7754,7 @@ static bool checkArithmeticBinOpPointerOperands(Sema &S, SourceLocation Loc,
   if (isRHSPointer) RHSPointeeTy = RHSExpr->getType()->getPointeeType();
 
   // if both are pointers check if operation is valid wrt address spaces
-  if (isLHSPointer && isRHSPointer) {
+  if (S.getLangOpts().OpenCL && isLHSPointer && isRHSPointer) {
     const PointerType *lhsPtr = LHSExpr->getType()->getAs<PointerType>();
     const PointerType *rhsPtr = RHSExpr->getType()->getAs<PointerType>();
     if (!lhsPtr->isAddressSpaceOverlapping(*rhsPtr)) {
@@ -8793,12 +8783,14 @@ QualType Sema::CheckCompareOperands(ExprResult &LHS, ExprResult &RHS,
       diagnoseDistinctPointerComparison(*this, Loc, LHS, RHS, /*isError*/false);
     }
     if (LCanPointeeTy != RCanPointeeTy) {
-      const PointerType *lhsPtr = LHSType->getAs<PointerType>();
-      if (!lhsPtr->isAddressSpaceOverlapping(*RHSType->getAs<PointerType>())) {
-        Diag(Loc,
-             diag::err_typecheck_op_on_nonoverlapping_address_space_pointers)
-            << LHSType << RHSType << 0 /* comparison */
-            << LHS.get()->getSourceRange() << RHS.get()->getSourceRange();
+      if (getLangOpts().OpenCL) {
+        const PointerType *LHSPtr = LHSType->getAs<PointerType>();
+        if (!LHSPtr->isAddressSpaceOverlapping(*RHSType->getAs<PointerType>())) {
+          Diag(Loc,
+               diag::err_typecheck_op_on_nonoverlapping_address_space_pointers)
+              << LHSType << RHSType << 0 /* comparison */
+              << LHS.get()->getSourceRange() << RHS.get()->getSourceRange();
+        }
       }
       unsigned AddrSpaceL = LCanPointeeTy.getAddressSpace();
       unsigned AddrSpaceR = RCanPointeeTy.getAddressSpace();
@@ -10286,6 +10278,20 @@ ExprResult Sema::CreateBuiltinBinOp(SourceLocation OpLoc,
       return ExprError();
   }
 
+  if (getLangOpts().OpenCL) {
+    // OpenCLC v2.0 s6.13.11.1 allows atomic variables to be initialized by
+    // the ATOMIC_VAR_INIT macro.
+    if (LHSExpr->getType()->isAtomicType() ||
+        RHSExpr->getType()->isAtomicType()) {
+      SourceRange SR(LHSExpr->getLocStart(), RHSExpr->getLocEnd());
+      if (BO_Assign == Opc)
+        Diag(OpLoc, diag::err_atomic_init_constant) << SR;
+      else
+        ResultTy = InvalidOperands(OpLoc, LHS, RHS);
+      return ExprError();
+    }
+  }
+
   switch (Opc) {
   case BO_Assign:
     ResultTy = CheckAssignmentOperands(LHS.get(), RHS, OpLoc, QualType());
@@ -10758,6 +10764,14 @@ ExprResult Sema::CreateBuiltinUnaryOp(SourceLocation OpLoc,
   ExprValueKind VK = VK_RValue;
   ExprObjectKind OK = OK_Ordinary;
   QualType resultType;
+  if (getLangOpts().OpenCL) {
+    // The only legal unary operation for atomics is '&'.
+    if (Opc != UO_AddrOf && InputExpr->getType()->isAtomicType()) {
+      return ExprError(Diag(OpLoc, diag::err_typecheck_unary_expr)
+                       << InputExpr->getType()
+                       << Input.get()->getSourceRange());
+    }
+  }
   switch (Opc) {
   case UO_PreInc:
   case UO_PreDec:
@@ -11659,43 +11673,57 @@ ExprResult Sema::BuildVAArgExpr(SourceLocation BuiltinLoc,
                                 Expr *E, TypeSourceInfo *TInfo,
                                 SourceLocation RPLoc) {
   Expr *OrigExpr = E;
+  bool IsMS = false;
+
+  // It might be a __builtin_ms_va_list. (But don't ever mark a va_arg()
+  // as Microsoft ABI on an actual Microsoft platform, where
+  // __builtin_ms_va_list and __builtin_va_list are the same.)
+  if (!E->isTypeDependent() && Context.getTargetInfo().hasBuiltinMSVaList() &&
+      Context.getTargetInfo().getBuiltinVaListKind() != TargetInfo::CharPtrBuiltinVaList) {
+    QualType MSVaListType = Context.getBuiltinMSVaListType();
+    if (Context.hasSameType(MSVaListType, E->getType())) {
+      if (CheckForModifiableLvalue(E, BuiltinLoc, *this))
+        return ExprError();
+      IsMS = true;
+    }
+  }
 
   // Get the va_list type
   QualType VaListType = Context.getBuiltinVaListType();
-  if (VaListType->isArrayType()) {
-    // Deal with implicit array decay; for example, on x86-64,
-    // va_list is an array, but it's supposed to decay to
-    // a pointer for va_arg.
-    VaListType = Context.getArrayDecayedType(VaListType);
-    // Make sure the input expression also decays appropriately.
-    ExprResult Result = UsualUnaryConversions(E);
-    if (Result.isInvalid())
-      return ExprError();
-    E = Result.get();
-  } else if (VaListType->isRecordType() && getLangOpts().CPlusPlus) {
-    // If va_list is a record type and we are compiling in C++ mode,
-    // check the argument using reference binding.
-    InitializedEntity Entity
-      = InitializedEntity::InitializeParameter(Context,
-          Context.getLValueReferenceType(VaListType), false);
-    ExprResult Init = PerformCopyInitialization(Entity, SourceLocation(), E);
-    if (Init.isInvalid())
-      return ExprError();
-    E = Init.getAs<Expr>();
-  } else {
-    // Otherwise, the va_list argument must be an l-value because
-    // it is modified by va_arg.
-    if (!E->isTypeDependent() &&
-        CheckForModifiableLvalue(E, BuiltinLoc, *this))
-      return ExprError();
+  if (!IsMS) {
+    if (VaListType->isArrayType()) {
+      // Deal with implicit array decay; for example, on x86-64,
+      // va_list is an array, but it's supposed to decay to
+      // a pointer for va_arg.
+      VaListType = Context.getArrayDecayedType(VaListType);
+      // Make sure the input expression also decays appropriately.
+      ExprResult Result = UsualUnaryConversions(E);
+      if (Result.isInvalid())
+        return ExprError();
+      E = Result.get();
+    } else if (VaListType->isRecordType() && getLangOpts().CPlusPlus) {
+      // If va_list is a record type and we are compiling in C++ mode,
+      // check the argument using reference binding.
+      InitializedEntity Entity = InitializedEntity::InitializeParameter(
+          Context, Context.getLValueReferenceType(VaListType), false);
+      ExprResult Init = PerformCopyInitialization(Entity, SourceLocation(), E);
+      if (Init.isInvalid())
+        return ExprError();
+      E = Init.getAs<Expr>();
+    } else {
+      // Otherwise, the va_list argument must be an l-value because
+      // it is modified by va_arg.
+      if (!E->isTypeDependent() &&
+          CheckForModifiableLvalue(E, BuiltinLoc, *this))
+        return ExprError();
+    }
   }
 
-  if (!E->isTypeDependent() &&
-      !Context.hasSameType(VaListType, E->getType())) {
+  if (!IsMS && !E->isTypeDependent() &&
+      !Context.hasSameType(VaListType, E->getType()))
     return ExprError(Diag(E->getLocStart(),
                          diag::err_first_argument_to_va_arg_not_of_type_va_list)
       << OrigExpr->getType() << E->getSourceRange());
-  }
 
   if (!TInfo->getType()->isDependentType()) {
     if (RequireCompleteType(TInfo->getTypeLoc().getBeginLoc(), TInfo->getType(),
@@ -11737,7 +11765,7 @@ ExprResult Sema::BuildVAArgExpr(SourceLocation BuiltinLoc,
   }
 
   QualType T = TInfo->getType().getNonLValueExprType(Context);
-  return new (Context) VAArgExpr(BuiltinLoc, E, TInfo, RPLoc, T);
+  return new (Context) VAArgExpr(BuiltinLoc, E, TInfo, RPLoc, T, IsMS);
 }
 
 ExprResult Sema::ActOnGNUNullExpr(SourceLocation TokenLoc) {
@@ -13000,21 +13028,6 @@ bool Sema::tryCaptureVariable(
     if (isVariableAlreadyCapturedInScopeInfo(CSI, Var, Nested, CaptureType, 
                                              DeclRefType)) 
       break;
-    if (getLangOpts().OpenMP) {
-      if (auto *RSI = dyn_cast<CapturedRegionScopeInfo>(CSI)) {
-        // OpenMP private variables should not be captured in outer scope, so
-        // just break here.
-        if (RSI->CapRegionKind == CR_OpenMP) {
-          if (isOpenMPPrivateVar(Var, OpenMPLevel)) {
-            Nested = true;
-            DeclRefType = DeclRefType.getUnqualifiedType();
-            CaptureType = Context.getLValueReferenceType(DeclRefType);
-            break;
-          }
-          ++OpenMPLevel;
-        }
-      }
-    }
     // If we are instantiating a generic lambda call operator body, 
     // we do not want to capture new variables.  What was captured
     // during either a lambdas transformation or initial parsing
@@ -13160,6 +13173,21 @@ bool Sema::tryCaptureVariable(
       } while (!QTy.isNull() && QTy->isVariablyModifiedType());
     }
 
+    if (getLangOpts().OpenMP) {
+      if (auto *RSI = dyn_cast<CapturedRegionScopeInfo>(CSI)) {
+        // OpenMP private variables should not be captured in outer scope, so
+        // just break here.
+        if (RSI->CapRegionKind == CR_OpenMP) {
+          if (isOpenMPPrivateVar(Var, OpenMPLevel)) {
+            Nested = true;
+            DeclRefType = DeclRefType.getUnqualifiedType();
+            CaptureType = Context.getLValueReferenceType(DeclRefType);
+            break;
+          }
+          ++OpenMPLevel;
+        }
+      }
+    }
     if (CSI->ImpCaptureStyle == CapturingScopeInfo::ImpCap_None && !Explicit) {
       // No capture-default, and this is not an explicit capture 
       // so cannot capture this variable.  

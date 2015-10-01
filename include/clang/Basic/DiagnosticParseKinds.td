@@ -987,8 +987,6 @@ def err_omp_expected_punc : Error<
   "expected ',' or ')' in '%0' %select{clause|directive}1">;
 def err_omp_unexpected_clause : Error<
   "unexpected OpenMP clause '%0' in directive '#pragma omp %1'">;
-def err_omp_more_one_clause : Error<
-  "directive '#pragma omp %0' cannot contain more than one '%1' clause">;
 def err_omp_immediate_directive : Error<
   "'#pragma omp %0' cannot be an immediate substatement">;
 def err_omp_expected_identifier_for_critical : Error<
@@ -1015,6 +1013,7 @@ def err_module_expected_ident : Error<
   "expected a module name after module import">;
 def err_module_expected_semi : Error<
   "expected ';' after module name">;
+def err_missing_before_module_end : Error<"expected %0 at end of module">;
 }
 
 let CategoryName = "Generics Issue" in {

@@ -756,6 +756,9 @@ TEST_F(FormatTest, ShortCaseLabels) {
                "case 7:\n"
                "  // comment\n"
                "  return;\n"
+               "case 8:\n"
+               "  x = 8; // comment\n"
+               "  break;\n"
                "default: y = 1; break;\n"
                "}",
                Style);
@@ -8537,6 +8540,10 @@ TEST_F(FormatTest, AlignConsecutiveAssignments) {
                "int oneTwoThree = 123;\n"
                "int oneTwo      = 12;",
                Alignment);
+  verifyFormat("int oneTwoThree = 123;\n"
+               "int oneTwo      = 12;\n"
+               "method();\n",
+               Alignment);
   verifyFormat("int oneTwoThree = 123; // comment\n"
                "int oneTwo      = 12;  // comment",
                Alignment);
@@ -9256,6 +9263,20 @@ TEST_F(FormatTest, GetsCorrectBasedOnStyle) {
 
 #define CHECK_PARSE_BOOL(FIELD) CHECK_PARSE_BOOL_FIELD(FIELD, #FIELD)
 
+#define CHECK_PARSE_NESTED_BOOL_FIELD(STRUCT, FIELD, CONFIG_NAME)              \
+  Style.STRUCT.FIELD = false;                                                  \
+  EXPECT_EQ(0,                                                                 \
+            parseConfiguration(#STRUCT ":\n  " CONFIG_NAME ": true", &Style)   \
+                .value());                                                     \
+  EXPECT_TRUE(Style.STRUCT.FIELD);                                             \
+  EXPECT_EQ(0,                                                                 \
+            parseConfiguration(#STRUCT ":\n  " CONFIG_NAME ": false", &Style)  \
+                .value());                                                     \
+  EXPECT_FALSE(Style.STRUCT.FIELD);
+
+#define CHECK_PARSE_NESTED_BOOL(STRUCT, FIELD)                                 \
+  CHECK_PARSE_NESTED_BOOL_FIELD(STRUCT, FIELD, #FIELD)
+
 #define CHECK_PARSE(TEXT, FIELD, VALUE)                                        \
   EXPECT_NE(VALUE, Style.FIELD);                                               \
   EXPECT_EQ(0, parseConfiguration(TEXT, &Style).value());                      \
@@ -9296,6 +9317,18 @@ TEST_F(FormatTest, ParsesConfigurationBools) {
   CHECK_PARSE_BOOL(SpacesInCStyleCastParentheses);
   CHECK_PARSE_BOOL(SpaceAfterCStyleCast);
   CHECK_PARSE_BOOL(SpaceBeforeAssignmentOperators);
+
+  CHECK_PARSE_NESTED_BOOL(BraceWrapping, AfterClass);
+  CHECK_PARSE_NESTED_BOOL(BraceWrapping, AfterControlStatement);
+  CHECK_PARSE_NESTED_BOOL(BraceWrapping, AfterEnum);
+  CHECK_PARSE_NESTED_BOOL(BraceWrapping, AfterFunction);
+  CHECK_PARSE_NESTED_BOOL(BraceWrapping, AfterNamespace);
+  CHECK_PARSE_NESTED_BOOL(BraceWrapping, AfterObjCDeclaration);
+  CHECK_PARSE_NESTED_BOOL(BraceWrapping, AfterStruct);
+  CHECK_PARSE_NESTED_BOOL(BraceWrapping, AfterUnion);
+  CHECK_PARSE_NESTED_BOOL(BraceWrapping, BeforeCatch);
+  CHECK_PARSE_NESTED_BOOL(BraceWrapping, BeforeElse);
+  CHECK_PARSE_NESTED_BOOL(BraceWrapping, IndentBraces);
 }
 
 #undef CHECK_PARSE_BOOL
@@ -9407,7 +9440,10 @@ TEST_F(FormatTest, ParsesConfiguration) {
   CHECK_PARSE("BreakBeforeBraces: Allman", BreakBeforeBraces,
               FormatStyle::BS_Allman);
   CHECK_PARSE("BreakBeforeBraces: GNU", BreakBeforeBraces, FormatStyle::BS_GNU);
-  CHECK_PARSE("BreakBeforeBraces: WebKit", BreakBeforeBraces, FormatStyle::BS_WebKit);
+  CHECK_PARSE("BreakBeforeBraces: WebKit", BreakBeforeBraces,
+              FormatStyle::BS_WebKit);
+  CHECK_PARSE("BreakBeforeBraces: Custom", BreakBeforeBraces,
+              FormatStyle::BS_Custom);
 
   Style.AlwaysBreakAfterDefinitionReturnType = FormatStyle::DRTBS_All;
   CHECK_PARSE("AlwaysBreakAfterDefinitionReturnType: None",

@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CodeGenModule.h"
+#include "CGBlocks.h"
 #include "CGCUDARuntime.h"
 #include "CGCXXABI.h"
 #include "CGCall.h"
@@ -66,6 +67,7 @@ static CGCXXABI *createCXXABI(CodeGenModule &CGM) {
   case TargetCXXABI::iOS64:
   case TargetCXXABI::GenericMIPS:
   case TargetCXXABI::GenericItanium:
+  case TargetCXXABI::WebAssembly:
     return CreateItaniumCXXABI(CGM);
   case TargetCXXABI::Microsoft:
     return CreateMicrosoftCXXABI(CGM);
@@ -105,7 +107,9 @@ CodeGenModule::CodeGenModule(ASTContext &C, const HeaderSearchOptions &HSO,
   DoubleTy = llvm::Type::getDoubleTy(LLVMContext);
   PointerWidthInBits = C.getTargetInfo().getPointerWidth(0);
   PointerAlignInBytes =
-  C.toCharUnitsFromBits(C.getTargetInfo().getPointerAlign(0)).getQuantity();
+    C.toCharUnitsFromBits(C.getTargetInfo().getPointerAlign(0)).getQuantity();
+  IntAlignInBytes =
+    C.toCharUnitsFromBits(C.getTargetInfo().getIntAlign()).getQuantity();
   IntTy = llvm::IntegerType::get(LLVMContext, C.getTargetInfo().getIntWidth());
   IntPtrTy = llvm::IntegerType::get(LLVMContext, PointerWidthInBits);
   Int8PtrTy = Int8Ty->getPointerTo(0);
@@ -394,6 +398,22 @@ void CodeGenModule::Release() {
     // Indicate that we want CodeView in the metadata.
     getModule().addModuleFlag(llvm::Module::Warning, "CodeView", 1);
   }
+  if (CodeGenOpts.OptimizationLevel > 0 && CodeGenOpts.StrictVTablePointers) {
+    // We don't support LTO with 2 with different StrictVTablePointers
+    // FIXME: we could support it by stripping all the information introduced
+    // by StrictVTablePointers.
+
+    getModule().addModuleFlag(llvm::Module::Error, "StrictVTablePointers",1);
+
+    llvm::Metadata *Ops[2] = {
+              llvm::MDString::get(VMContext, "StrictVTablePointers"),
+              llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+                  llvm::Type::getInt32Ty(VMContext), 1))};
+
+    getModule().addModuleFlag(llvm::Module::Require,
+                              "StrictVTablePointersRequirement",
+                              llvm::MDNode::get(VMContext, Ops));
+  }
   if (DebugInfo)
     // We support a single version in the linked module. The LLVM
     // parser will drop debug info with a different version number
@@ -487,14 +507,24 @@ llvm::MDNode *CodeGenModule::getTBAAStructTagInfo(QualType BaseTy,
 /// and struct-path aware TBAA, the tag has the same format:
 /// base type, access type and offset.
 /// When ConvertTypeToTag is true, we create a tag based on the scalar type.
-void CodeGenModule::DecorateInstruction(llvm::Instruction *Inst,
-                                        llvm::MDNode *TBAAInfo,
-                                        bool ConvertTypeToTag) {
+void CodeGenModule::DecorateInstructionWithTBAA(llvm::Instruction *Inst,
+                                                llvm::MDNode *TBAAInfo,
+                                                bool ConvertTypeToTag) {
   if (ConvertTypeToTag && TBAA)
     Inst->setMetadata(llvm::LLVMContext::MD_tbaa,
                       TBAA->getTBAAScalarTagInfo(TBAAInfo));
   else
     Inst->setMetadata(llvm::LLVMContext::MD_tbaa, TBAAInfo);
+}
+
+void CodeGenModule::DecorateInstructionWithInvariantGroup(
+    llvm::Instruction *I, const CXXRecordDecl *RD) {
+  llvm::Metadata *MD = CreateMetadataIdentifierForType(QualType(RD->getTypeForDecl(), 0));
+  auto *MetaDataNode = dyn_cast<llvm::MDNode>(MD);
+  // Check if we have to wrap MDString in MDNode.
+  if (!MetaDataNode)
+    MetaDataNode = llvm::MDNode::get(getLLVMContext(), MD);
+  I->setMetadata(llvm::LLVMContext::MD_invariant_group, MetaDataNode);
 }
 
 void CodeGenModule::Error(SourceLocation loc, StringRef message) {
@@ -797,10 +827,8 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
     F->addFnAttr(llvm::Attribute::NoInline);
 
     // OptimizeNone wins over OptimizeForSize, MinSize, AlwaysInline.
-    assert(!F->hasFnAttribute(llvm::Attribute::OptimizeForSize) &&
-           "OptimizeNone and OptimizeForSize on same function!");
-    assert(!F->hasFnAttribute(llvm::Attribute::MinSize) &&
-           "OptimizeNone and MinSize on same function!");
+    F->removeFnAttr(llvm::Attribute::OptimizeForSize);
+    F->removeFnAttr(llvm::Attribute::MinSize);
     assert(!F->hasFnAttribute(llvm::Attribute::AlwaysInline) &&
            "OptimizeNone and AlwaysInline on same function!");
 
@@ -819,9 +847,14 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
   if (alignment)
     F->setAlignment(alignment);
 
-  // C++ ABI requires 2-byte alignment for member functions.
-  if (F->getAlignment() < 2 && isa<CXXMethodDecl>(D))
-    F->setAlignment(2);
+  // Some C++ ABIs require 2-byte alignment for member functions, in order to
+  // reserve a bit for differentiating between virtual and non-virtual member
+  // functions. If the current target's C++ ABI requires this and this is a
+  // member function, set its alignment accordingly.
+  if (getTarget().getCXXABI().areMemberFunctionsAligned()) {
+    if (F->getAlignment() < 2 && isa<CXXMethodDecl>(D))
+      F->setAlignment(2);
+  }
 }
 
 void CodeGenModule::SetCommonAttributes(const Decl *D,
@@ -932,6 +965,20 @@ void CodeGenModule::SetFunctionAttributes(GlobalDecl GD, llvm::Function *F,
   if (FD->isReplaceableGlobalAllocationFunction())
     F->addAttribute(llvm::AttributeSet::FunctionIndex,
                     llvm::Attribute::NoBuiltin);
+
+  // If we are checking indirect calls and this is not a non-static member
+  // function, emit a bit set entry for the function type.
+  if (LangOpts.Sanitize.has(SanitizerKind::CFIICall) &&
+      !(isa<CXXMethodDecl>(FD) && !cast<CXXMethodDecl>(FD)->isStatic())) {
+    llvm::NamedMDNode *BitsetsMD =
+        getModule().getOrInsertNamedMetadata("llvm.bitsets");
+
+    llvm::Metadata *BitsetOps[] = {
+        CreateMetadataIdentifierForType(FD->getType()),
+        llvm::ConstantAsMetadata::get(F),
+        llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(Int64Ty, 0))};
+    BitsetsMD->addOperand(llvm::MDTuple::get(getLLVMContext(), BitsetOps));
+  }
 }
 
 void CodeGenModule::addUsedGlobal(llvm::GlobalValue *GV) {
@@ -1297,7 +1344,7 @@ bool CodeGenModule::MayBeEmittedEagerly(const ValueDecl *Global) {
   return true;
 }
 
-llvm::Constant *CodeGenModule::GetAddrOfUuidDescriptor(
+ConstantAddress CodeGenModule::GetAddrOfUuidDescriptor(
     const CXXUuidofExpr* E) {
   // Sema has verified that IIDSource has a __declspec(uuid()), and that its
   // well-formed.
@@ -1305,9 +1352,12 @@ llvm::Constant *CodeGenModule::GetAddrOfUuidDescriptor(
   std::string Name = "_GUID_" + Uuid.lower();
   std::replace(Name.begin(), Name.end(), '-', '_');
 
+  // Contains a 32-bit field.
+  CharUnits Alignment = CharUnits::fromQuantity(4);
+
   // Look for an existing global.
   if (llvm::GlobalVariable *GV = getModule().getNamedGlobal(Name))
-    return GV;
+    return ConstantAddress(GV, Alignment);
 
   llvm::Constant *Init = EmitUuidofInitializer(Uuid);
   assert(Init && "failed to initialize as constant");
@@ -1317,20 +1367,22 @@ llvm::Constant *CodeGenModule::GetAddrOfUuidDescriptor(
       /*isConstant=*/true, llvm::GlobalValue::LinkOnceODRLinkage, Init, Name);
   if (supportsCOMDAT())
     GV->setComdat(TheModule.getOrInsertComdat(GV->getName()));
-  return GV;
+  return ConstantAddress(GV, Alignment);
 }
 
-llvm::Constant *CodeGenModule::GetWeakRefReference(const ValueDecl *VD) {
+ConstantAddress CodeGenModule::GetWeakRefReference(const ValueDecl *VD) {
   const AliasAttr *AA = VD->getAttr<AliasAttr>();
   assert(AA && "No alias?");
 
+  CharUnits Alignment = getContext().getDeclAlign(VD);
   llvm::Type *DeclTy = getTypes().ConvertTypeForMem(VD->getType());
 
   // See if there is already something with the target's name in the module.
   llvm::GlobalValue *Entry = GetGlobalValue(AA->getAliasee());
   if (Entry) {
     unsigned AS = getContext().getTargetAddressSpace(VD->getType());
-    return llvm::ConstantExpr::getBitCast(Entry, DeclTy->getPointerTo(AS));
+    auto Ptr = llvm::ConstantExpr::getBitCast(Entry, DeclTy->getPointerTo(AS));
+    return ConstantAddress(Ptr, Alignment);
   }
 
   llvm::Constant *Aliasee;
@@ -1347,7 +1399,7 @@ llvm::Constant *CodeGenModule::GetWeakRefReference(const ValueDecl *VD) {
   F->setLinkage(llvm::Function::ExternalWeakLinkage);
   WeakRefReferences.insert(F);
 
-  return Aliasee;
+  return ConstantAddress(Aliasee, Alignment);
 }
 
 void CodeGenModule::EmitGlobal(GlobalDecl GD) {
@@ -2137,8 +2189,10 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D) {
   if (getLangOpts().CPlusPlus && getLangOpts().CUDAIsDevice
       && D->hasAttr<CUDASharedAttr>()) {
     if (InitExpr) {
-      Error(D->getLocation(),
-            "__shared__ variable cannot have an initialization.");
+      const auto *C = dyn_cast<CXXConstructExpr>(InitExpr);
+      if (C == nullptr || !C->getConstructor()->hasTrivialBody())
+        Error(D->getLocation(),
+              "__shared__ variable cannot have an initialization.");
     }
     Init = llvm::UndefValue::get(getTypes().ConvertType(ASTTy));
   } else if (!InitExpr) {
@@ -2607,6 +2661,11 @@ void CodeGenModule::EmitAliasDefinition(GlobalDecl GD) {
 
   StringRef MangledName = getMangledName(GD);
 
+  if (AA->getAliasee() == MangledName) {
+    Diags.Report(AA->getLocation(), diag::err_cyclic_alias);
+    return;
+  }
+
   // If there is a definition in the module, then it wins over the alias.
   // This is dubious, but allow it to be safe.  Just ignore the alias.
   llvm::GlobalValue *Entry = GetGlobalValue(MangledName);
@@ -2630,8 +2689,7 @@ void CodeGenModule::EmitAliasDefinition(GlobalDecl GD) {
 
   // Create the new alias itself, but don't set a name yet.
   auto *GA = llvm::GlobalAlias::create(
-      cast<llvm::PointerType>(Aliasee->getType()),
-      llvm::Function::ExternalLinkage, "", Aliasee, &getModule());
+      DeclTy, 0, llvm::Function::ExternalLinkage, "", Aliasee, &getModule());
 
   if (Entry) {
     if (GA->getAliasee() == Entry) {
@@ -2721,7 +2779,7 @@ GetConstantStringEntry(llvm::StringMap<llvm::GlobalVariable *> &Map,
   return *Map.insert(std::make_pair(String, nullptr)).first;
 }
 
-llvm::Constant *
+ConstantAddress
 CodeGenModule::GetAddrOfConstantCFString(const StringLiteral *Literal) {
   unsigned StringLength = 0;
   bool isUTF16 = false;
@@ -2731,7 +2789,7 @@ CodeGenModule::GetAddrOfConstantCFString(const StringLiteral *Literal) {
                                StringLength);
 
   if (auto *C = Entry.second)
-    return C;
+    return ConstantAddress(C, CharUnits::fromQuantity(C->getAlignment()));
 
   llvm::Constant *Zero = llvm::Constant::getNullValue(Int32Ty);
   llvm::Constant *Zeros[] = { Zero, Zero };
@@ -2767,7 +2825,7 @@ CodeGenModule::GetAddrOfConstantCFString(const StringLiteral *Literal) {
   // String pointer.
   llvm::Constant *C = nullptr;
   if (isUTF16) {
-    ArrayRef<uint16_t> Arr = llvm::makeArrayRef<uint16_t>(
+    auto Arr = llvm::makeArrayRef(
         reinterpret_cast<uint16_t *>(const_cast<char *>(Entry.first().data())),
         Entry.first().size() / 2);
     C = llvm::ConstantDataArray::get(VMContext, Arr);
@@ -2808,25 +2866,28 @@ CodeGenModule::GetAddrOfConstantCFString(const StringLiteral *Literal) {
   Ty = getTypes().ConvertType(getContext().LongTy);
   Fields[3] = llvm::ConstantInt::get(Ty, StringLength);
 
+  CharUnits Alignment = getPointerAlign();
+
   // The struct.
   C = llvm::ConstantStruct::get(STy, Fields);
   GV = new llvm::GlobalVariable(getModule(), C->getType(), true,
                                 llvm::GlobalVariable::PrivateLinkage, C,
                                 "_unnamed_cfstring_");
   GV->setSection("__DATA,__cfstring");
+  GV->setAlignment(Alignment.getQuantity());
   Entry.second = GV;
 
-  return GV;
+  return ConstantAddress(GV, Alignment);
 }
 
-llvm::GlobalVariable *
+ConstantAddress
 CodeGenModule::GetAddrOfConstantString(const StringLiteral *Literal) {
   unsigned StringLength = 0;
   llvm::StringMapEntry<llvm::GlobalVariable *> &Entry =
       GetConstantStringEntry(CFConstantStringMap, Literal, StringLength);
 
   if (auto *C = Entry.second)
-    return C;
+    return ConstantAddress(C, CharUnits::fromQuantity(C->getAlignment()));
   
   llvm::Constant *Zero = llvm::Constant::getNullValue(Int32Ty);
   llvm::Constant *Zeros[] = { Zero, Zero };
@@ -2919,10 +2980,12 @@ CodeGenModule::GetAddrOfConstantString(const StringLiteral *Literal) {
   Fields[2] = llvm::ConstantInt::get(Ty, StringLength);
   
   // The struct.
+  CharUnits Alignment = getPointerAlign();
   C = llvm::ConstantStruct::get(NSConstantStringType, Fields);
   GV = new llvm::GlobalVariable(getModule(), C->getType(), true,
                                 llvm::GlobalVariable::PrivateLinkage, C,
                                 "_unnamed_nsstring_");
+  GV->setAlignment(Alignment.getQuantity());
   const char *NSStringSection = "__OBJC,__cstring_object,regular,no_dead_strip";
   const char *NSStringNonFragileABISection =
       "__DATA,__objc_stringobj,regular,no_dead_strip";
@@ -2932,7 +2995,7 @@ CodeGenModule::GetAddrOfConstantString(const StringLiteral *Literal) {
                      : NSStringSection);
   Entry.second = GV;
 
-  return GV;
+  return ConstantAddress(GV, Alignment);
 }
 
 QualType CodeGenModule::getObjCFastEnumerationStateType() {
@@ -3011,7 +3074,7 @@ CodeGenModule::GetConstantArrayFromStringLiteral(const StringLiteral *E) {
 static llvm::GlobalVariable *
 GenerateStringLiteral(llvm::Constant *C, llvm::GlobalValue::LinkageTypes LT,
                       CodeGenModule &CGM, StringRef GlobalName,
-                      unsigned Alignment) {
+                      CharUnits Alignment) {
   // OpenCL v1.2 s6.5.3: a string literal is in the constant address space.
   unsigned AddrSpace = 0;
   if (CGM.getLangOpts().OpenCL)
@@ -3022,7 +3085,7 @@ GenerateStringLiteral(llvm::Constant *C, llvm::GlobalValue::LinkageTypes LT,
   auto *GV = new llvm::GlobalVariable(
       M, C->getType(), !CGM.getLangOpts().WritableStrings, LT, C, GlobalName,
       nullptr, llvm::GlobalVariable::NotThreadLocal, AddrSpace);
-  GV->setAlignment(Alignment);
+  GV->setAlignment(Alignment.getQuantity());
   GV->setUnnamedAddr(true);
   if (GV->isWeakForLinker()) {
     assert(CGM.supportsCOMDAT() && "Only COFF uses weak string literals");
@@ -3034,20 +3097,19 @@ GenerateStringLiteral(llvm::Constant *C, llvm::GlobalValue::LinkageTypes LT,
 
 /// GetAddrOfConstantStringFromLiteral - Return a pointer to a
 /// constant array for the given string literal.
-llvm::GlobalVariable *
+ConstantAddress
 CodeGenModule::GetAddrOfConstantStringFromLiteral(const StringLiteral *S,
                                                   StringRef Name) {
-  auto Alignment =
-      getContext().getAlignOfGlobalVarInChars(S->getType()).getQuantity();
+  CharUnits Alignment = getContext().getAlignOfGlobalVarInChars(S->getType());
 
   llvm::Constant *C = GetConstantArrayFromStringLiteral(S);
   llvm::GlobalVariable **Entry = nullptr;
   if (!LangOpts.WritableStrings) {
     Entry = &ConstantStringMap[C];
     if (auto GV = *Entry) {
-      if (Alignment > GV->getAlignment())
-        GV->setAlignment(Alignment);
-      return GV;
+      if (Alignment.getQuantity() > GV->getAlignment())
+        GV->setAlignment(Alignment.getQuantity());
+      return ConstantAddress(GV, Alignment);
     }
   }
 
@@ -3077,12 +3139,12 @@ CodeGenModule::GetAddrOfConstantStringFromLiteral(const StringLiteral *S,
 
   SanitizerMD->reportGlobalToASan(GV, S->getStrTokenLoc(0), "<string literal>",
                                   QualType());
-  return GV;
+  return ConstantAddress(GV, Alignment);
 }
 
 /// GetAddrOfConstantStringFromObjCEncode - Return a pointer to a constant
 /// array for the given ObjCEncodeExpr node.
-llvm::GlobalVariable *
+ConstantAddress
 CodeGenModule::GetAddrOfConstantStringFromObjCEncode(const ObjCEncodeExpr *E) {
   std::string Str;
   getContext().getObjCEncodingForType(E->getEncodedType(), Str);
@@ -3093,14 +3155,11 @@ CodeGenModule::GetAddrOfConstantStringFromObjCEncode(const ObjCEncodeExpr *E) {
 /// GetAddrOfConstantCString - Returns a pointer to a character array containing
 /// the literal and a terminating '\0' character.
 /// The result has pointer to array type.
-llvm::GlobalVariable *CodeGenModule::GetAddrOfConstantCString(
-    const std::string &Str, const char *GlobalName, unsigned Alignment) {
+ConstantAddress CodeGenModule::GetAddrOfConstantCString(
+    const std::string &Str, const char *GlobalName) {
   StringRef StrWithNull(Str.c_str(), Str.size() + 1);
-  if (Alignment == 0) {
-    Alignment = getContext()
-                    .getAlignOfGlobalVarInChars(getContext().CharTy)
-                    .getQuantity();
-  }
+  CharUnits Alignment =
+    getContext().getAlignOfGlobalVarInChars(getContext().CharTy);
 
   llvm::Constant *C =
       llvm::ConstantDataArray::getString(getLLVMContext(), StrWithNull, false);
@@ -3110,9 +3169,9 @@ llvm::GlobalVariable *CodeGenModule::GetAddrOfConstantCString(
   if (!LangOpts.WritableStrings) {
     Entry = &ConstantStringMap[C];
     if (auto GV = *Entry) {
-      if (Alignment > GV->getAlignment())
-        GV->setAlignment(Alignment);
-      return GV;
+      if (Alignment.getQuantity() > GV->getAlignment())
+        GV->setAlignment(Alignment.getQuantity());
+      return ConstantAddress(GV, Alignment);
     }
   }
 
@@ -3124,10 +3183,10 @@ llvm::GlobalVariable *CodeGenModule::GetAddrOfConstantCString(
                                   GlobalName, Alignment);
   if (Entry)
     *Entry = GV;
-  return GV;
+  return ConstantAddress(GV, Alignment);
 }
 
-llvm::Constant *CodeGenModule::GetAddrOfGlobalTemporary(
+ConstantAddress CodeGenModule::GetAddrOfGlobalTemporary(
     const MaterializeTemporaryExpr *E, const Expr *Init) {
   assert((E->getStorageDuration() == SD_Static ||
           E->getStorageDuration() == SD_Thread) && "not a global temporary");
@@ -3139,8 +3198,10 @@ llvm::Constant *CodeGenModule::GetAddrOfGlobalTemporary(
   if (Init == E->GetTemporaryExpr())
     MaterializedType = E->getType();
 
+  CharUnits Align = getContext().getTypeAlignInChars(MaterializedType);
+
   if (llvm::Constant *Slot = MaterializedGlobalTemporaryMap[E])
-    return Slot;
+    return ConstantAddress(Slot, Align);
 
   // FIXME: If an externally-visible declaration extends multiple temporaries,
   // we need to give each temporary the same name in every translation unit (and
@@ -3204,14 +3265,13 @@ llvm::Constant *CodeGenModule::GetAddrOfGlobalTemporary(
       /*InsertBefore=*/nullptr, llvm::GlobalVariable::NotThreadLocal,
       AddrSpace);
   setGlobalVisibility(GV, VD);
-  GV->setAlignment(
-      getContext().getTypeAlignInChars(MaterializedType).getQuantity());
+  GV->setAlignment(Align.getQuantity());
   if (supportsCOMDAT() && GV->isWeakForLinker())
     GV->setComdat(TheModule.getOrInsertComdat(GV->getName()));
   if (VD->getTLSKind())
     setTLSMode(GV, *VD);
   MaterializedGlobalTemporaryMap[E] = GV;
-  return GV;
+  return ConstantAddress(GV, Align);
 }
 
 /// EmitObjCPropertyImplementations - Emit information for synthesized
@@ -3665,7 +3725,7 @@ void CodeGenFunction::EmitDeclMetadata() {
 
   for (auto &I : LocalDeclMap) {
     const Decl *D = I.first;
-    llvm::Value *Addr = I.second;
+    llvm::Value *Addr = I.second.getPointer();
     if (auto *Alloca = dyn_cast<llvm::AllocaInst>(Addr)) {
       llvm::Value *DAddr = GetPointerConstant(getLLVMContext(), D);
       Alloca->setMetadata(
@@ -3746,12 +3806,6 @@ llvm::Constant *CodeGenModule::EmitUuidofInitializer(StringRef Uuid) {
   return llvm::ConstantStruct::getAnon(Fields);
 }
 
-llvm::Constant *
-CodeGenModule::getAddrOfCXXCatchHandlerType(QualType Ty,
-                                            QualType CatchHandlerType) {
-  return getCXXABI().getAddrOfCXXCatchHandlerType(Ty, CatchHandlerType);
-}
-
 llvm::Constant *CodeGenModule::GetAddrOfRTTIDescriptor(QualType Ty,
                                                        bool ForEH) {
   // Return a bogus pointer if RTTI is disabled, unless it's for EH.
@@ -3774,20 +3828,37 @@ void CodeGenModule::EmitOMPThreadPrivateDecl(const OMPThreadPrivateDecl *D) {
         VD->getAnyInitializer() &&
         !VD->getAnyInitializer()->isConstantInitializer(getContext(),
                                                         /*ForRef=*/false);
+
+    Address Addr(GetAddrOfGlobalVar(VD), getContext().getDeclAlign(VD));
     if (auto InitFunction = getOpenMPRuntime().emitThreadPrivateVarDefinition(
-            VD, GetAddrOfGlobalVar(VD), RefExpr->getLocStart(), PerformInit))
+            VD, Addr, RefExpr->getLocStart(), PerformInit))
       CXXGlobalInits.push_back(InitFunction);
   }
 }
 
+llvm::Metadata *CodeGenModule::CreateMetadataIdentifierForType(QualType T) {
+  llvm::Metadata *&InternalId = MetadataIdMap[T.getCanonicalType()];
+  if (InternalId)
+    return InternalId;
+
+  if (isExternallyVisible(T->getLinkage())) {
+    std::string OutName;
+    llvm::raw_string_ostream Out(OutName);
+    getCXXABI().getMangleContext().mangleTypeName(T, Out);
+
+    InternalId = llvm::MDString::get(getLLVMContext(), Out.str());
+  } else {
+    InternalId = llvm::MDNode::getDistinct(getLLVMContext(),
+                                           llvm::ArrayRef<llvm::Metadata *>());
+  }
+
+  return InternalId;
+}
+
 llvm::MDTuple *CodeGenModule::CreateVTableBitSetEntry(
     llvm::GlobalVariable *VTable, CharUnits Offset, const CXXRecordDecl *RD) {
-  std::string OutName;
-  llvm::raw_string_ostream Out(OutName);
-  getCXXABI().getMangleContext().mangleCXXVTableBitSet(RD, Out);
-
   llvm::Metadata *BitsetOps[] = {
-      llvm::MDString::get(getLLVMContext(), Out.str()),
+      CreateMetadataIdentifierForType(QualType(RD->getTypeForDecl(), 0)),
       llvm::ConstantAsMetadata::get(VTable),
       llvm::ConstantAsMetadata::get(
           llvm::ConstantInt::get(Int64Ty, Offset.getQuantity()))};

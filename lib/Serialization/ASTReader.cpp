@@ -1350,10 +1350,8 @@ SourceLocation ASTReader::getImportLocation(ModuleFile *F) {
 /// specified cursor.  Read the abbreviations that are at the top of the block
 /// and then leave the cursor pointing into the block.
 bool ASTReader::ReadBlockAbbrevs(BitstreamCursor &Cursor, unsigned BlockID) {
-  if (Cursor.EnterSubBlock(BlockID)) {
-    Error("malformed block record in AST file");
-    return Failure;
-  }
+  if (Cursor.EnterSubBlock(BlockID))
+    return true;
 
   while (true) {
     uint64_t Offset = Cursor.GetCurrentBitNo();
@@ -2059,6 +2057,86 @@ static bool isDiagnosedResult(ASTReader::ASTReadResult ARR, unsigned Caps) {
   llvm_unreachable("unknown ASTReadResult");
 }
 
+ASTReader::ASTReadResult ASTReader::ReadOptionsBlock(
+    BitstreamCursor &Stream, unsigned ClientLoadCapabilities,
+    bool AllowCompatibleConfigurationMismatch, ASTReaderListener &Listener,
+    std::string &SuggestedPredefines) {
+  if (Stream.EnterSubBlock(OPTIONS_BLOCK_ID))
+    return Failure;
+
+  // Read all of the records in the options block.
+  RecordData Record;
+  ASTReadResult Result = Success;
+  while (1) {
+    llvm::BitstreamEntry Entry = Stream.advance();
+    
+    switch (Entry.Kind) {
+    case llvm::BitstreamEntry::Error:
+    case llvm::BitstreamEntry::SubBlock:
+      return Failure;
+
+    case llvm::BitstreamEntry::EndBlock:
+      return Result;
+
+    case llvm::BitstreamEntry::Record:
+      // The interesting case.
+      break;
+    }
+
+    // Read and process a record.
+    Record.clear();
+    switch ((OptionsRecordTypes)Stream.readRecord(Entry.ID, Record)) {
+    case LANGUAGE_OPTIONS: {
+      bool Complain = (ClientLoadCapabilities & ARR_ConfigurationMismatch) == 0;
+      if (ParseLanguageOptions(Record, Complain, Listener,
+                               AllowCompatibleConfigurationMismatch))
+        Result = ConfigurationMismatch;
+      break;
+    }
+
+    case TARGET_OPTIONS: {
+      bool Complain = (ClientLoadCapabilities & ARR_ConfigurationMismatch) == 0;
+      if (ParseTargetOptions(Record, Complain, Listener,
+                             AllowCompatibleConfigurationMismatch))
+        Result = ConfigurationMismatch;
+      break;
+    }
+
+    case DIAGNOSTIC_OPTIONS: {
+      bool Complain = (ClientLoadCapabilities & ARR_OutOfDate) == 0;
+      if (!AllowCompatibleConfigurationMismatch &&
+          ParseDiagnosticOptions(Record, Complain, Listener))
+        return OutOfDate;
+      break;
+    }
+
+    case FILE_SYSTEM_OPTIONS: {
+      bool Complain = (ClientLoadCapabilities & ARR_ConfigurationMismatch) == 0;
+      if (!AllowCompatibleConfigurationMismatch &&
+          ParseFileSystemOptions(Record, Complain, Listener))
+        Result = ConfigurationMismatch;
+      break;
+    }
+
+    case HEADER_SEARCH_OPTIONS: {
+      bool Complain = (ClientLoadCapabilities & ARR_ConfigurationMismatch) == 0;
+      if (!AllowCompatibleConfigurationMismatch &&
+          ParseHeaderSearchOptions(Record, Complain, Listener))
+        Result = ConfigurationMismatch;
+      break;
+    }
+
+    case PREPROCESSOR_OPTIONS:
+      bool Complain = (ClientLoadCapabilities & ARR_ConfigurationMismatch) == 0;
+      if (!AllowCompatibleConfigurationMismatch &&
+          ParsePreprocessorOptions(Record, Complain, Listener,
+                                   SuggestedPredefines))
+        Result = ConfigurationMismatch;
+      break;
+    }
+  }
+}
+
 ASTReader::ASTReadResult
 ASTReader::ReadControlBlock(ModuleFile &F,
                             SmallVectorImpl<ImportedModule> &Loaded,
@@ -2070,12 +2148,6 @@ ASTReader::ReadControlBlock(ModuleFile &F,
     Error("malformed block record in AST file");
     return Failure;
   }
-
-  // Should we allow the configuration of the module file to differ from the
-  // configuration of the current translation unit in a compatible way?
-  //
-  // FIXME: Allow this for files explicitly specified with -include-pch too.
-  bool AllowCompatibleConfigurationMismatch = F.Kind == MK_ExplicitModule;
 
   // Read all of the records and blocks in the control block.
   RecordData Record;
@@ -2141,6 +2213,36 @@ ASTReader::ReadControlBlock(ModuleFile &F,
         if (Stream.SkipBlock() || // Skip with the main cursor
             // Read the abbreviations
             ReadBlockAbbrevs(F.InputFilesCursor, INPUT_FILES_BLOCK_ID)) {
+          Error("malformed block record in AST file");
+          return Failure;
+        }
+        continue;
+
+      case OPTIONS_BLOCK_ID:
+        // If we're reading the first module for this group, check its options
+        // are compatible with ours. For modules it imports, no further checking
+        // is required, because we checked them when we built it.
+        if (Listener && !ImportedBy) {
+          // Should we allow the configuration of the module file to differ from
+          // the configuration of the current translation unit in a compatible
+          // way?
+          //
+          // FIXME: Allow this for files explicitly specified with -include-pch.
+          bool AllowCompatibleConfigurationMismatch =
+              F.Kind == MK_ExplicitModule;
+
+          auto Result = ReadOptionsBlock(Stream, ClientLoadCapabilities,
+                                         AllowCompatibleConfigurationMismatch,
+                                         *Listener, SuggestedPredefines);
+          if (Result == Failure) {
+            Error("malformed block record in AST file");
+            return Result;
+          }
+
+          if (!DisableValidation && Result != Success &&
+              (Result != ConfigurationMismatch || !AllowConfigurationMismatch))
+            return Result;
+        } else if (Stream.SkipBlock()) {
           Error("malformed block record in AST file");
           return Failure;
         }
@@ -2242,68 +2344,6 @@ ASTReader::ReadControlBlock(ModuleFile &F,
         case Success: break;
         }
       }
-      break;
-    }
-
-    case LANGUAGE_OPTIONS: {
-      bool Complain = (ClientLoadCapabilities & ARR_ConfigurationMismatch) == 0;
-      // FIXME: The &F == *ModuleMgr.begin() check is wrong for modules.
-      if (Listener && &F == *ModuleMgr.begin() &&
-          ParseLanguageOptions(Record, Complain, *Listener,
-                               AllowCompatibleConfigurationMismatch) &&
-          !DisableValidation && !AllowConfigurationMismatch)
-        return ConfigurationMismatch;
-      break;
-    }
-
-    case TARGET_OPTIONS: {
-      bool Complain = (ClientLoadCapabilities & ARR_ConfigurationMismatch)==0;
-      if (Listener && &F == *ModuleMgr.begin() &&
-          ParseTargetOptions(Record, Complain, *Listener,
-                             AllowCompatibleConfigurationMismatch) &&
-          !DisableValidation && !AllowConfigurationMismatch)
-        return ConfigurationMismatch;
-      break;
-    }
-
-    case DIAGNOSTIC_OPTIONS: {
-      bool Complain = (ClientLoadCapabilities & ARR_OutOfDate)==0;
-      if (Listener && &F == *ModuleMgr.begin() &&
-          !AllowCompatibleConfigurationMismatch &&
-          ParseDiagnosticOptions(Record, Complain, *Listener) &&
-          !DisableValidation)
-        return OutOfDate;
-      break;
-    }
-
-    case FILE_SYSTEM_OPTIONS: {
-      bool Complain = (ClientLoadCapabilities & ARR_ConfigurationMismatch)==0;
-      if (Listener && &F == *ModuleMgr.begin() &&
-          !AllowCompatibleConfigurationMismatch &&
-          ParseFileSystemOptions(Record, Complain, *Listener) &&
-          !DisableValidation && !AllowConfigurationMismatch)
-        return ConfigurationMismatch;
-      break;
-    }
-
-    case HEADER_SEARCH_OPTIONS: {
-      bool Complain = (ClientLoadCapabilities & ARR_ConfigurationMismatch)==0;
-      if (Listener && &F == *ModuleMgr.begin() &&
-          !AllowCompatibleConfigurationMismatch &&
-          ParseHeaderSearchOptions(Record, Complain, *Listener) &&
-          !DisableValidation && !AllowConfigurationMismatch)
-        return ConfigurationMismatch;
-      break;
-    }
-
-    case PREPROCESSOR_OPTIONS: {
-      bool Complain = (ClientLoadCapabilities & ARR_ConfigurationMismatch)==0;
-      if (Listener && &F == *ModuleMgr.begin() &&
-          !AllowCompatibleConfigurationMismatch &&
-          ParsePreprocessorOptions(Record, Complain, *Listener,
-                                   SuggestedPredefines) &&
-          !DisableValidation && !AllowConfigurationMismatch)
-        return ConfigurationMismatch;
       break;
     }
 
@@ -3710,14 +3750,7 @@ ASTReader::ReadASTCore(StringRef FileName,
       break;
     }
 
-    // We only know the control subblock ID.
     switch (Entry.ID) {
-    case llvm::bitc::BLOCKINFO_BLOCK_ID:
-      if (Stream.ReadBlockInfoBlock()) {
-        Error("malformed BlockInfoBlock in AST file");
-        return Failure;
-      }
-      break;
     case CONTROL_BLOCK_ID:
       HaveReadControlBlock = true;
       switch (ReadControlBlock(F, Loaded, ImportedBy, ClientLoadCapabilities)) {
@@ -3744,6 +3777,7 @@ ASTReader::ReadASTCore(StringRef FileName,
       case HadErrors: return HadErrors;
       }
       break;
+
     case AST_BLOCK_ID:
       if (!HaveReadControlBlock) {
         if ((ClientLoadCapabilities & ARR_VersionMismatch) == 0)
@@ -4086,36 +4120,51 @@ bool ASTReader::readASTFileControlBlock(
   bool NeedsSystemInputFiles = Listener.needsSystemInputFileVisitation();
   bool NeedsImports = Listener.needsImportVisitation();
   BitstreamCursor InputFilesCursor;
-  if (NeedsInputFiles) {
-    InputFilesCursor = Stream;
-    if (SkipCursorToBlock(InputFilesCursor, INPUT_FILES_BLOCK_ID))
-      return true;
 
-    // Read the abbreviations
-    while (true) {
-      uint64_t Offset = InputFilesCursor.GetCurrentBitNo();
-      unsigned Code = InputFilesCursor.ReadCode();
-
-      // We expect all abbrevs to be at the start of the block.
-      if (Code != llvm::bitc::DEFINE_ABBREV) {
-        InputFilesCursor.JumpToBit(Offset);
-        break;
-      }
-      InputFilesCursor.ReadAbbrevRecord();
-    }
-  }
-  
-  // Scan for ORIGINAL_FILE inside the control block.
   RecordData Record;
   std::string ModuleDir;
   while (1) {
-    llvm::BitstreamEntry Entry = Stream.advanceSkippingSubblocks();
-    if (Entry.Kind == llvm::BitstreamEntry::EndBlock)
+    llvm::BitstreamEntry Entry = Stream.advance();
+
+    switch (Entry.Kind) {
+    case llvm::BitstreamEntry::SubBlock: {
+      switch (Entry.ID) {
+      case OPTIONS_BLOCK_ID: {
+        std::string IgnoredSuggestedPredefines;
+        if (ReadOptionsBlock(Stream, ARR_ConfigurationMismatch | ARR_OutOfDate,
+                             /*AllowCompatibleConfigurationMismatch*/ false,
+                             Listener, IgnoredSuggestedPredefines) != Success)
+          return true;
+        break;
+      }
+
+      case INPUT_FILES_BLOCK_ID:
+        InputFilesCursor = Stream;
+        if (Stream.SkipBlock() ||
+            (NeedsInputFiles &&
+             ReadBlockAbbrevs(InputFilesCursor, INPUT_FILES_BLOCK_ID)))
+          return true;
+        break;
+
+      default:
+        if (Stream.SkipBlock())
+          return true;
+        break;
+      }
+
+      continue;
+    }
+
+    case llvm::BitstreamEntry::EndBlock:
       return false;
-    
-    if (Entry.Kind != llvm::BitstreamEntry::Record)
+
+    case llvm::BitstreamEntry::Error:
       return true;
-    
+
+    case llvm::BitstreamEntry::Record:
+      break;
+    }
+
     Record.clear();
     StringRef Blob;
     unsigned RecCode = Stream.readRecord(Entry.ID, Record, &Blob);
@@ -4142,41 +4191,6 @@ bool ASTReader::readASTFileControlBlock(
       Listener.ReadModuleMapFile(Path);
       break;
     }
-    case LANGUAGE_OPTIONS:
-      if (ParseLanguageOptions(Record, false, Listener,
-                               /*AllowCompatibleConfigurationMismatch*/false))
-        return true;
-      break;
-
-    case TARGET_OPTIONS:
-      if (ParseTargetOptions(Record, false, Listener,
-                             /*AllowCompatibleConfigurationMismatch*/ false))
-        return true;
-      break;
-
-    case DIAGNOSTIC_OPTIONS:
-      if (ParseDiagnosticOptions(Record, false, Listener))
-        return true;
-      break;
-
-    case FILE_SYSTEM_OPTIONS:
-      if (ParseFileSystemOptions(Record, false, Listener))
-        return true;
-      break;
-
-    case HEADER_SEARCH_OPTIONS:
-      if (ParseHeaderSearchOptions(Record, false, Listener))
-        return true;
-      break;
-
-    case PREPROCESSOR_OPTIONS: {
-      std::string IgnoredSuggestedPredefines;
-      if (ParsePreprocessorOptions(Record, false, Listener,
-                                   IgnoredSuggestedPredefines))
-        return true;
-      break;
-    }
-
     case INPUT_FILE_OFFSETS: {
       if (!NeedsInputFiles)
         break;
@@ -5767,9 +5781,14 @@ QualType ASTReader::GetType(TypeID ID) {
   if (Index < NUM_PREDEF_TYPE_IDS) {
     QualType T;
     switch ((PredefinedTypeIDs)Index) {
-    case PREDEF_TYPE_NULL_ID: return QualType();
-    case PREDEF_TYPE_VOID_ID: T = Context.VoidTy; break;
-    case PREDEF_TYPE_BOOL_ID: T = Context.BoolTy; break;
+    case PREDEF_TYPE_NULL_ID:
+      return QualType();
+    case PREDEF_TYPE_VOID_ID:
+      T = Context.VoidTy;
+      break;
+    case PREDEF_TYPE_BOOL_ID:
+      T = Context.BoolTy;
+      break;
 
     case PREDEF_TYPE_CHAR_U_ID:
     case PREDEF_TYPE_CHAR_S_ID:
@@ -5777,46 +5796,150 @@ QualType ASTReader::GetType(TypeID ID) {
       T = Context.CharTy;
       break;
 
-    case PREDEF_TYPE_UCHAR_ID:      T = Context.UnsignedCharTy;     break;
-    case PREDEF_TYPE_USHORT_ID:     T = Context.UnsignedShortTy;    break;
-    case PREDEF_TYPE_UINT_ID:       T = Context.UnsignedIntTy;      break;
-    case PREDEF_TYPE_ULONG_ID:      T = Context.UnsignedLongTy;     break;
-    case PREDEF_TYPE_ULONGLONG_ID:  T = Context.UnsignedLongLongTy; break;
-    case PREDEF_TYPE_UINT128_ID:    T = Context.UnsignedInt128Ty;   break;
-    case PREDEF_TYPE_SCHAR_ID:      T = Context.SignedCharTy;       break;
-    case PREDEF_TYPE_WCHAR_ID:      T = Context.WCharTy;            break;
-    case PREDEF_TYPE_SHORT_ID:      T = Context.ShortTy;            break;
-    case PREDEF_TYPE_INT_ID:        T = Context.IntTy;              break;
-    case PREDEF_TYPE_LONG_ID:       T = Context.LongTy;             break;
-    case PREDEF_TYPE_LONGLONG_ID:   T = Context.LongLongTy;         break;
-    case PREDEF_TYPE_INT128_ID:     T = Context.Int128Ty;           break;
-    case PREDEF_TYPE_HALF_ID:       T = Context.HalfTy;             break;
-    case PREDEF_TYPE_FLOAT_ID:      T = Context.FloatTy;            break;
-    case PREDEF_TYPE_DOUBLE_ID:     T = Context.DoubleTy;           break;
-    case PREDEF_TYPE_LONGDOUBLE_ID: T = Context.LongDoubleTy;       break;
-    case PREDEF_TYPE_OVERLOAD_ID:   T = Context.OverloadTy;         break;
-    case PREDEF_TYPE_BOUND_MEMBER:  T = Context.BoundMemberTy;      break;
-    case PREDEF_TYPE_PSEUDO_OBJECT: T = Context.PseudoObjectTy;     break;
-    case PREDEF_TYPE_DEPENDENT_ID:  T = Context.DependentTy;        break;
-    case PREDEF_TYPE_UNKNOWN_ANY:   T = Context.UnknownAnyTy;       break;
-    case PREDEF_TYPE_NULLPTR_ID:    T = Context.NullPtrTy;          break;
-    case PREDEF_TYPE_CHAR16_ID:     T = Context.Char16Ty;           break;
-    case PREDEF_TYPE_CHAR32_ID:     T = Context.Char32Ty;           break;
-    case PREDEF_TYPE_OBJC_ID:       T = Context.ObjCBuiltinIdTy;    break;
-    case PREDEF_TYPE_OBJC_CLASS:    T = Context.ObjCBuiltinClassTy; break;
-    case PREDEF_TYPE_OBJC_SEL:      T = Context.ObjCBuiltinSelTy;   break;
-    case PREDEF_TYPE_IMAGE1D_ID:    T = Context.OCLImage1dTy;       break;
-    case PREDEF_TYPE_IMAGE1D_ARR_ID: T = Context.OCLImage1dArrayTy; break;
-    case PREDEF_TYPE_IMAGE1D_BUFF_ID: T = Context.OCLImage1dBufferTy; break;
-    case PREDEF_TYPE_IMAGE2D_ID:    T = Context.OCLImage2dTy;       break;
-    case PREDEF_TYPE_IMAGE2D_ARR_ID: T = Context.OCLImage2dArrayTy; break;
-    case PREDEF_TYPE_IMAGE3D_ID:    T = Context.OCLImage3dTy;       break;
-    case PREDEF_TYPE_SAMPLER_ID:    T = Context.OCLSamplerTy;       break;
-    case PREDEF_TYPE_EVENT_ID:      T = Context.OCLEventTy;         break;
-    case PREDEF_TYPE_AUTO_DEDUCT:   T = Context.getAutoDeductType(); break;
-        
-    case PREDEF_TYPE_AUTO_RREF_DEDUCT: 
-      T = Context.getAutoRRefDeductType(); 
+    case PREDEF_TYPE_UCHAR_ID:
+      T = Context.UnsignedCharTy;
+      break;
+    case PREDEF_TYPE_USHORT_ID:
+      T = Context.UnsignedShortTy;
+      break;
+    case PREDEF_TYPE_UINT_ID:
+      T = Context.UnsignedIntTy;
+      break;
+    case PREDEF_TYPE_ULONG_ID:
+      T = Context.UnsignedLongTy;
+      break;
+    case PREDEF_TYPE_ULONGLONG_ID:
+      T = Context.UnsignedLongLongTy;
+      break;
+    case PREDEF_TYPE_UINT128_ID:
+      T = Context.UnsignedInt128Ty;
+      break;
+    case PREDEF_TYPE_SCHAR_ID:
+      T = Context.SignedCharTy;
+      break;
+    case PREDEF_TYPE_WCHAR_ID:
+      T = Context.WCharTy;
+      break;
+    case PREDEF_TYPE_SHORT_ID:
+      T = Context.ShortTy;
+      break;
+    case PREDEF_TYPE_INT_ID:
+      T = Context.IntTy;
+      break;
+    case PREDEF_TYPE_LONG_ID:
+      T = Context.LongTy;
+      break;
+    case PREDEF_TYPE_LONGLONG_ID:
+      T = Context.LongLongTy;
+      break;
+    case PREDEF_TYPE_INT128_ID:
+      T = Context.Int128Ty;
+      break;
+    case PREDEF_TYPE_HALF_ID:
+      T = Context.HalfTy;
+      break;
+    case PREDEF_TYPE_FLOAT_ID:
+      T = Context.FloatTy;
+      break;
+    case PREDEF_TYPE_DOUBLE_ID:
+      T = Context.DoubleTy;
+      break;
+    case PREDEF_TYPE_LONGDOUBLE_ID:
+      T = Context.LongDoubleTy;
+      break;
+    case PREDEF_TYPE_OVERLOAD_ID:
+      T = Context.OverloadTy;
+      break;
+    case PREDEF_TYPE_BOUND_MEMBER:
+      T = Context.BoundMemberTy;
+      break;
+    case PREDEF_TYPE_PSEUDO_OBJECT:
+      T = Context.PseudoObjectTy;
+      break;
+    case PREDEF_TYPE_DEPENDENT_ID:
+      T = Context.DependentTy;
+      break;
+    case PREDEF_TYPE_UNKNOWN_ANY:
+      T = Context.UnknownAnyTy;
+      break;
+    case PREDEF_TYPE_NULLPTR_ID:
+      T = Context.NullPtrTy;
+      break;
+    case PREDEF_TYPE_CHAR16_ID:
+      T = Context.Char16Ty;
+      break;
+    case PREDEF_TYPE_CHAR32_ID:
+      T = Context.Char32Ty;
+      break;
+    case PREDEF_TYPE_OBJC_ID:
+      T = Context.ObjCBuiltinIdTy;
+      break;
+    case PREDEF_TYPE_OBJC_CLASS:
+      T = Context.ObjCBuiltinClassTy;
+      break;
+    case PREDEF_TYPE_OBJC_SEL:
+      T = Context.ObjCBuiltinSelTy;
+      break;
+    case PREDEF_TYPE_IMAGE1D_ID:
+      T = Context.OCLImage1dTy;
+      break;
+    case PREDEF_TYPE_IMAGE1D_ARR_ID:
+      T = Context.OCLImage1dArrayTy;
+      break;
+    case PREDEF_TYPE_IMAGE1D_BUFF_ID:
+      T = Context.OCLImage1dBufferTy;
+      break;
+    case PREDEF_TYPE_IMAGE2D_ID:
+      T = Context.OCLImage2dTy;
+      break;
+    case PREDEF_TYPE_IMAGE2D_ARR_ID:
+      T = Context.OCLImage2dArrayTy;
+      break;
+    case PREDEF_TYPE_IMAGE2D_DEP_ID:
+      T = Context.OCLImage2dDepthTy;
+      break;
+    case PREDEF_TYPE_IMAGE2D_ARR_DEP_ID:
+      T = Context.OCLImage2dArrayDepthTy;
+      break;
+    case PREDEF_TYPE_IMAGE2D_MSAA_ID:
+      T = Context.OCLImage2dMSAATy;
+      break;
+    case PREDEF_TYPE_IMAGE2D_ARR_MSAA_ID:
+      T = Context.OCLImage2dArrayMSAATy;
+      break;
+    case PREDEF_TYPE_IMAGE2D_MSAA_DEP_ID:
+      T = Context.OCLImage2dMSAADepthTy;
+      break;
+    case PREDEF_TYPE_IMAGE2D_ARR_MSAA_DEPTH_ID:
+      T = Context.OCLImage2dArrayMSAADepthTy;
+      break;
+    case PREDEF_TYPE_IMAGE3D_ID:
+      T = Context.OCLImage3dTy;
+      break;
+    case PREDEF_TYPE_SAMPLER_ID:
+      T = Context.OCLSamplerTy;
+      break;
+    case PREDEF_TYPE_EVENT_ID:
+      T = Context.OCLEventTy;
+      break;
+    case PREDEF_TYPE_CLK_EVENT_ID:
+      T = Context.OCLClkEventTy;
+      break;
+    case PREDEF_TYPE_QUEUE_ID:
+      T = Context.OCLQueueTy;
+      break;
+    case PREDEF_TYPE_NDRANGE_ID:
+      T = Context.OCLNDRangeTy;
+      break;
+    case PREDEF_TYPE_RESERVE_ID_ID:
+      T = Context.OCLReserveIDTy;
+      break;
+    case PREDEF_TYPE_AUTO_DEDUCT:
+      T = Context.getAutoDeductType();
+      break;
+
+    case PREDEF_TYPE_AUTO_RREF_DEDUCT:
+      T = Context.getAutoRRefDeductType();
       break;
 
     case PREDEF_TYPE_ARC_UNBRIDGED_CAST:
@@ -6146,6 +6269,9 @@ static Decl *getPredefinedDecl(ASTContext &Context, PredefinedDeclIDs ID) {
 
   case PREDEF_DECL_VA_LIST_TAG:
     return Context.getVaListTagDecl();
+
+  case PREDEF_DECL_BUILTIN_MS_VA_LIST_ID:
+    return Context.getBuiltinMSVaListDecl();
 
   case PREDEF_DECL_EXTERN_C_CONTEXT_ID:
     return Context.getExternCContextDecl();
@@ -7277,33 +7403,17 @@ unsigned ASTReader::getModuleFileID(ModuleFile *F) {
   return (I - PCHModules.end()) << 1;
 }
 
-ExternalASTSource::ASTSourceDescriptor
-ASTReader::getSourceDescriptor(const Module &M) {
-  StringRef Dir, Filename;
-  if (M.Directory)
-    Dir = M.Directory->getName();
-  if (auto *File = M.getASTFile())
-    Filename = File->getName();
-  return ASTReader::ASTSourceDescriptor{
-             M.getFullModuleName(), Dir, Filename,
-             M.Signature
-         };
-}
-
 llvm::Optional<ExternalASTSource::ASTSourceDescriptor>
 ASTReader::getSourceDescriptor(unsigned ID) {
   if (const Module *M = getSubmodule(ID))
-    return getSourceDescriptor(*M);
+    return ExternalASTSource::ASTSourceDescriptor(*M);
 
   // If there is only a single PCH, return it instead.
   // Chained PCH are not suported.
   if (ModuleMgr.size() == 1) {
     ModuleFile &MF = ModuleMgr.getPrimaryModule();
-    return ASTReader::ASTSourceDescriptor{
-      MF.OriginalSourceFileName, MF.OriginalDir,
-      MF.FileName,
-      MF.Signature
-    };
+    return ASTReader::ASTSourceDescriptor(
+        MF.OriginalSourceFileName, MF.OriginalDir, MF.FileName, MF.Signature);
   }
   return None;
 }

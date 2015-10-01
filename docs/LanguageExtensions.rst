@@ -1540,6 +1540,33 @@ takes no arguments and produces a void result.
 
 Query for this feature with ``__has_builtin(__builtin_unreachable)``.
 
+``__builtin_unpredictable``
+---------------------------
+
+``__builtin_unpredictable`` is used to indicate that a branch condition is
+unpredictable by hardware mechanisms such as branch prediction logic.
+
+**Syntax**:
+
+.. code-block:: c++
+
+    __builtin_unpredictable(long long)
+
+**Example of use**:
+
+.. code-block:: c++
+
+  if (__builtin_unpredictable(x > 0)) {
+     foo();
+  }
+
+**Description**:
+
+The ``__builtin_unpredictable()`` builtin is expected to be used with control
+flow conditions such as in ``if`` and ``switch`` statements.
+
+Query for this feature with ``__has_builtin(__builtin_unpredictable)``.
+
 ``__sync_swap``
 ---------------
 
@@ -1733,6 +1760,7 @@ instructions for implementing atomic operations.
   void __builtin_arm_clrex(void);
 
 The types ``T`` currently supported are:
+
 * Integer types with width at most 64 bits (or 128 bits on AArch64).
 * Floating-point types
 * Pointer types.
@@ -1750,6 +1778,26 @@ care should be exercised.
 
 For these reasons the higher level atomic primitives should be preferred where
 possible.
+
+Non-temporal load/store builtins
+--------------------------------
+
+Clang provides overloaded builtins allowing generation of non-temporal memory
+accesses.
+
+.. code-block:: c
+
+  T __builtin_nontemporal_load(T *addr);
+  void __builtin_nontemporal_store(T value, T *addr);
+
+The types ``T`` currently supported are:
+
+* Integer types.
+* Floating-point types.
+* Vector types.
+
+Note that the compiler does not guarantee that non-temporal loads or stores
+will be used.
 
 Non-standard C++11 Attributes
 =============================

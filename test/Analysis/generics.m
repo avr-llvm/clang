@@ -1,5 +1,5 @@
-// RUN: %clang_cc1 -analyze -analyzer-checker=core,alpha.osx.cocoa.ObjCGenerics -verify -Wno-objc-method-access %s
-// RUN: %clang_cc1 -analyze -analyzer-checker=core,alpha.osx.cocoa.ObjCGenerics -verify -Wno-objc-method-access %s -analyzer-output=plist -o %t.plist
+// RUN: %clang_cc1 -analyze -analyzer-checker=core,alpha.osx.cocoa.ObjCGenerics,alpha.core.DynamicTypeChecker -verify -Wno-objc-method-access %s
+// RUN: %clang_cc1 -analyze -analyzer-checker=core,alpha.osx.cocoa.ObjCGenerics,alpha.core.DynamicTypeChecker -verify -Wno-objc-method-access %s -analyzer-output=plist -o %t.plist
 // RUN: FileCheck --input-file %t.plist %s
 
 #if !__has_feature(objc_generics)
@@ -33,6 +33,9 @@ __attribute__((objc_root_class))
 @end
 
 @interface NSNumber : NSObject <NSCopying>
+@end
+
+@interface NSSet : NSObject <NSCopying>
 @end
 
 @interface NSArray<__covariant ObjectType> : NSObject
@@ -87,38 +90,38 @@ void withMutArrMutableString(MutableArray<NSMutableString *> *);
 void incompatibleTypesErased(NSArray *a, NSArray<NSString *> *b,
                              NSArray<NSNumber *> *c) {
   a = b;
-  c = a; // expected-warning  {{Incompatible pointer types assigning to 'NSArray<NSNumber *> *' from 'NSArray<NSString *> *'}}
-  [a contains: [[NSNumber alloc] init]]; // expected-warning {{Incompatible}}
+  c = a; // expected-warning  {{Conversion from value of type 'NSArray<NSString *> *' to incompatible type 'NSArray<NSNumber *> *'}}
+  [a contains: [[NSNumber alloc] init]]; // expected-warning {{Conversion}}
   [a contains: [[NSString alloc] init]];
-  doStuff(a); // expected-warning {{Incompatible}}
+  doStuff(a); // expected-warning {{Conversion}}
 }
 
 void crossProceduralErasedTypes() {
-  NSArray<NSString *> *a = getTypedStuff(); // expected-warning {{Incompatible}}
+  NSArray<NSString *> *a = getTypedStuff(); // expected-warning {{Conversion}}
 }
 
 void incompatibleTypesErasedReverseConversion(NSArray *a,
                                               NSArray<NSString *> *b) {
   b = a;
-  [a contains: [[NSNumber alloc] init]]; // expected-warning {{Incompatible}}
+  [a contains: [[NSNumber alloc] init]]; // expected-warning {{Conversion}}
   [a contains: [[NSString alloc] init]];
-  doStuff(a); // expected-warning {{Incompatible}}
+  doStuff(a); // expected-warning {{Conversion}}
 }
 
 void idErasedIncompatibleTypesReverseConversion(id a, NSArray<NSString *> *b) {
   b = a;
-  [a contains: [[NSNumber alloc] init]]; // expected-warning {{Incompatible}}
+  [a contains: [[NSNumber alloc] init]]; // expected-warning {{Conversion}}
   [a contains: [[NSString alloc] init]];
-  doStuff(a); // expected-warning {{Incompatible}}
+  doStuff(a); // expected-warning {{Conversion}}
 }
 
 void idErasedIncompatibleTypes(id a, NSArray<NSString *> *b,
                                NSArray<NSNumber *> *c) {
   a = b;
-  c = a; // expected-warning {{Incompatible}}
-  [a contains: [[NSNumber alloc] init]]; // expected-warning {{Incompatible}}
+  c = a; // expected-warning {{Conversion}}
+  [a contains: [[NSNumber alloc] init]]; // expected-warning {{Conversion}}
   [a contains: [[NSString alloc] init]];
-  doStuff(a); // expected-warning {{Incompatible}}
+  doStuff(a); // expected-warning {{Conversion}}
 }
 
 void pathSensitiveInference(MutableArray *m, MutableArray<NSString *> *a,
@@ -130,19 +133,19 @@ void pathSensitiveInference(MutableArray *m, MutableArray<NSString *> *a,
     m = b;
     [m contains: [[NSMutableString alloc] init]];
   }
-  [m addObject: [[NSString alloc] init]]; // expected-warning {{Incompatible}}
+  [m addObject: [[NSString alloc] init]]; // expected-warning {{Conversion}}
   [m addObject: [[NSMutableString alloc] init]];
 }
 
 void verifyAPIusage(id a, MutableArray<NSString *> *b) {
   b = a;
-  doStuff(a); // expected-warning {{Incompatible}}
+  doStuff(a); // expected-warning {{Conversion}}
 }
 
 void trustExplicitCasts(MutableArray *a,
                         MutableArray<NSMutableString *> *b) {
   b = (MutableArray<NSMutableString *> *)a;
-  [a addObject: [[NSString alloc] init]]; // expected-warning {{Incompatible}}
+  [a addObject: [[NSString alloc] init]]; // expected-warning {{Conversion}}
 }
 
 void subtypeOfGeneric(id d, MyMutableStringArray *a,
@@ -150,7 +153,7 @@ void subtypeOfGeneric(id d, MyMutableStringArray *a,
                        MutableArray<NSNumber *> *c) {
   d = a;
   b = d;
-  c = d; // expected-warning {{Incompatible}}
+  c = d; // expected-warning {{Conversion}}
 }
 
 void genericSubtypeOfGeneric(id d, ExceptionalArray<NSString *> *a,
@@ -158,9 +161,9 @@ void genericSubtypeOfGeneric(id d, ExceptionalArray<NSString *> *a,
                              MutableArray<NSNumber *> *c) {
   d = a;
   [d contains: [[NSString alloc] init]];
-  [d contains: [[NSNumber alloc] init]]; // expected-warning {{Incompatible}}
+  [d contains: [[NSNumber alloc] init]]; // expected-warning {{Conversion}}
   b = d;
-  c = d; // expected-warning {{Incompatible}}
+  c = d; // expected-warning {{Conversion}}
 }
 
 void genericSubtypeOfGenericReverse(id d, ExceptionalArray<NSString *> *a,
@@ -168,41 +171,59 @@ void genericSubtypeOfGenericReverse(id d, ExceptionalArray<NSString *> *a,
                                     MutableArray<NSNumber *> *c) {
   a = d;
   [d contains: [[NSString alloc] init]];
-  [d contains: [[NSNumber alloc] init]]; // expected-warning {{Incompatible}}
+  [d contains: [[NSNumber alloc] init]]; // expected-warning {{Conversion}}
   b = d;
-  c = d; // expected-warning {{Incompatible}}
+  c = d; // expected-warning {{Conversion}}
 }
 
 void inferenceFromAPI(id a) {
   // Here the type parameter is invariant. There should be a warning every time
   // when the type parameter changes during the conversions.
   withMutArrString(a);
-  withMutArrMutableString(a); // expected-warning {{Incompatible}}
+  withMutArrMutableString(a); // expected-warning {{Conversion}}
 }
 
 void inferenceFromAPI2(id a) {
   withMutArrMutableString(a);
-  withMutArrString(a); // expected-warning {{Incompatible}}
+  withMutArrString(a); // expected-warning {{Conversion}}
 }
 
 void inferenceFromAPIWithLegacyTypes(LegacyMutableArray *a) {
   withMutArrMutableString(a);
-  withMutArrString(a); // expected-warning {{Incompatible}}
+  withMutArrString(a); // expected-warning {{Conversion}}
 }
 
 void inferenceFromAPIWithLegacyTypes2(LegacySpecialMutableArray *a) {
   withMutArrString(a);
-  withMutArrMutableString(a); // expected-warning {{Incompatible}}
+  withMutArrMutableString(a); // expected-warning {{Conversion}}
+}
+
+void inferenceFromAPIWithLegacyTypes3(__kindof NSArray<NSString *> *a) {
+  LegacyMutableArray *b = a;
+  withMutArrString(b);
+  withMutArrMutableString(b); // expected-warning {{Conversion}}
 }
 
 void inferenceFromAPIWithBuggyTypes(BuggyMutableArray<NSMutableString *> *a) {
   withMutArrString(a);
-  withMutArrMutableString(a); // expected-warning {{Incompatible}}
+  withMutArrMutableString(a); // expected-warning {{Conversion}}
 }
 
 void InferenceFromAPIWithBuggyTypes2(BuggySpecialMutableArray<NSMutableString *> *a) {
   withMutArrMutableString(a);
-  withMutArrString(a); // expected-warning {{Incompatible}}
+  withMutArrString(a); // expected-warning {{Conversion}}
+}
+
+void InferenceFromAPIWithBuggyTypes3(MutableArray<NSMutableString *> *a) {
+  id b = a;
+  withMutArrMutableString((BuggyMutableArray<NSMutableString *> *)b);
+  withMutArrString(b); // expected-warning {{Conversion}}
+}
+
+void InferenceFromAPIWithBuggyTypes4(__kindof NSArray<NSString *> *a) {
+  BuggyMutableArray<NSMutableString *> *b = a;
+  withMutArrString(b);
+  withMutArrMutableString(b); // expected-warning {{Conversion}}
 }
 
 NSArray<NSString *> *getStrings();
@@ -215,13 +236,13 @@ void enforceDynamicRulesInsteadOfStatic(NSArray<NSNumber *> *a) {
 
 void workWithProperties(NSArray<NSNumber *> *a) {
   NSArray *b = a;
-  NSString *str = [b getObjAtIndex: 0]; // expected-warning {{Incompatible}}
+  NSString *str = [b getObjAtIndex: 0]; // expected-warning {{Object has a dynamic type 'NSNumber *' which is incompatible with static type 'NSString *'}}
   NSNumber *num = [b getObjAtIndex: 0];
-  str = [b firstObject]; // expected-warning {{Incompatible}}
+  str = [b firstObject]; // expected-warning {{Object has a dynamic type 'NSNumber *' which is incompatible with static type 'NSString *'}}
   num = [b firstObject];
-  str = b.firstObject; // expected-warning {{Incompatible}}
+  str = b.firstObject; // expected-warning {{Object has a dynamic type 'NSNumber *' which is incompatible with static type 'NSString *'}}
   num = b.firstObject;
-  str = b[0]; // expected-warning {{Incompatible}}
+  str = b[0]; // expected-warning {{Object has a dynamic type 'NSNumber *' which is incompatible with static type 'NSString *'}}
   num = b[0];
 }
 
@@ -230,7 +251,7 @@ void findMethodDeclInTrackedType(id m, NSArray<NSMutableString *> *a,
   a = b;
   if (getUnknown() == 5) {
     m = a;  
-    [m addObject: [[NSString alloc] init]]; // expected-warning {{Incompatible}}
+    [m addObject: [[NSString alloc] init]]; // expected-warning {{Conversion}}
   } else {
     m = b;
     [m addObject: [[NSMutableString alloc] init]];
@@ -241,7 +262,7 @@ void findMethodDeclInTrackedType2(__kindof NSArray<NSString *> *a,
                                   MutableArray<NSMutableString *> *b) {
   a = b;
   if (getUnknown() == 5) {
-    [a addObject: [[NSString alloc] init]]; // expected-warning {{Incompatible}}
+    [a addObject: [[NSString alloc] init]]; // expected-warning {{Conversion}}
   } else {
     [a addObject: [[NSMutableString alloc] init]];
   }
@@ -256,7 +277,7 @@ void testUnannotatedLiterals() {
 void testAnnotatedLiterals() {
   NSArray<NSString *> *arr = @[@"A", @"B"];
   NSArray *arr2 = arr;
-  [arr2 contains: [[NSNumber alloc] init]]; // expected-warning {{Incompatible}}
+  [arr2 contains: [[NSNumber alloc] init]]; // expected-warning {{Conversion}}
 }
 
 void nonExistentMethodDoesNotCrash(id a, MutableArray<NSMutableString *> *b) {
@@ -266,13 +287,13 @@ void nonExistentMethodDoesNotCrash(id a, MutableArray<NSMutableString *> *b) {
 
 void trackedClassVariables() {
   Class c = [NSArray<NSString *> class];
-  NSArray<NSNumber *> *a = [c getEmpty]; // expected-warning {{Incompatible}}
-  a = [c getEmpty2]; // expected-warning {{Incompatible}}
+  NSArray<NSNumber *> *a = [c getEmpty]; // expected-warning {{Conversion}}
+  a = [c getEmpty2]; // expected-warning {{Conversion}}
 }
 
 void nestedCollections(NSArray<NSArray<NSNumber *> *> *mat, NSArray<NSString *> *row) {
   id temp = row;
-  [mat contains: temp]; // expected-warning {{Incompatible}}
+  [mat contains: temp]; // expected-warning {{Conversion}}
 }
 
 void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
@@ -283,7 +304,30 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
   [c addObject: [[NSString alloc] init]];
 }
 
-// CHECK:  <key>diagnostics</key>
+void returnCollectionToIdVariable(NSArray<NSArray<NSString *> *> *arr) {
+  NSArray *erased = arr;
+  id a = [erased firstObject];
+  NSArray<NSNumber *> *res = a; // expected-warning {{Conversion}}
+}
+
+void eraseSpecialization(NSArray<NSArray<NSString *> *> *arr) {
+  NSArray *erased = arr;
+  NSArray* a = [erased firstObject];
+  NSArray<NSNumber *> *res = a; // expected-warning {{Conversion}}
+}
+
+void returnToUnrelatedType(NSArray<NSArray<NSString *> *> *arr) {
+  NSArray *erased = arr;
+  NSSet* a = [erased firstObject]; // expected-warning {{Object has a dynamic type 'NSArray<NSString *> *' which is incompatible with static type 'NSSet *'}}
+  (void)a;
+}
+
+void returnToIdVariable(NSArray<NSString *> *arr) {
+  NSArray *erased = arr;
+  id a = [erased firstObject];
+  NSNumber *res = a; // expected-warning {{Object has a dynamic type 'NSString *' which is incompatible with static type 'NSNumber *'}}
+}
+
 // CHECK:  <array>
 // CHECK:   <dict>
 // CHECK:    <key>path</key>
@@ -292,7 +336,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>89</integer>
+// CHECK:       <key>line</key><integer>92</integer>
 // CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -300,12 +344,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>89</integer>
+// CHECK:          <key>line</key><integer>92</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>89</integer>
+// CHECK:          <key>line</key><integer>92</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -325,12 +369,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>89</integer>
+// CHECK:            <key>line</key><integer>92</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>89</integer>
+// CHECK:            <key>line</key><integer>92</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -338,12 +382,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>90</integer>
+// CHECK:            <key>line</key><integer>93</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>90</integer>
+// CHECK:            <key>line</key><integer>93</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -359,12 +403,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>90</integer>
+// CHECK:            <key>line</key><integer>93</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>90</integer>
+// CHECK:            <key>line</key><integer>93</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -372,267 +416,13 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>90</integer>
+// CHECK:            <key>line</key><integer>93</integer>
 // CHECK:            <key>col</key><integer>7</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>90</integer>
+// CHECK:            <key>line</key><integer>93</integer>
 // CHECK:            <key>col</key><integer>7</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:        </dict>
-// CHECK:       </array>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>event</string>
-// CHECK:      <key>location</key>
-// CHECK:      <dict>
-// CHECK:       <key>line</key><integer>90</integer>
-// CHECK:       <key>col</key><integer>7</integer>
-// CHECK:       <key>file</key><integer>0</integer>
-// CHECK:      </dict>
-// CHECK:      <key>ranges</key>
-// CHECK:      <array>
-// CHECK:        <array>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>90</integer>
-// CHECK:          <key>col</key><integer>7</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>90</integer>
-// CHECK:          <key>col</key><integer>7</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:        </array>
-// CHECK:      </array>
-// CHECK:      <key>depth</key><integer>0</integer>
-// CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
-// CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
-// CHECK:     </dict>
-// CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
-// CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
-// CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
-// CHECK:   <key>issue_context_kind</key><string>function</string>
-// CHECK:   <key>issue_context</key><string>incompatibleTypesErased</string>
-// CHECK:   <key>issue_hash</key><string>2</string>
-// CHECK:   <key>location</key>
-// CHECK:   <dict>
-// CHECK:    <key>line</key><integer>90</integer>
-// CHECK:    <key>col</key><integer>7</integer>
-// CHECK:    <key>file</key><integer>0</integer>
-// CHECK:   </dict>
-// CHECK:   </dict>
-// CHECK:   <dict>
-// CHECK:    <key>path</key>
-// CHECK:    <array>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>event</string>
-// CHECK:      <key>location</key>
-// CHECK:      <dict>
-// CHECK:       <key>line</key><integer>89</integer>
-// CHECK:       <key>col</key><integer>7</integer>
-// CHECK:       <key>file</key><integer>0</integer>
-// CHECK:      </dict>
-// CHECK:      <key>ranges</key>
-// CHECK:      <array>
-// CHECK:        <array>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>89</integer>
-// CHECK:          <key>col</key><integer>7</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>89</integer>
-// CHECK:          <key>col</key><integer>7</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:        </array>
-// CHECK:      </array>
-// CHECK:      <key>depth</key><integer>0</integer>
-// CHECK:      <key>extended_message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSString *&gt; *&apos; to &apos;NSArray *&apos;)</string>
-// CHECK:      <key>message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSString *&gt; *&apos; to &apos;NSArray *&apos;)</string>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>control</string>
-// CHECK:      <key>edges</key>
-// CHECK:       <array>
-// CHECK:        <dict>
-// CHECK:         <key>start</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>89</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>89</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:         <key>end</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>91</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>91</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:        </dict>
-// CHECK:       </array>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>event</string>
-// CHECK:      <key>location</key>
-// CHECK:      <dict>
-// CHECK:       <key>line</key><integer>91</integer>
-// CHECK:       <key>col</key><integer>3</integer>
-// CHECK:       <key>file</key><integer>0</integer>
-// CHECK:      </dict>
-// CHECK:      <key>ranges</key>
-// CHECK:      <array>
-// CHECK:        <array>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>91</integer>
-// CHECK:          <key>col</key><integer>16</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>91</integer>
-// CHECK:          <key>col</key><integer>38</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:        </array>
-// CHECK:      </array>
-// CHECK:      <key>depth</key><integer>0</integer>
-// CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
-// CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
-// CHECK:     </dict>
-// CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
-// CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
-// CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
-// CHECK:   <key>issue_context_kind</key><string>function</string>
-// CHECK:   <key>issue_context</key><string>incompatibleTypesErased</string>
-// CHECK:   <key>issue_hash</key><string>3</string>
-// CHECK:   <key>location</key>
-// CHECK:   <dict>
-// CHECK:    <key>line</key><integer>91</integer>
-// CHECK:    <key>col</key><integer>3</integer>
-// CHECK:    <key>file</key><integer>0</integer>
-// CHECK:   </dict>
-// CHECK:   </dict>
-// CHECK:   <dict>
-// CHECK:    <key>path</key>
-// CHECK:    <array>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>event</string>
-// CHECK:      <key>location</key>
-// CHECK:      <dict>
-// CHECK:       <key>line</key><integer>89</integer>
-// CHECK:       <key>col</key><integer>7</integer>
-// CHECK:       <key>file</key><integer>0</integer>
-// CHECK:      </dict>
-// CHECK:      <key>ranges</key>
-// CHECK:      <array>
-// CHECK:        <array>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>89</integer>
-// CHECK:          <key>col</key><integer>7</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>89</integer>
-// CHECK:          <key>col</key><integer>7</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:        </array>
-// CHECK:      </array>
-// CHECK:      <key>depth</key><integer>0</integer>
-// CHECK:      <key>extended_message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSString *&gt; *&apos; to &apos;NSArray *&apos;)</string>
-// CHECK:      <key>message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSString *&gt; *&apos; to &apos;NSArray *&apos;)</string>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>control</string>
-// CHECK:      <key>edges</key>
-// CHECK:       <array>
-// CHECK:        <dict>
-// CHECK:         <key>start</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>89</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>89</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:         <key>end</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>93</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>93</integer>
-// CHECK:            <key>col</key><integer>9</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:        </dict>
-// CHECK:       </array>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>control</string>
-// CHECK:      <key>edges</key>
-// CHECK:       <array>
-// CHECK:        <dict>
-// CHECK:         <key>start</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>93</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>93</integer>
-// CHECK:            <key>col</key><integer>9</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:         <key>end</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>93</integer>
-// CHECK:            <key>col</key><integer>11</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>93</integer>
-// CHECK:            <key>col</key><integer>11</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:          </array>
@@ -644,7 +434,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
 // CHECK:       <key>line</key><integer>93</integer>
-// CHECK:       <key>col</key><integer>11</integer>
+// CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
 // CHECK:      <key>ranges</key>
@@ -652,11 +442,265 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:        <array>
 // CHECK:         <dict>
 // CHECK:          <key>line</key><integer>93</integer>
-// CHECK:          <key>col</key><integer>11</integer>
+// CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
 // CHECK:          <key>line</key><integer>93</integer>
+// CHECK:          <key>col</key><integer>7</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
+// CHECK:     </dict>
+// CHECK:    </array>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
+// CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
+// CHECK:    <key>type</key><string>Generics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
+// CHECK:   <key>issue_context_kind</key><string>function</string>
+// CHECK:   <key>issue_context</key><string>incompatibleTypesErased</string>
+// CHECK:   <key>issue_hash</key><string>2</string>
+// CHECK:   <key>location</key>
+// CHECK:   <dict>
+// CHECK:    <key>line</key><integer>93</integer>
+// CHECK:    <key>col</key><integer>7</integer>
+// CHECK:    <key>file</key><integer>0</integer>
+// CHECK:   </dict>
+// CHECK:   </dict>
+// CHECK:   <dict>
+// CHECK:    <key>path</key>
+// CHECK:    <array>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>92</integer>
+// CHECK:       <key>col</key><integer>7</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>92</integer>
+// CHECK:          <key>col</key><integer>7</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>92</integer>
+// CHECK:          <key>col</key><integer>7</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSString *&gt; *&apos; to &apos;NSArray *&apos;)</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSString *&gt; *&apos; to &apos;NSArray *&apos;)</string>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>92</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>92</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>94</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>94</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>94</integer>
+// CHECK:       <key>col</key><integer>3</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>94</integer>
+// CHECK:          <key>col</key><integer>16</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>94</integer>
+// CHECK:          <key>col</key><integer>38</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
+// CHECK:     </dict>
+// CHECK:    </array>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
+// CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
+// CHECK:    <key>type</key><string>Generics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
+// CHECK:   <key>issue_context_kind</key><string>function</string>
+// CHECK:   <key>issue_context</key><string>incompatibleTypesErased</string>
+// CHECK:   <key>issue_hash</key><string>3</string>
+// CHECK:   <key>location</key>
+// CHECK:   <dict>
+// CHECK:    <key>line</key><integer>94</integer>
+// CHECK:    <key>col</key><integer>3</integer>
+// CHECK:    <key>file</key><integer>0</integer>
+// CHECK:   </dict>
+// CHECK:   </dict>
+// CHECK:   <dict>
+// CHECK:    <key>path</key>
+// CHECK:    <array>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>92</integer>
+// CHECK:       <key>col</key><integer>7</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>92</integer>
+// CHECK:          <key>col</key><integer>7</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>92</integer>
+// CHECK:          <key>col</key><integer>7</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSString *&gt; *&apos; to &apos;NSArray *&apos;)</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSString *&gt; *&apos; to &apos;NSArray *&apos;)</string>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>92</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>92</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>96</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>96</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>96</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>96</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>96</integer>
+// CHECK:            <key>col</key><integer>11</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>96</integer>
+// CHECK:            <key>col</key><integer>11</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>96</integer>
+// CHECK:       <key>col</key><integer>11</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>96</integer>
+// CHECK:          <key>col</key><integer>11</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>96</integer>
 // CHECK:          <key>col</key><integer>11</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -664,21 +708,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>incompatibleTypesErased</string>
 // CHECK:   <key>issue_hash</key><string>5</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>93</integer>
+// CHECK:    <key>line</key><integer>96</integer>
 // CHECK:    <key>col</key><integer>11</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -694,12 +738,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>97</integer>
+// CHECK:            <key>line</key><integer>100</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>97</integer>
+// CHECK:            <key>line</key><integer>100</integer>
 // CHECK:            <key>col</key><integer>9</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -707,12 +751,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>97</integer>
+// CHECK:            <key>line</key><integer>100</integer>
 // CHECK:            <key>col</key><integer>28</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>97</integer>
+// CHECK:            <key>line</key><integer>100</integer>
 // CHECK:            <key>col</key><integer>40</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -724,7 +768,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>97</integer>
+// CHECK:       <key>line</key><integer>100</integer>
 // CHECK:       <key>col</key><integer>28</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -732,12 +776,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>97</integer>
+// CHECK:          <key>line</key><integer>100</integer>
 // CHECK:          <key>col</key><integer>28</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>97</integer>
+// CHECK:          <key>line</key><integer>100</integer>
 // CHECK:          <key>col</key><integer>42</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -753,7 +797,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>76</integer>
+// CHECK:       <key>line</key><integer>79</integer>
 // CHECK:       <key>col</key><integer>1</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -771,12 +815,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>76</integer>
+// CHECK:            <key>line</key><integer>79</integer>
 // CHECK:            <key>col</key><integer>1</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>76</integer>
+// CHECK:            <key>line</key><integer>79</integer>
 // CHECK:            <key>col</key><integer>7</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -784,12 +828,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>77</integer>
+// CHECK:            <key>line</key><integer>80</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>77</integer>
+// CHECK:            <key>line</key><integer>80</integer>
 // CHECK:            <key>col</key><integer>9</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -801,7 +845,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>77</integer>
+// CHECK:       <key>line</key><integer>80</integer>
 // CHECK:       <key>col</key><integer>28</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -809,12 +853,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>77</integer>
+// CHECK:          <key>line</key><integer>80</integer>
 // CHECK:          <key>col</key><integer>28</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>77</integer>
+// CHECK:          <key>line</key><integer>80</integer>
 // CHECK:          <key>col</key><integer>37</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -834,12 +878,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>77</integer>
+// CHECK:            <key>line</key><integer>80</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>77</integer>
+// CHECK:            <key>line</key><integer>80</integer>
 // CHECK:            <key>col</key><integer>9</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -847,12 +891,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>78</integer>
+// CHECK:            <key>line</key><integer>81</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>78</integer>
+// CHECK:            <key>line</key><integer>81</integer>
 // CHECK:            <key>col</key><integer>8</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -864,7 +908,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>97</integer>
+// CHECK:       <key>line</key><integer>100</integer>
 // CHECK:       <key>col</key><integer>28</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -872,12 +916,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>97</integer>
+// CHECK:          <key>line</key><integer>100</integer>
 // CHECK:          <key>col</key><integer>28</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>97</integer>
+// CHECK:          <key>line</key><integer>100</integer>
 // CHECK:          <key>col</key><integer>42</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -893,7 +937,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>97</integer>
+// CHECK:       <key>line</key><integer>100</integer>
 // CHECK:       <key>col</key><integer>28</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -901,12 +945,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>97</integer>
+// CHECK:          <key>line</key><integer>100</integer>
 // CHECK:          <key>col</key><integer>28</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>97</integer>
+// CHECK:          <key>line</key><integer>100</integer>
 // CHECK:          <key>col</key><integer>42</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -914,21 +958,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSString *&gt; *&apos; from &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSNumber *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSString *&gt; *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSString *&gt; *&apos; from &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSNumber *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSString *&gt; *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSArray&lt;NSString *&gt; *&apos; from &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSArray&lt;NSNumber *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSString *&gt; *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>crossProceduralErasedTypes</string>
 // CHECK:   <key>issue_hash</key><string>1</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>97</integer>
+// CHECK:    <key>line</key><integer>100</integer>
 // CHECK:    <key>col</key><integer>28</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -940,7 +984,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>102</integer>
+// CHECK:       <key>line</key><integer>105</integer>
 // CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -948,12 +992,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>102</integer>
+// CHECK:          <key>line</key><integer>105</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>102</integer>
+// CHECK:          <key>line</key><integer>105</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -973,12 +1017,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>102</integer>
+// CHECK:            <key>line</key><integer>105</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>102</integer>
+// CHECK:            <key>line</key><integer>105</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -986,12 +1030,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>103</integer>
+// CHECK:            <key>line</key><integer>106</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>103</integer>
+// CHECK:            <key>line</key><integer>106</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -1003,7 +1047,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>103</integer>
+// CHECK:       <key>line</key><integer>106</integer>
 // CHECK:       <key>col</key><integer>3</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -1011,12 +1055,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>103</integer>
+// CHECK:          <key>line</key><integer>106</integer>
 // CHECK:          <key>col</key><integer>16</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>103</integer>
+// CHECK:          <key>line</key><integer>106</integer>
 // CHECK:          <key>col</key><integer>38</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -1024,21 +1068,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>incompatibleTypesErasedReverseConversion</string>
 // CHECK:   <key>issue_hash</key><string>2</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>103</integer>
+// CHECK:    <key>line</key><integer>106</integer>
 // CHECK:    <key>col</key><integer>3</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -1046,109 +1090,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:   <dict>
 // CHECK:    <key>path</key>
 // CHECK:    <array>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>event</string>
-// CHECK:      <key>location</key>
-// CHECK:      <dict>
-// CHECK:       <key>line</key><integer>102</integer>
-// CHECK:       <key>col</key><integer>7</integer>
-// CHECK:       <key>file</key><integer>0</integer>
-// CHECK:      </dict>
-// CHECK:      <key>ranges</key>
-// CHECK:      <array>
-// CHECK:        <array>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>102</integer>
-// CHECK:          <key>col</key><integer>7</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>102</integer>
-// CHECK:          <key>col</key><integer>7</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:        </array>
-// CHECK:      </array>
-// CHECK:      <key>depth</key><integer>0</integer>
-// CHECK:      <key>extended_message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray *&apos; to &apos;NSArray&lt;NSString *&gt; *&apos;)</string>
-// CHECK:      <key>message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray *&apos; to &apos;NSArray&lt;NSString *&gt; *&apos;)</string>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>control</string>
-// CHECK:      <key>edges</key>
-// CHECK:       <array>
-// CHECK:        <dict>
-// CHECK:         <key>start</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>102</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>102</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:         <key>end</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>105</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>105</integer>
-// CHECK:            <key>col</key><integer>9</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:        </dict>
-// CHECK:       </array>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>control</string>
-// CHECK:      <key>edges</key>
-// CHECK:       <array>
-// CHECK:        <dict>
-// CHECK:         <key>start</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>105</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>105</integer>
-// CHECK:            <key>col</key><integer>9</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:         <key>end</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>105</integer>
-// CHECK:            <key>col</key><integer>11</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>105</integer>
-// CHECK:            <key>col</key><integer>11</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:        </dict>
-// CHECK:       </array>
-// CHECK:     </dict>
 // CHECK:     <dict>
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
 // CHECK:       <key>line</key><integer>105</integer>
-// CHECK:       <key>col</key><integer>11</integer>
+// CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
 // CHECK:      <key>ranges</key>
@@ -1156,11 +1103,108 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:        <array>
 // CHECK:         <dict>
 // CHECK:          <key>line</key><integer>105</integer>
-// CHECK:          <key>col</key><integer>11</integer>
+// CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
 // CHECK:          <key>line</key><integer>105</integer>
+// CHECK:          <key>col</key><integer>7</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray *&apos; to &apos;NSArray&lt;NSString *&gt; *&apos;)</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray *&apos; to &apos;NSArray&lt;NSString *&gt; *&apos;)</string>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>105</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>105</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>108</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>108</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>108</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>108</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>108</integer>
+// CHECK:            <key>col</key><integer>11</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>108</integer>
+// CHECK:            <key>col</key><integer>11</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>108</integer>
+// CHECK:       <key>col</key><integer>11</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>108</integer>
+// CHECK:          <key>col</key><integer>11</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>108</integer>
 // CHECK:          <key>col</key><integer>11</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -1168,21 +1212,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>incompatibleTypesErasedReverseConversion</string>
 // CHECK:   <key>issue_hash</key><string>4</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>105</integer>
+// CHECK:    <key>line</key><integer>108</integer>
 // CHECK:    <key>col</key><integer>11</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -1194,7 +1238,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>109</integer>
+// CHECK:       <key>line</key><integer>112</integer>
 // CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -1202,12 +1246,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>109</integer>
+// CHECK:          <key>line</key><integer>112</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>109</integer>
+// CHECK:          <key>line</key><integer>112</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -1227,12 +1271,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>109</integer>
+// CHECK:            <key>line</key><integer>112</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>109</integer>
+// CHECK:            <key>line</key><integer>112</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -1240,12 +1284,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>110</integer>
+// CHECK:            <key>line</key><integer>113</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>110</integer>
+// CHECK:            <key>line</key><integer>113</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -1257,7 +1301,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>110</integer>
+// CHECK:       <key>line</key><integer>113</integer>
 // CHECK:       <key>col</key><integer>3</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -1265,12 +1309,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>110</integer>
+// CHECK:          <key>line</key><integer>113</integer>
 // CHECK:          <key>col</key><integer>16</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>110</integer>
+// CHECK:          <key>line</key><integer>113</integer>
 // CHECK:          <key>col</key><integer>38</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -1278,21 +1322,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>idErasedIncompatibleTypesReverseConversion</string>
 // CHECK:   <key>issue_hash</key><string>2</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>110</integer>
+// CHECK:    <key>line</key><integer>113</integer>
 // CHECK:    <key>col</key><integer>3</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -1304,7 +1348,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>109</integer>
+// CHECK:       <key>line</key><integer>112</integer>
 // CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -1312,12 +1356,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>109</integer>
+// CHECK:          <key>line</key><integer>112</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>109</integer>
+// CHECK:          <key>line</key><integer>112</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -1337,12 +1381,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>109</integer>
+// CHECK:            <key>line</key><integer>112</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>109</integer>
+// CHECK:            <key>line</key><integer>112</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -1350,12 +1394,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>112</integer>
+// CHECK:            <key>line</key><integer>115</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>112</integer>
+// CHECK:            <key>line</key><integer>115</integer>
 // CHECK:            <key>col</key><integer>9</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -1371,12 +1415,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>112</integer>
+// CHECK:            <key>line</key><integer>115</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>112</integer>
+// CHECK:            <key>line</key><integer>115</integer>
 // CHECK:            <key>col</key><integer>9</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -1384,12 +1428,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>112</integer>
+// CHECK:            <key>line</key><integer>115</integer>
 // CHECK:            <key>col</key><integer>11</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>112</integer>
+// CHECK:            <key>line</key><integer>115</integer>
 // CHECK:            <key>col</key><integer>11</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -1401,7 +1445,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>112</integer>
+// CHECK:       <key>line</key><integer>115</integer>
 // CHECK:       <key>col</key><integer>11</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -1409,12 +1453,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>112</integer>
+// CHECK:          <key>line</key><integer>115</integer>
 // CHECK:          <key>col</key><integer>11</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>112</integer>
+// CHECK:          <key>line</key><integer>115</integer>
 // CHECK:          <key>col</key><integer>11</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -1422,21 +1466,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>idErasedIncompatibleTypesReverseConversion</string>
 // CHECK:   <key>issue_hash</key><string>4</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>112</integer>
+// CHECK:    <key>line</key><integer>115</integer>
 // CHECK:    <key>col</key><integer>11</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -1448,7 +1492,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>117</integer>
+// CHECK:       <key>line</key><integer>120</integer>
 // CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -1456,12 +1500,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>117</integer>
+// CHECK:          <key>line</key><integer>120</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>117</integer>
+// CHECK:          <key>line</key><integer>120</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -1481,12 +1525,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>117</integer>
+// CHECK:            <key>line</key><integer>120</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>117</integer>
+// CHECK:            <key>line</key><integer>120</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -1494,12 +1538,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>118</integer>
+// CHECK:            <key>line</key><integer>121</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>118</integer>
+// CHECK:            <key>line</key><integer>121</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -1515,12 +1559,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>118</integer>
+// CHECK:            <key>line</key><integer>121</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>118</integer>
+// CHECK:            <key>line</key><integer>121</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -1528,267 +1572,13 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>118</integer>
+// CHECK:            <key>line</key><integer>121</integer>
 // CHECK:            <key>col</key><integer>7</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>118</integer>
+// CHECK:            <key>line</key><integer>121</integer>
 // CHECK:            <key>col</key><integer>7</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:        </dict>
-// CHECK:       </array>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>event</string>
-// CHECK:      <key>location</key>
-// CHECK:      <dict>
-// CHECK:       <key>line</key><integer>118</integer>
-// CHECK:       <key>col</key><integer>7</integer>
-// CHECK:       <key>file</key><integer>0</integer>
-// CHECK:      </dict>
-// CHECK:      <key>ranges</key>
-// CHECK:      <array>
-// CHECK:        <array>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>118</integer>
-// CHECK:          <key>col</key><integer>7</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>118</integer>
-// CHECK:          <key>col</key><integer>7</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:        </array>
-// CHECK:      </array>
-// CHECK:      <key>depth</key><integer>0</integer>
-// CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
-// CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
-// CHECK:     </dict>
-// CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
-// CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
-// CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
-// CHECK:   <key>issue_context_kind</key><string>function</string>
-// CHECK:   <key>issue_context</key><string>idErasedIncompatibleTypes</string>
-// CHECK:   <key>issue_hash</key><string>2</string>
-// CHECK:   <key>location</key>
-// CHECK:   <dict>
-// CHECK:    <key>line</key><integer>118</integer>
-// CHECK:    <key>col</key><integer>7</integer>
-// CHECK:    <key>file</key><integer>0</integer>
-// CHECK:   </dict>
-// CHECK:   </dict>
-// CHECK:   <dict>
-// CHECK:    <key>path</key>
-// CHECK:    <array>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>event</string>
-// CHECK:      <key>location</key>
-// CHECK:      <dict>
-// CHECK:       <key>line</key><integer>117</integer>
-// CHECK:       <key>col</key><integer>7</integer>
-// CHECK:       <key>file</key><integer>0</integer>
-// CHECK:      </dict>
-// CHECK:      <key>ranges</key>
-// CHECK:      <array>
-// CHECK:        <array>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>117</integer>
-// CHECK:          <key>col</key><integer>7</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>117</integer>
-// CHECK:          <key>col</key><integer>7</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:        </array>
-// CHECK:      </array>
-// CHECK:      <key>depth</key><integer>0</integer>
-// CHECK:      <key>extended_message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSString *&gt; *&apos; to &apos;id&apos;)</string>
-// CHECK:      <key>message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSString *&gt; *&apos; to &apos;id&apos;)</string>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>control</string>
-// CHECK:      <key>edges</key>
-// CHECK:       <array>
-// CHECK:        <dict>
-// CHECK:         <key>start</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>117</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>117</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:         <key>end</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>119</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>119</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:        </dict>
-// CHECK:       </array>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>event</string>
-// CHECK:      <key>location</key>
-// CHECK:      <dict>
-// CHECK:       <key>line</key><integer>119</integer>
-// CHECK:       <key>col</key><integer>3</integer>
-// CHECK:       <key>file</key><integer>0</integer>
-// CHECK:      </dict>
-// CHECK:      <key>ranges</key>
-// CHECK:      <array>
-// CHECK:        <array>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>119</integer>
-// CHECK:          <key>col</key><integer>16</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>119</integer>
-// CHECK:          <key>col</key><integer>38</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:        </array>
-// CHECK:      </array>
-// CHECK:      <key>depth</key><integer>0</integer>
-// CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
-// CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
-// CHECK:     </dict>
-// CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
-// CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
-// CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
-// CHECK:   <key>issue_context_kind</key><string>function</string>
-// CHECK:   <key>issue_context</key><string>idErasedIncompatibleTypes</string>
-// CHECK:   <key>issue_hash</key><string>3</string>
-// CHECK:   <key>location</key>
-// CHECK:   <dict>
-// CHECK:    <key>line</key><integer>119</integer>
-// CHECK:    <key>col</key><integer>3</integer>
-// CHECK:    <key>file</key><integer>0</integer>
-// CHECK:   </dict>
-// CHECK:   </dict>
-// CHECK:   <dict>
-// CHECK:    <key>path</key>
-// CHECK:    <array>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>event</string>
-// CHECK:      <key>location</key>
-// CHECK:      <dict>
-// CHECK:       <key>line</key><integer>117</integer>
-// CHECK:       <key>col</key><integer>7</integer>
-// CHECK:       <key>file</key><integer>0</integer>
-// CHECK:      </dict>
-// CHECK:      <key>ranges</key>
-// CHECK:      <array>
-// CHECK:        <array>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>117</integer>
-// CHECK:          <key>col</key><integer>7</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>117</integer>
-// CHECK:          <key>col</key><integer>7</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:        </array>
-// CHECK:      </array>
-// CHECK:      <key>depth</key><integer>0</integer>
-// CHECK:      <key>extended_message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSString *&gt; *&apos; to &apos;id&apos;)</string>
-// CHECK:      <key>message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSString *&gt; *&apos; to &apos;id&apos;)</string>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>control</string>
-// CHECK:      <key>edges</key>
-// CHECK:       <array>
-// CHECK:        <dict>
-// CHECK:         <key>start</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>117</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>117</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:         <key>end</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>121</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>121</integer>
-// CHECK:            <key>col</key><integer>9</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:        </dict>
-// CHECK:       </array>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>control</string>
-// CHECK:      <key>edges</key>
-// CHECK:       <array>
-// CHECK:        <dict>
-// CHECK:         <key>start</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>121</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>121</integer>
-// CHECK:            <key>col</key><integer>9</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:         <key>end</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>121</integer>
-// CHECK:            <key>col</key><integer>11</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>121</integer>
-// CHECK:            <key>col</key><integer>11</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:          </array>
@@ -1800,7 +1590,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
 // CHECK:       <key>line</key><integer>121</integer>
-// CHECK:       <key>col</key><integer>11</integer>
+// CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
 // CHECK:      <key>ranges</key>
@@ -1808,34 +1598,34 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:        <array>
 // CHECK:         <dict>
 // CHECK:          <key>line</key><integer>121</integer>
-// CHECK:          <key>col</key><integer>11</integer>
+// CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
 // CHECK:          <key>line</key><integer>121</integer>
-// CHECK:          <key>col</key><integer>11</integer>
+// CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:        </array>
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>idErasedIncompatibleTypes</string>
-// CHECK:   <key>issue_hash</key><string>5</string>
+// CHECK:   <key>issue_hash</key><string>2</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
 // CHECK:    <key>line</key><integer>121</integer>
-// CHECK:    <key>col</key><integer>11</integer>
+// CHECK:    <key>col</key><integer>7</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
 // CHECK:   </dict>
@@ -1843,67 +1633,33 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:    <key>path</key>
 // CHECK:    <array>
 // CHECK:     <dict>
-// CHECK:      <key>kind</key><string>control</string>
-// CHECK:      <key>edges</key>
-// CHECK:       <array>
-// CHECK:        <dict>
-// CHECK:         <key>start</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>126</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>126</integer>
-// CHECK:            <key>col</key><integer>4</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:         <key>end</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>130</integer>
-// CHECK:            <key>col</key><integer>5</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>130</integer>
-// CHECK:            <key>col</key><integer>5</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:        </dict>
-// CHECK:       </array>
-// CHECK:     </dict>
-// CHECK:     <dict>
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>130</integer>
-// CHECK:       <key>col</key><integer>9</integer>
+// CHECK:       <key>line</key><integer>120</integer>
+// CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
 // CHECK:      <key>ranges</key>
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>130</integer>
-// CHECK:          <key>col</key><integer>9</integer>
+// CHECK:          <key>line</key><integer>120</integer>
+// CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>130</integer>
-// CHECK:          <key>col</key><integer>9</integer>
+// CHECK:          <key>line</key><integer>120</integer>
+// CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:        </array>
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; is inferred from implicit cast (from &apos;MutableArray&lt;NSMutableString *&gt; *&apos; to &apos;MutableArray *&apos;)</string>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSString *&gt; *&apos; to &apos;id&apos;)</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; is inferred from implicit cast (from &apos;MutableArray&lt;NSMutableString *&gt; *&apos; to &apos;MutableArray *&apos;)</string>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSString *&gt; *&apos; to &apos;id&apos;)</string>
 // CHECK:     </dict>
 // CHECK:     <dict>
 // CHECK:      <key>kind</key><string>control</string>
@@ -1913,59 +1669,25 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>130</integer>
-// CHECK:            <key>col</key><integer>5</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>130</integer>
-// CHECK:            <key>col</key><integer>5</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:         <key>end</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>131</integer>
-// CHECK:            <key>col</key><integer>5</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>131</integer>
-// CHECK:            <key>col</key><integer>5</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:        </dict>
-// CHECK:       </array>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>control</string>
-// CHECK:      <key>edges</key>
-// CHECK:       <array>
-// CHECK:        <dict>
-// CHECK:         <key>start</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>131</integer>
-// CHECK:            <key>col</key><integer>5</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>131</integer>
-// CHECK:            <key>col</key><integer>5</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:         <key>end</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>133</integer>
+// CHECK:            <key>line</key><integer>120</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>133</integer>
+// CHECK:            <key>line</key><integer>120</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>122</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>122</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -1977,7 +1699,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>133</integer>
+// CHECK:       <key>line</key><integer>122</integer>
 // CHECK:       <key>col</key><integer>3</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -1985,34 +1707,34 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>133</integer>
-// CHECK:          <key>col</key><integer>17</integer>
+// CHECK:          <key>line</key><integer>122</integer>
+// CHECK:          <key>col</key><integer>16</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>133</integer>
-// CHECK:          <key>col</key><integer>39</integer>
+// CHECK:          <key>line</key><integer>122</integer>
+// CHECK:          <key>col</key><integer>38</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:        </array>
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSMutableString *&apos; from &apos;NSString *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSMutableString *&apos; from &apos;NSString *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSMutableString *&apos; from &apos;NSString *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
-// CHECK:   <key>issue_context</key><string>pathSensitiveInference</string>
-// CHECK:   <key>issue_hash</key><string>8</string>
+// CHECK:   <key>issue_context</key><string>idErasedIncompatibleTypes</string>
+// CHECK:   <key>issue_hash</key><string>3</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>133</integer>
+// CHECK:    <key>line</key><integer>122</integer>
 // CHECK:    <key>col</key><integer>3</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -2024,7 +1746,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>138</integer>
+// CHECK:       <key>line</key><integer>120</integer>
 // CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -2032,12 +1754,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>138</integer>
+// CHECK:          <key>line</key><integer>120</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>138</integer>
+// CHECK:          <key>line</key><integer>120</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -2045,9 +1767,9 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Type &apos;MutableArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;id&apos; to &apos;MutableArray&lt;NSString *&gt; *&apos;)</string>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSString *&gt; *&apos; to &apos;id&apos;)</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Type &apos;MutableArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;id&apos; to &apos;MutableArray&lt;NSString *&gt; *&apos;)</string>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSString *&gt; *&apos; to &apos;id&apos;)</string>
 // CHECK:     </dict>
 // CHECK:     <dict>
 // CHECK:      <key>kind</key><string>control</string>
@@ -2057,12 +1779,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>138</integer>
+// CHECK:            <key>line</key><integer>120</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>138</integer>
+// CHECK:            <key>line</key><integer>120</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2070,12 +1792,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>139</integer>
+// CHECK:            <key>line</key><integer>124</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>139</integer>
+// CHECK:            <key>line</key><integer>124</integer>
 // CHECK:            <key>col</key><integer>9</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2091,12 +1813,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>139</integer>
+// CHECK:            <key>line</key><integer>124</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>139</integer>
+// CHECK:            <key>line</key><integer>124</integer>
 // CHECK:            <key>col</key><integer>9</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2104,12 +1826,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>139</integer>
+// CHECK:            <key>line</key><integer>124</integer>
 // CHECK:            <key>col</key><integer>11</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>139</integer>
+// CHECK:            <key>line</key><integer>124</integer>
 // CHECK:            <key>col</key><integer>11</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2121,7 +1843,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>139</integer>
+// CHECK:       <key>line</key><integer>124</integer>
 // CHECK:       <key>col</key><integer>11</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -2129,12 +1851,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>139</integer>
+// CHECK:          <key>line</key><integer>124</integer>
 // CHECK:          <key>col</key><integer>11</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>139</integer>
+// CHECK:          <key>line</key><integer>124</integer>
 // CHECK:          <key>col</key><integer>11</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -2142,21 +1864,343 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
+// CHECK:   <key>issue_context_kind</key><string>function</string>
+// CHECK:   <key>issue_context</key><string>idErasedIncompatibleTypes</string>
+// CHECK:   <key>issue_hash</key><string>5</string>
+// CHECK:   <key>location</key>
+// CHECK:   <dict>
+// CHECK:    <key>line</key><integer>124</integer>
+// CHECK:    <key>col</key><integer>11</integer>
+// CHECK:    <key>file</key><integer>0</integer>
+// CHECK:   </dict>
+// CHECK:   </dict>
+// CHECK:   <dict>
+// CHECK:    <key>path</key>
+// CHECK:    <array>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>129</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>129</integer>
+// CHECK:            <key>col</key><integer>4</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>133</integer>
+// CHECK:            <key>col</key><integer>5</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>133</integer>
+// CHECK:            <key>col</key><integer>5</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>133</integer>
+// CHECK:       <key>col</key><integer>9</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>133</integer>
+// CHECK:          <key>col</key><integer>9</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>133</integer>
+// CHECK:          <key>col</key><integer>9</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; is inferred from implicit cast (from &apos;MutableArray&lt;NSMutableString *&gt; *&apos; to &apos;MutableArray *&apos;)</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; is inferred from implicit cast (from &apos;MutableArray&lt;NSMutableString *&gt; *&apos; to &apos;MutableArray *&apos;)</string>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>133</integer>
+// CHECK:            <key>col</key><integer>5</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>133</integer>
+// CHECK:            <key>col</key><integer>5</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>134</integer>
+// CHECK:            <key>col</key><integer>5</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>134</integer>
+// CHECK:            <key>col</key><integer>5</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>134</integer>
+// CHECK:            <key>col</key><integer>5</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>134</integer>
+// CHECK:            <key>col</key><integer>5</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>136</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>136</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>136</integer>
+// CHECK:       <key>col</key><integer>3</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>136</integer>
+// CHECK:          <key>col</key><integer>17</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>136</integer>
+// CHECK:          <key>col</key><integer>39</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Conversion from value of type &apos;NSString *&apos; to incompatible type &apos;NSMutableString *&apos;</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Conversion from value of type &apos;NSString *&apos; to incompatible type &apos;NSMutableString *&apos;</string>
+// CHECK:     </dict>
+// CHECK:    </array>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSString *&apos; to incompatible type &apos;NSMutableString *&apos;</string>
+// CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
+// CHECK:    <key>type</key><string>Generics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
+// CHECK:   <key>issue_context_kind</key><string>function</string>
+// CHECK:   <key>issue_context</key><string>pathSensitiveInference</string>
+// CHECK:   <key>issue_hash</key><string>8</string>
+// CHECK:   <key>location</key>
+// CHECK:   <dict>
+// CHECK:    <key>line</key><integer>136</integer>
+// CHECK:    <key>col</key><integer>3</integer>
+// CHECK:    <key>file</key><integer>0</integer>
+// CHECK:   </dict>
+// CHECK:   </dict>
+// CHECK:   <dict>
+// CHECK:    <key>path</key>
+// CHECK:    <array>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>141</integer>
+// CHECK:       <key>col</key><integer>7</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>141</integer>
+// CHECK:          <key>col</key><integer>7</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>141</integer>
+// CHECK:          <key>col</key><integer>7</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Type &apos;MutableArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;id&apos; to &apos;MutableArray&lt;NSString *&gt; *&apos;)</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Type &apos;MutableArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;id&apos; to &apos;MutableArray&lt;NSString *&gt; *&apos;)</string>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>141</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>141</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>142</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>142</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>142</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>142</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>142</integer>
+// CHECK:            <key>col</key><integer>11</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>142</integer>
+// CHECK:            <key>col</key><integer>11</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>142</integer>
+// CHECK:       <key>col</key><integer>11</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>142</integer>
+// CHECK:          <key>col</key><integer>11</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>142</integer>
+// CHECK:          <key>col</key><integer>11</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
+// CHECK:     </dict>
+// CHECK:    </array>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
+// CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
+// CHECK:    <key>type</key><string>Generics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>verifyAPIusage</string>
 // CHECK:   <key>issue_hash</key><string>2</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>139</integer>
+// CHECK:    <key>line</key><integer>142</integer>
 // CHECK:    <key>col</key><integer>11</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -2168,7 +2212,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>144</integer>
+// CHECK:       <key>line</key><integer>147</integer>
 // CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -2176,12 +2220,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>144</integer>
+// CHECK:          <key>line</key><integer>147</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>144</integer>
+// CHECK:          <key>line</key><integer>147</integer>
 // CHECK:          <key>col</key><integer>42</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -2201,12 +2245,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>144</integer>
+// CHECK:            <key>line</key><integer>147</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>144</integer>
+// CHECK:            <key>line</key><integer>147</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2214,12 +2258,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>145</integer>
+// CHECK:            <key>line</key><integer>148</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>145</integer>
+// CHECK:            <key>line</key><integer>148</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2231,7 +2275,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>145</integer>
+// CHECK:       <key>line</key><integer>148</integer>
 // CHECK:       <key>col</key><integer>3</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -2239,12 +2283,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>145</integer>
+// CHECK:          <key>line</key><integer>148</integer>
 // CHECK:          <key>col</key><integer>17</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>145</integer>
+// CHECK:          <key>line</key><integer>148</integer>
 // CHECK:          <key>col</key><integer>39</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -2252,21 +2296,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSMutableString *&apos; from &apos;NSString *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSString *&apos; to incompatible type &apos;NSMutableString *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSMutableString *&apos; from &apos;NSString *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSString *&apos; to incompatible type &apos;NSMutableString *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSMutableString *&apos; from &apos;NSString *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSString *&apos; to incompatible type &apos;NSMutableString *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>trustExplicitCasts</string>
 // CHECK:   <key>issue_hash</key><string>2</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>145</integer>
+// CHECK:    <key>line</key><integer>148</integer>
 // CHECK:    <key>col</key><integer>3</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -2282,12 +2326,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>151</integer>
+// CHECK:            <key>line</key><integer>154</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>151</integer>
+// CHECK:            <key>line</key><integer>154</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2295,12 +2339,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>152</integer>
+// CHECK:            <key>line</key><integer>155</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>152</integer>
+// CHECK:            <key>line</key><integer>155</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2312,7 +2356,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>152</integer>
+// CHECK:       <key>line</key><integer>155</integer>
 // CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -2320,12 +2364,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>152</integer>
+// CHECK:          <key>line</key><integer>155</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>152</integer>
+// CHECK:          <key>line</key><integer>155</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -2345,12 +2389,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>152</integer>
+// CHECK:            <key>line</key><integer>155</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>152</integer>
+// CHECK:            <key>line</key><integer>155</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2358,12 +2402,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>153</integer>
+// CHECK:            <key>line</key><integer>156</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>153</integer>
+// CHECK:            <key>line</key><integer>156</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2379,12 +2423,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>153</integer>
+// CHECK:            <key>line</key><integer>156</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>153</integer>
+// CHECK:            <key>line</key><integer>156</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2392,12 +2436,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>153</integer>
+// CHECK:            <key>line</key><integer>156</integer>
 // CHECK:            <key>col</key><integer>7</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>153</integer>
+// CHECK:            <key>line</key><integer>156</integer>
 // CHECK:            <key>col</key><integer>7</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2409,7 +2453,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>153</integer>
+// CHECK:       <key>line</key><integer>156</integer>
 // CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -2417,12 +2461,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>153</integer>
+// CHECK:          <key>line</key><integer>156</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>153</integer>
+// CHECK:          <key>line</key><integer>156</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -2430,21 +2474,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSNumber *&gt; *&apos; from &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSNumber *&gt; *&apos; from &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSNumber *&gt; *&apos; from &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>subtypeOfGeneric</string>
 // CHECK:   <key>issue_hash</key><string>3</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>153</integer>
+// CHECK:    <key>line</key><integer>156</integer>
 // CHECK:    <key>col</key><integer>7</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -2456,7 +2500,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>159</integer>
+// CHECK:       <key>line</key><integer>162</integer>
 // CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -2464,12 +2508,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>159</integer>
+// CHECK:          <key>line</key><integer>162</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>159</integer>
+// CHECK:          <key>line</key><integer>162</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -2489,12 +2533,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>159</integer>
+// CHECK:            <key>line</key><integer>162</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>159</integer>
+// CHECK:            <key>line</key><integer>162</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2502,12 +2546,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>161</integer>
+// CHECK:            <key>line</key><integer>164</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>161</integer>
+// CHECK:            <key>line</key><integer>164</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2519,7 +2563,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>161</integer>
+// CHECK:       <key>line</key><integer>164</integer>
 // CHECK:       <key>col</key><integer>3</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -2527,12 +2571,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>161</integer>
+// CHECK:          <key>line</key><integer>164</integer>
 // CHECK:          <key>col</key><integer>16</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>161</integer>
+// CHECK:          <key>line</key><integer>164</integer>
 // CHECK:          <key>col</key><integer>38</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -2540,21 +2584,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>genericSubtypeOfGeneric</string>
 // CHECK:   <key>issue_hash</key><string>3</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>161</integer>
+// CHECK:    <key>line</key><integer>164</integer>
 // CHECK:    <key>col</key><integer>3</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -2566,7 +2610,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>159</integer>
+// CHECK:       <key>line</key><integer>162</integer>
 // CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -2574,12 +2618,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>159</integer>
+// CHECK:          <key>line</key><integer>162</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>159</integer>
+// CHECK:          <key>line</key><integer>162</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -2599,12 +2643,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>159</integer>
+// CHECK:            <key>line</key><integer>162</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>159</integer>
+// CHECK:            <key>line</key><integer>162</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2612,12 +2656,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>163</integer>
+// CHECK:            <key>line</key><integer>166</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>163</integer>
+// CHECK:            <key>line</key><integer>166</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2633,12 +2677,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>163</integer>
+// CHECK:            <key>line</key><integer>166</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>163</integer>
+// CHECK:            <key>line</key><integer>166</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2646,12 +2690,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>163</integer>
+// CHECK:            <key>line</key><integer>166</integer>
 // CHECK:            <key>col</key><integer>7</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>163</integer>
+// CHECK:            <key>line</key><integer>166</integer>
 // CHECK:            <key>col</key><integer>7</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2663,7 +2707,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>163</integer>
+// CHECK:       <key>line</key><integer>166</integer>
 // CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -2671,12 +2715,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>163</integer>
+// CHECK:          <key>line</key><integer>166</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>163</integer>
+// CHECK:          <key>line</key><integer>166</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -2684,21 +2728,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSNumber *&gt; *&apos; from &apos;ExceptionalArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;ExceptionalArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSNumber *&gt; *&apos; from &apos;ExceptionalArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;ExceptionalArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSNumber *&gt; *&apos; from &apos;ExceptionalArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;ExceptionalArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>genericSubtypeOfGeneric</string>
 // CHECK:   <key>issue_hash</key><string>5</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>163</integer>
+// CHECK:    <key>line</key><integer>166</integer>
 // CHECK:    <key>col</key><integer>7</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -2710,7 +2754,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>169</integer>
+// CHECK:       <key>line</key><integer>172</integer>
 // CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -2718,12 +2762,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>169</integer>
+// CHECK:          <key>line</key><integer>172</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>169</integer>
+// CHECK:          <key>line</key><integer>172</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -2743,12 +2787,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>169</integer>
+// CHECK:            <key>line</key><integer>172</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>169</integer>
+// CHECK:            <key>line</key><integer>172</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2756,12 +2800,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>171</integer>
+// CHECK:            <key>line</key><integer>174</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>171</integer>
+// CHECK:            <key>line</key><integer>174</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2773,7 +2817,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>171</integer>
+// CHECK:       <key>line</key><integer>174</integer>
 // CHECK:       <key>col</key><integer>3</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -2781,12 +2825,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>171</integer>
+// CHECK:          <key>line</key><integer>174</integer>
 // CHECK:          <key>col</key><integer>16</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>171</integer>
+// CHECK:          <key>line</key><integer>174</integer>
 // CHECK:          <key>col</key><integer>38</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -2794,21 +2838,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>genericSubtypeOfGenericReverse</string>
 // CHECK:   <key>issue_hash</key><string>3</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>171</integer>
+// CHECK:    <key>line</key><integer>174</integer>
 // CHECK:    <key>col</key><integer>3</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -2820,7 +2864,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>169</integer>
+// CHECK:       <key>line</key><integer>172</integer>
 // CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -2828,12 +2872,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>169</integer>
+// CHECK:          <key>line</key><integer>172</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>169</integer>
+// CHECK:          <key>line</key><integer>172</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -2853,12 +2897,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>169</integer>
+// CHECK:            <key>line</key><integer>172</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>169</integer>
+// CHECK:            <key>line</key><integer>172</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2866,12 +2910,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>173</integer>
+// CHECK:            <key>line</key><integer>176</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>173</integer>
+// CHECK:            <key>line</key><integer>176</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2887,12 +2931,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>173</integer>
+// CHECK:            <key>line</key><integer>176</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>173</integer>
+// CHECK:            <key>line</key><integer>176</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2900,12 +2944,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>173</integer>
+// CHECK:            <key>line</key><integer>176</integer>
 // CHECK:            <key>col</key><integer>7</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>173</integer>
+// CHECK:            <key>line</key><integer>176</integer>
 // CHECK:            <key>col</key><integer>7</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -2917,7 +2961,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>173</integer>
+// CHECK:       <key>line</key><integer>176</integer>
 // CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -2925,12 +2969,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>173</integer>
+// CHECK:          <key>line</key><integer>176</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>173</integer>
+// CHECK:          <key>line</key><integer>176</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -2938,21 +2982,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSNumber *&gt; *&apos; from &apos;ExceptionalArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;ExceptionalArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSNumber *&gt; *&apos; from &apos;ExceptionalArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;ExceptionalArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSNumber *&gt; *&apos; from &apos;ExceptionalArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;ExceptionalArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>genericSubtypeOfGenericReverse</string>
 // CHECK:   <key>issue_hash</key><string>5</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>173</integer>
+// CHECK:    <key>line</key><integer>176</integer>
 // CHECK:    <key>col</key><integer>7</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -2964,7 +3008,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>179</integer>
+// CHECK:       <key>line</key><integer>182</integer>
 // CHECK:       <key>col</key><integer>20</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -2972,12 +3016,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>179</integer>
+// CHECK:          <key>line</key><integer>182</integer>
 // CHECK:          <key>col</key><integer>20</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>179</integer>
+// CHECK:          <key>line</key><integer>182</integer>
 // CHECK:          <key>col</key><integer>20</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -2997,12 +3041,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>179</integer>
+// CHECK:            <key>line</key><integer>182</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>179</integer>
+// CHECK:            <key>line</key><integer>182</integer>
 // CHECK:            <key>col</key><integer>18</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3010,12 +3054,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>180</integer>
+// CHECK:            <key>line</key><integer>183</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>180</integer>
+// CHECK:            <key>line</key><integer>183</integer>
 // CHECK:            <key>col</key><integer>25</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3031,12 +3075,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>180</integer>
+// CHECK:            <key>line</key><integer>183</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>180</integer>
+// CHECK:            <key>line</key><integer>183</integer>
 // CHECK:            <key>col</key><integer>25</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3044,12 +3088,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>180</integer>
+// CHECK:            <key>line</key><integer>183</integer>
 // CHECK:            <key>col</key><integer>27</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>180</integer>
+// CHECK:            <key>line</key><integer>183</integer>
 // CHECK:            <key>col</key><integer>27</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3061,7 +3105,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>180</integer>
+// CHECK:       <key>line</key><integer>183</integer>
 // CHECK:       <key>col</key><integer>27</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -3069,12 +3113,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>180</integer>
+// CHECK:          <key>line</key><integer>183</integer>
 // CHECK:          <key>col</key><integer>27</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>180</integer>
+// CHECK:          <key>line</key><integer>183</integer>
 // CHECK:          <key>col</key><integer>27</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -3082,21 +3126,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSMutableString *&gt; *&apos; from &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSMutableString *&gt; *&apos; from &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSMutableString *&gt; *&apos; from &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>inferenceFromAPI</string>
 // CHECK:   <key>issue_hash</key><string>4</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>180</integer>
+// CHECK:    <key>line</key><integer>183</integer>
 // CHECK:    <key>col</key><integer>27</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -3108,7 +3152,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>184</integer>
+// CHECK:       <key>line</key><integer>187</integer>
 // CHECK:       <key>col</key><integer>27</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -3116,12 +3160,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>184</integer>
+// CHECK:          <key>line</key><integer>187</integer>
 // CHECK:          <key>col</key><integer>27</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>184</integer>
+// CHECK:          <key>line</key><integer>187</integer>
 // CHECK:          <key>col</key><integer>27</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -3141,12 +3185,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>184</integer>
+// CHECK:            <key>line</key><integer>187</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>184</integer>
+// CHECK:            <key>line</key><integer>187</integer>
 // CHECK:            <key>col</key><integer>25</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3154,12 +3198,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>185</integer>
+// CHECK:            <key>line</key><integer>188</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>185</integer>
+// CHECK:            <key>line</key><integer>188</integer>
 // CHECK:            <key>col</key><integer>18</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3175,12 +3219,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>185</integer>
+// CHECK:            <key>line</key><integer>188</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>185</integer>
+// CHECK:            <key>line</key><integer>188</integer>
 // CHECK:            <key>col</key><integer>18</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3188,12 +3232,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>185</integer>
+// CHECK:            <key>line</key><integer>188</integer>
 // CHECK:            <key>col</key><integer>20</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>185</integer>
+// CHECK:            <key>line</key><integer>188</integer>
 // CHECK:            <key>col</key><integer>20</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3205,7 +3249,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>185</integer>
+// CHECK:       <key>line</key><integer>188</integer>
 // CHECK:       <key>col</key><integer>20</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -3213,12 +3257,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>185</integer>
+// CHECK:          <key>line</key><integer>188</integer>
 // CHECK:          <key>col</key><integer>20</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>185</integer>
+// CHECK:          <key>line</key><integer>188</integer>
 // CHECK:          <key>col</key><integer>20</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -3226,21 +3270,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSString *&gt; *&apos; from &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSString *&gt; *&apos; from &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSString *&gt; *&apos; from &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>inferenceFromAPI2</string>
 // CHECK:   <key>issue_hash</key><string>2</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>185</integer>
+// CHECK:    <key>line</key><integer>188</integer>
 // CHECK:    <key>col</key><integer>20</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -3252,7 +3296,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>189</integer>
+// CHECK:       <key>line</key><integer>192</integer>
 // CHECK:       <key>col</key><integer>27</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -3260,12 +3304,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>189</integer>
+// CHECK:          <key>line</key><integer>192</integer>
 // CHECK:          <key>col</key><integer>27</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>189</integer>
+// CHECK:          <key>line</key><integer>192</integer>
 // CHECK:          <key>col</key><integer>27</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -3285,12 +3329,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>189</integer>
+// CHECK:            <key>line</key><integer>192</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>189</integer>
+// CHECK:            <key>line</key><integer>192</integer>
 // CHECK:            <key>col</key><integer>25</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3298,12 +3342,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>190</integer>
+// CHECK:            <key>line</key><integer>193</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>190</integer>
+// CHECK:            <key>line</key><integer>193</integer>
 // CHECK:            <key>col</key><integer>18</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3319,12 +3363,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>190</integer>
+// CHECK:            <key>line</key><integer>193</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>190</integer>
+// CHECK:            <key>line</key><integer>193</integer>
 // CHECK:            <key>col</key><integer>18</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3332,12 +3376,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>190</integer>
+// CHECK:            <key>line</key><integer>193</integer>
 // CHECK:            <key>col</key><integer>20</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>190</integer>
+// CHECK:            <key>line</key><integer>193</integer>
 // CHECK:            <key>col</key><integer>20</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3349,7 +3393,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>190</integer>
+// CHECK:       <key>line</key><integer>193</integer>
 // CHECK:       <key>col</key><integer>20</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -3357,12 +3401,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>190</integer>
+// CHECK:          <key>line</key><integer>193</integer>
 // CHECK:          <key>col</key><integer>20</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>190</integer>
+// CHECK:          <key>line</key><integer>193</integer>
 // CHECK:          <key>col</key><integer>20</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -3370,21 +3414,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSString *&gt; *&apos; from &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSString *&gt; *&apos; from &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSString *&gt; *&apos; from &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>inferenceFromAPIWithLegacyTypes</string>
 // CHECK:   <key>issue_hash</key><string>2</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>190</integer>
+// CHECK:    <key>line</key><integer>193</integer>
 // CHECK:    <key>col</key><integer>20</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -3396,7 +3440,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>194</integer>
+// CHECK:       <key>line</key><integer>197</integer>
 // CHECK:       <key>col</key><integer>20</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -3404,12 +3448,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>194</integer>
+// CHECK:          <key>line</key><integer>197</integer>
 // CHECK:          <key>col</key><integer>20</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>194</integer>
+// CHECK:          <key>line</key><integer>197</integer>
 // CHECK:          <key>col</key><integer>20</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -3429,12 +3473,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>194</integer>
+// CHECK:            <key>line</key><integer>197</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>194</integer>
+// CHECK:            <key>line</key><integer>197</integer>
 // CHECK:            <key>col</key><integer>18</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3442,12 +3486,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>195</integer>
+// CHECK:            <key>line</key><integer>198</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>195</integer>
+// CHECK:            <key>line</key><integer>198</integer>
 // CHECK:            <key>col</key><integer>25</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3463,12 +3507,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>195</integer>
+// CHECK:            <key>line</key><integer>198</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>195</integer>
+// CHECK:            <key>line</key><integer>198</integer>
 // CHECK:            <key>col</key><integer>25</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3476,12 +3520,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>195</integer>
+// CHECK:            <key>line</key><integer>198</integer>
 // CHECK:            <key>col</key><integer>27</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>195</integer>
+// CHECK:            <key>line</key><integer>198</integer>
 // CHECK:            <key>col</key><integer>27</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3493,7 +3537,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>195</integer>
+// CHECK:       <key>line</key><integer>198</integer>
 // CHECK:       <key>col</key><integer>27</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -3501,12 +3545,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>195</integer>
+// CHECK:          <key>line</key><integer>198</integer>
 // CHECK:          <key>col</key><integer>27</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>195</integer>
+// CHECK:          <key>line</key><integer>198</integer>
 // CHECK:          <key>col</key><integer>27</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -3514,21 +3558,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSMutableString *&gt; *&apos; from &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSMutableString *&gt; *&apos; from &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSMutableString *&gt; *&apos; from &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>inferenceFromAPIWithLegacyTypes2</string>
 // CHECK:   <key>issue_hash</key><string>2</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>195</integer>
+// CHECK:    <key>line</key><integer>198</integer>
 // CHECK:    <key>col</key><integer>27</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -3540,104 +3584,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>199</integer>
-// CHECK:       <key>col</key><integer>20</integer>
-// CHECK:       <key>file</key><integer>0</integer>
-// CHECK:      </dict>
-// CHECK:      <key>ranges</key>
-// CHECK:      <array>
-// CHECK:        <array>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>199</integer>
-// CHECK:          <key>col</key><integer>20</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>199</integer>
-// CHECK:          <key>col</key><integer>20</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:        </array>
-// CHECK:      </array>
-// CHECK:      <key>depth</key><integer>0</integer>
-// CHECK:      <key>extended_message</key>
-// CHECK:      <string>Type &apos;MutableArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;BuggyMutableArray&lt;NSMutableString *&gt; *&apos; to &apos;MutableArray&lt;NSString *&gt; *&apos;)</string>
-// CHECK:      <key>message</key>
-// CHECK:      <string>Type &apos;MutableArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;BuggyMutableArray&lt;NSMutableString *&gt; *&apos; to &apos;MutableArray&lt;NSString *&gt; *&apos;)</string>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>control</string>
-// CHECK:      <key>edges</key>
-// CHECK:       <array>
-// CHECK:        <dict>
-// CHECK:         <key>start</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>199</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>199</integer>
-// CHECK:            <key>col</key><integer>18</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:         <key>end</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>200</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>200</integer>
-// CHECK:            <key>col</key><integer>25</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:        </dict>
-// CHECK:       </array>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>control</string>
-// CHECK:      <key>edges</key>
-// CHECK:       <array>
-// CHECK:        <dict>
-// CHECK:         <key>start</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>200</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>200</integer>
-// CHECK:            <key>col</key><integer>25</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:         <key>end</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>200</integer>
-// CHECK:            <key>col</key><integer>27</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>200</integer>
-// CHECK:            <key>col</key><integer>27</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:        </dict>
-// CHECK:       </array>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>event</string>
-// CHECK:      <key>location</key>
-// CHECK:      <dict>
-// CHECK:       <key>line</key><integer>200</integer>
+// CHECK:       <key>line</key><integer>202</integer>
 // CHECK:       <key>col</key><integer>27</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -3645,12 +3592,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>200</integer>
+// CHECK:          <key>line</key><integer>202</integer>
 // CHECK:          <key>col</key><integer>27</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>200</integer>
+// CHECK:          <key>line</key><integer>202</integer>
 // CHECK:          <key>col</key><integer>27</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -3658,28 +3605,141 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSMutableString *&gt; *&apos; from &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;__kindof NSArray&lt;NSString *&gt; *&apos; to &apos;LegacyMutableArray *&apos;)</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSMutableString *&gt; *&apos; from &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;__kindof NSArray&lt;NSString *&gt; *&apos; to &apos;LegacyMutableArray *&apos;)</string>
 // CHECK:     </dict>
-// CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSMutableString *&gt; *&apos; from &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
-// CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
-// CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
-// CHECK:   <key>issue_context_kind</key><string>function</string>
-// CHECK:   <key>issue_context</key><string>inferenceFromAPIWithBuggyTypes</string>
-// CHECK:   <key>issue_hash</key><string>2</string>
-// CHECK:   <key>location</key>
-// CHECK:   <dict>
-// CHECK:    <key>line</key><integer>200</integer>
-// CHECK:    <key>col</key><integer>27</integer>
-// CHECK:    <key>file</key><integer>0</integer>
-// CHECK:   </dict>
-// CHECK:   </dict>
-// CHECK:   <dict>
-// CHECK:    <key>path</key>
-// CHECK:    <array>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>202</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>202</integer>
+// CHECK:            <key>col</key><integer>20</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>203</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>203</integer>
+// CHECK:            <key>col</key><integer>18</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>203</integer>
+// CHECK:       <key>col</key><integer>20</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>203</integer>
+// CHECK:          <key>col</key><integer>20</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>203</integer>
+// CHECK:          <key>col</key><integer>20</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Type &apos;MutableArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;LegacyMutableArray *&apos; to &apos;MutableArray&lt;NSString *&gt; *&apos;)</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Type &apos;MutableArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;LegacyMutableArray *&apos; to &apos;MutableArray&lt;NSString *&gt; *&apos;)</string>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>203</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>203</integer>
+// CHECK:            <key>col</key><integer>18</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>204</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>204</integer>
+// CHECK:            <key>col</key><integer>25</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>204</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>204</integer>
+// CHECK:            <key>col</key><integer>25</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>204</integer>
+// CHECK:            <key>col</key><integer>27</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>204</integer>
+// CHECK:            <key>col</key><integer>27</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
 // CHECK:     <dict>
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
@@ -3705,6 +3765,197 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
+// CHECK:     </dict>
+// CHECK:    </array>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
+// CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
+// CHECK:    <key>type</key><string>Generics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
+// CHECK:   <key>issue_context_kind</key><string>function</string>
+// CHECK:   <key>issue_context</key><string>inferenceFromAPIWithLegacyTypes3</string>
+// CHECK:   <key>issue_hash</key><string>3</string>
+// CHECK:   <key>location</key>
+// CHECK:   <dict>
+// CHECK:    <key>line</key><integer>204</integer>
+// CHECK:    <key>col</key><integer>27</integer>
+// CHECK:    <key>file</key><integer>0</integer>
+// CHECK:   </dict>
+// CHECK:   </dict>
+// CHECK:   <dict>
+// CHECK:    <key>path</key>
+// CHECK:    <array>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>208</integer>
+// CHECK:       <key>col</key><integer>20</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>208</integer>
+// CHECK:          <key>col</key><integer>20</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>208</integer>
+// CHECK:          <key>col</key><integer>20</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Type &apos;MutableArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;BuggyMutableArray&lt;NSMutableString *&gt; *&apos; to &apos;MutableArray&lt;NSString *&gt; *&apos;)</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Type &apos;MutableArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;BuggyMutableArray&lt;NSMutableString *&gt; *&apos; to &apos;MutableArray&lt;NSString *&gt; *&apos;)</string>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>208</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>208</integer>
+// CHECK:            <key>col</key><integer>18</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>209</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>209</integer>
+// CHECK:            <key>col</key><integer>25</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>209</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>209</integer>
+// CHECK:            <key>col</key><integer>25</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>209</integer>
+// CHECK:            <key>col</key><integer>27</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>209</integer>
+// CHECK:            <key>col</key><integer>27</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>209</integer>
+// CHECK:       <key>col</key><integer>27</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>209</integer>
+// CHECK:          <key>col</key><integer>27</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>209</integer>
+// CHECK:          <key>col</key><integer>27</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
+// CHECK:     </dict>
+// CHECK:    </array>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
+// CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
+// CHECK:    <key>type</key><string>Generics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
+// CHECK:   <key>issue_context_kind</key><string>function</string>
+// CHECK:   <key>issue_context</key><string>inferenceFromAPIWithBuggyTypes</string>
+// CHECK:   <key>issue_hash</key><string>2</string>
+// CHECK:   <key>location</key>
+// CHECK:   <dict>
+// CHECK:    <key>line</key><integer>209</integer>
+// CHECK:    <key>col</key><integer>27</integer>
+// CHECK:    <key>file</key><integer>0</integer>
+// CHECK:   </dict>
+// CHECK:   </dict>
+// CHECK:   <dict>
+// CHECK:    <key>path</key>
+// CHECK:    <array>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>213</integer>
+// CHECK:       <key>col</key><integer>27</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>213</integer>
+// CHECK:          <key>col</key><integer>27</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>213</integer>
+// CHECK:          <key>col</key><integer>27</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
 // CHECK:      <string>Type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; is inferred from implicit cast (from &apos;BuggySpecialMutableArray&lt;NSMutableString *&gt; *&apos; to &apos;MutableArray&lt;NSMutableString *&gt; *&apos;)</string>
 // CHECK:      <key>message</key>
 // CHECK:      <string>Type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; is inferred from implicit cast (from &apos;BuggySpecialMutableArray&lt;NSMutableString *&gt; *&apos; to &apos;MutableArray&lt;NSMutableString *&gt; *&apos;)</string>
@@ -3717,12 +3968,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>204</integer>
+// CHECK:            <key>line</key><integer>213</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>204</integer>
+// CHECK:            <key>line</key><integer>213</integer>
 // CHECK:            <key>col</key><integer>25</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3730,12 +3981,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>205</integer>
+// CHECK:            <key>line</key><integer>214</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>205</integer>
+// CHECK:            <key>line</key><integer>214</integer>
 // CHECK:            <key>col</key><integer>18</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3751,12 +4002,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>205</integer>
+// CHECK:            <key>line</key><integer>214</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>205</integer>
+// CHECK:            <key>line</key><integer>214</integer>
 // CHECK:            <key>col</key><integer>18</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3764,12 +4015,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>205</integer>
+// CHECK:            <key>line</key><integer>214</integer>
 // CHECK:            <key>col</key><integer>20</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>205</integer>
+// CHECK:            <key>line</key><integer>214</integer>
 // CHECK:            <key>col</key><integer>20</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -3781,7 +4032,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>205</integer>
+// CHECK:       <key>line</key><integer>214</integer>
 // CHECK:       <key>col</key><integer>20</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -3789,12 +4040,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>205</integer>
+// CHECK:          <key>line</key><integer>214</integer>
 // CHECK:          <key>col</key><integer>20</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>205</integer>
+// CHECK:          <key>line</key><integer>214</integer>
 // CHECK:          <key>col</key><integer>20</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -3802,21 +4053,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSString *&gt; *&apos; from &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSString *&gt; *&apos; from &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;MutableArray&lt;NSString *&gt; *&apos; from &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>InferenceFromAPIWithBuggyTypes2</string>
 // CHECK:   <key>issue_hash</key><string>2</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>205</integer>
+// CHECK:    <key>line</key><integer>214</integer>
 // CHECK:    <key>col</key><integer>20</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -3828,105 +4079,8 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>217</integer>
-// CHECK:       <key>col</key><integer>16</integer>
-// CHECK:       <key>file</key><integer>0</integer>
-// CHECK:      </dict>
-// CHECK:      <key>ranges</key>
-// CHECK:      <array>
-// CHECK:        <array>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>217</integer>
-// CHECK:          <key>col</key><integer>16</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>217</integer>
-// CHECK:          <key>col</key><integer>16</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:        </array>
-// CHECK:      </array>
-// CHECK:      <key>depth</key><integer>0</integer>
-// CHECK:      <key>extended_message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSNumber *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSNumber *&gt; *&apos; to &apos;NSArray *&apos;)</string>
-// CHECK:      <key>message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSNumber *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSNumber *&gt; *&apos; to &apos;NSArray *&apos;)</string>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>control</string>
-// CHECK:      <key>edges</key>
-// CHECK:       <array>
-// CHECK:        <dict>
-// CHECK:         <key>start</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>217</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>217</integer>
-// CHECK:            <key>col</key><integer>9</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:         <key>end</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>218</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>218</integer>
-// CHECK:            <key>col</key><integer>10</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:        </dict>
-// CHECK:       </array>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>control</string>
-// CHECK:      <key>edges</key>
-// CHECK:       <array>
-// CHECK:        <dict>
-// CHECK:         <key>start</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>218</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>218</integer>
-// CHECK:            <key>col</key><integer>10</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:         <key>end</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>218</integer>
-// CHECK:            <key>col</key><integer>19</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>218</integer>
-// CHECK:            <key>col</key><integer>19</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:        </dict>
-// CHECK:       </array>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>event</string>
-// CHECK:      <key>location</key>
-// CHECK:      <dict>
 // CHECK:       <key>line</key><integer>218</integer>
-// CHECK:       <key>col</key><integer>19</integer>
+// CHECK:       <key>col</key><integer>10</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
 // CHECK:      <key>ranges</key>
@@ -3934,68 +4088,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:        <array>
 // CHECK:         <dict>
 // CHECK:          <key>line</key><integer>218</integer>
-// CHECK:          <key>col</key><integer>19</integer>
+// CHECK:          <key>col</key><integer>10</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
 // CHECK:          <key>line</key><integer>218</integer>
-// CHECK:          <key>col</key><integer>38</integer>
+// CHECK:          <key>col</key><integer>10</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:        </array>
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:      <string>Type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; is inferred from implicit cast (from &apos;MutableArray&lt;NSMutableString *&gt; *&apos; to &apos;id&apos;)</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
-// CHECK:     </dict>
-// CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
-// CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
-// CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
-// CHECK:   <key>issue_context_kind</key><string>function</string>
-// CHECK:   <key>issue_context</key><string>workWithProperties</string>
-// CHECK:   <key>issue_hash</key><string>2</string>
-// CHECK:   <key>location</key>
-// CHECK:   <dict>
-// CHECK:    <key>line</key><integer>218</integer>
-// CHECK:    <key>col</key><integer>19</integer>
-// CHECK:    <key>file</key><integer>0</integer>
-// CHECK:   </dict>
-// CHECK:   </dict>
-// CHECK:   <dict>
-// CHECK:    <key>path</key>
-// CHECK:    <array>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>event</string>
-// CHECK:      <key>location</key>
-// CHECK:      <dict>
-// CHECK:       <key>line</key><integer>217</integer>
-// CHECK:       <key>col</key><integer>16</integer>
-// CHECK:       <key>file</key><integer>0</integer>
-// CHECK:      </dict>
-// CHECK:      <key>ranges</key>
-// CHECK:      <array>
-// CHECK:        <array>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>217</integer>
-// CHECK:          <key>col</key><integer>16</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>217</integer>
-// CHECK:          <key>col</key><integer>16</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:        </array>
-// CHECK:      </array>
-// CHECK:      <key>depth</key><integer>0</integer>
-// CHECK:      <key>extended_message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSNumber *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSNumber *&gt; *&apos; to &apos;NSArray *&apos;)</string>
-// CHECK:      <key>message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSNumber *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSNumber *&gt; *&apos; to &apos;NSArray *&apos;)</string>
+// CHECK:      <string>Type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; is inferred from implicit cast (from &apos;MutableArray&lt;NSMutableString *&gt; *&apos; to &apos;id&apos;)</string>
 // CHECK:     </dict>
 // CHECK:     <dict>
 // CHECK:      <key>kind</key><string>control</string>
@@ -4005,13 +4112,13 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>217</integer>
+// CHECK:            <key>line</key><integer>218</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>217</integer>
-// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>line</key><integer>218</integer>
+// CHECK:            <key>col</key><integer>4</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:          </array>
@@ -4024,7 +4131,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:           </dict>
 // CHECK:           <dict>
 // CHECK:            <key>line</key><integer>220</integer>
-// CHECK:            <key>col</key><integer>5</integer>
+// CHECK:            <key>col</key><integer>18</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:          </array>
@@ -4045,7 +4152,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:           </dict>
 // CHECK:           <dict>
 // CHECK:            <key>line</key><integer>220</integer>
-// CHECK:            <key>col</key><integer>5</integer>
+// CHECK:            <key>col</key><integer>18</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:          </array>
@@ -4053,12 +4160,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:          <array>
 // CHECK:           <dict>
 // CHECK:            <key>line</key><integer>220</integer>
-// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>col</key><integer>20</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
 // CHECK:            <key>line</key><integer>220</integer>
-// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>col</key><integer>20</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:          </array>
@@ -4070,7 +4177,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
 // CHECK:       <key>line</key><integer>220</integer>
-// CHECK:       <key>col</key><integer>9</integer>
+// CHECK:       <key>col</key><integer>20</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
 // CHECK:      <key>ranges</key>
@@ -4078,34 +4185,34 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:        <array>
 // CHECK:         <dict>
 // CHECK:          <key>line</key><integer>220</integer>
-// CHECK:          <key>col</key><integer>9</integer>
+// CHECK:          <key>col</key><integer>20</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
 // CHECK:          <key>line</key><integer>220</integer>
-// CHECK:          <key>col</key><integer>23</integer>
+// CHECK:          <key>col</key><integer>20</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:        </array>
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;MutableArray&lt;NSMutableString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSString *&gt; *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
-// CHECK:   <key>issue_context</key><string>workWithProperties</string>
-// CHECK:   <key>issue_hash</key><string>4</string>
+// CHECK:   <key>issue_context</key><string>InferenceFromAPIWithBuggyTypes3</string>
+// CHECK:   <key>issue_hash</key><string>3</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
 // CHECK:    <key>line</key><integer>220</integer>
-// CHECK:    <key>col</key><integer>9</integer>
+// CHECK:    <key>col</key><integer>20</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
 // CHECK:   </dict>
@@ -4116,30 +4223,30 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>217</integer>
-// CHECK:       <key>col</key><integer>16</integer>
+// CHECK:       <key>line</key><integer>224</integer>
+// CHECK:       <key>col</key><integer>45</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
 // CHECK:      <key>ranges</key>
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>217</integer>
-// CHECK:          <key>col</key><integer>16</integer>
+// CHECK:          <key>line</key><integer>224</integer>
+// CHECK:          <key>col</key><integer>45</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>217</integer>
-// CHECK:          <key>col</key><integer>16</integer>
+// CHECK:          <key>line</key><integer>224</integer>
+// CHECK:          <key>col</key><integer>45</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:        </array>
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSNumber *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSNumber *&gt; *&apos; to &apos;NSArray *&apos;)</string>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;__kindof NSArray&lt;NSString *&gt; *&apos; to &apos;BuggyMutableArray&lt;NSMutableString *&gt; *&apos;)</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSNumber *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSNumber *&gt; *&apos; to &apos;NSArray *&apos;)</string>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;__kindof NSArray&lt;NSString *&gt; *&apos; to &apos;BuggyMutableArray&lt;NSMutableString *&gt; *&apos;)</string>
 // CHECK:     </dict>
 // CHECK:     <dict>
 // CHECK:      <key>kind</key><string>control</string>
@@ -4149,12 +4256,190 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>217</integer>
+// CHECK:            <key>line</key><integer>224</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>217</integer>
+// CHECK:            <key>line</key><integer>224</integer>
+// CHECK:            <key>col</key><integer>19</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>225</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>225</integer>
+// CHECK:            <key>col</key><integer>18</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>225</integer>
+// CHECK:       <key>col</key><integer>20</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>225</integer>
+// CHECK:          <key>col</key><integer>20</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>225</integer>
+// CHECK:          <key>col</key><integer>20</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Type &apos;MutableArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;BuggyMutableArray&lt;NSMutableString *&gt; *&apos; to &apos;MutableArray&lt;NSString *&gt; *&apos;)</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Type &apos;MutableArray&lt;NSString *&gt; *&apos; is inferred from implicit cast (from &apos;BuggyMutableArray&lt;NSMutableString *&gt; *&apos; to &apos;MutableArray&lt;NSString *&gt; *&apos;)</string>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>225</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>225</integer>
+// CHECK:            <key>col</key><integer>18</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>226</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>226</integer>
+// CHECK:            <key>col</key><integer>25</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>226</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>226</integer>
+// CHECK:            <key>col</key><integer>25</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>226</integer>
+// CHECK:            <key>col</key><integer>27</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>226</integer>
+// CHECK:            <key>col</key><integer>27</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>226</integer>
+// CHECK:       <key>col</key><integer>27</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>226</integer>
+// CHECK:          <key>col</key><integer>27</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>226</integer>
+// CHECK:          <key>col</key><integer>27</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
+// CHECK:     </dict>
+// CHECK:    </array>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;MutableArray&lt;NSString *&gt; *&apos; to incompatible type &apos;MutableArray&lt;NSMutableString *&gt; *&apos;</string>
+// CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
+// CHECK:    <key>type</key><string>Generics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
+// CHECK:   <key>issue_context_kind</key><string>function</string>
+// CHECK:   <key>issue_context</key><string>InferenceFromAPIWithBuggyTypes4</string>
+// CHECK:   <key>issue_hash</key><string>3</string>
+// CHECK:   <key>location</key>
+// CHECK:   <dict>
+// CHECK:    <key>line</key><integer>226</integer>
+// CHECK:    <key>col</key><integer>27</integer>
+// CHECK:    <key>file</key><integer>0</integer>
+// CHECK:   </dict>
+// CHECK:   </dict>
+// CHECK:   <dict>
+// CHECK:    <key>path</key>
+// CHECK:    <array>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>238</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>238</integer>
 // CHECK:            <key>col</key><integer>9</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4162,12 +4447,156 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>222</integer>
+// CHECK:            <key>line</key><integer>239</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>222</integer>
+// CHECK:            <key>line</key><integer>239</integer>
+// CHECK:            <key>col</key><integer>10</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>239</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>239</integer>
+// CHECK:            <key>col</key><integer>10</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>239</integer>
+// CHECK:            <key>col</key><integer>19</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>239</integer>
+// CHECK:            <key>col</key><integer>19</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>239</integer>
+// CHECK:       <key>col</key><integer>19</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>239</integer>
+// CHECK:          <key>col</key><integer>19</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>239</integer>
+// CHECK:          <key>col</key><integer>38</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Type &apos;NSNumber *&apos; is inferred from this context</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Type &apos;NSNumber *&apos; is inferred from this context</string>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>239</integer>
+// CHECK:       <key>col</key><integer>19</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>239</integer>
+// CHECK:          <key>col</key><integer>19</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>239</integer>
+// CHECK:          <key>col</key><integer>38</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Object has a dynamic type &apos;NSNumber *&apos; which is incompatible with static type &apos;NSString *&apos;</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Object has a dynamic type &apos;NSNumber *&apos; which is incompatible with static type &apos;NSString *&apos;</string>
+// CHECK:     </dict>
+// CHECK:    </array>
+// CHECK:    <key>description</key><string>Object has a dynamic type &apos;NSNumber *&apos; which is incompatible with static type &apos;NSString *&apos;</string>
+// CHECK:    <key>category</key><string>Type Error</string>
+// CHECK:    <key>type</key><string>Dynamic and static type mismatch</string>
+// CHECK:    <key>check_name</key><string>alpha.core.DynamicTypeChecker</string>
+// CHECK:   <key>issue_context_kind</key><string>function</string>
+// CHECK:   <key>issue_context</key><string>workWithProperties</string>
+// CHECK:   <key>issue_hash</key><string>2</string>
+// CHECK:   <key>location</key>
+// CHECK:   <dict>
+// CHECK:    <key>line</key><integer>239</integer>
+// CHECK:    <key>col</key><integer>19</integer>
+// CHECK:    <key>file</key><integer>0</integer>
+// CHECK:   </dict>
+// CHECK:   </dict>
+// CHECK:   <dict>
+// CHECK:    <key>path</key>
+// CHECK:    <array>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>238</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>238</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>241</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>241</integer>
 // CHECK:            <key>col</key><integer>5</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4183,12 +4612,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>222</integer>
+// CHECK:            <key>line</key><integer>241</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>222</integer>
+// CHECK:            <key>line</key><integer>241</integer>
 // CHECK:            <key>col</key><integer>5</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4196,12 +4625,156 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>222</integer>
+// CHECK:            <key>line</key><integer>241</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>241</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>241</integer>
+// CHECK:       <key>col</key><integer>9</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>241</integer>
+// CHECK:          <key>col</key><integer>9</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>241</integer>
+// CHECK:          <key>col</key><integer>23</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Type &apos;NSNumber *&apos; is inferred from this context</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Type &apos;NSNumber *&apos; is inferred from this context</string>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>241</integer>
+// CHECK:       <key>col</key><integer>9</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>241</integer>
+// CHECK:          <key>col</key><integer>9</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>241</integer>
+// CHECK:          <key>col</key><integer>23</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Object has a dynamic type &apos;NSNumber *&apos; which is incompatible with static type &apos;NSString *&apos;</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Object has a dynamic type &apos;NSNumber *&apos; which is incompatible with static type &apos;NSString *&apos;</string>
+// CHECK:     </dict>
+// CHECK:    </array>
+// CHECK:    <key>description</key><string>Object has a dynamic type &apos;NSNumber *&apos; which is incompatible with static type &apos;NSString *&apos;</string>
+// CHECK:    <key>category</key><string>Type Error</string>
+// CHECK:    <key>type</key><string>Dynamic and static type mismatch</string>
+// CHECK:    <key>check_name</key><string>alpha.core.DynamicTypeChecker</string>
+// CHECK:   <key>issue_context_kind</key><string>function</string>
+// CHECK:   <key>issue_context</key><string>workWithProperties</string>
+// CHECK:   <key>issue_hash</key><string>4</string>
+// CHECK:   <key>location</key>
+// CHECK:   <dict>
+// CHECK:    <key>line</key><integer>241</integer>
+// CHECK:    <key>col</key><integer>9</integer>
+// CHECK:    <key>file</key><integer>0</integer>
+// CHECK:   </dict>
+// CHECK:   </dict>
+// CHECK:   <dict>
+// CHECK:    <key>path</key>
+// CHECK:    <array>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>238</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>238</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>243</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>243</integer>
+// CHECK:            <key>col</key><integer>5</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>243</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>243</integer>
+// CHECK:            <key>col</key><integer>5</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>243</integer>
 // CHECK:            <key>col</key><integer>11</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>222</integer>
+// CHECK:            <key>line</key><integer>243</integer>
 // CHECK:            <key>col</key><integer>21</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4213,7 +4786,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>222</integer>
+// CHECK:       <key>line</key><integer>243</integer>
 // CHECK:       <key>col</key><integer>11</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -4221,12 +4794,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>222</integer>
+// CHECK:          <key>line</key><integer>243</integer>
 // CHECK:          <key>col</key><integer>11</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>222</integer>
+// CHECK:          <key>line</key><integer>243</integer>
 // CHECK:          <key>col</key><integer>21</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -4234,130 +4807,15 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:      <string>Type &apos;NSNumber *&apos; is inferred from this context</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
-// CHECK:     </dict>
-// CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
-// CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
-// CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
-// CHECK:   <key>issue_context_kind</key><string>function</string>
-// CHECK:   <key>issue_context</key><string>workWithProperties</string>
-// CHECK:   <key>issue_hash</key><string>6</string>
-// CHECK:   <key>location</key>
-// CHECK:   <dict>
-// CHECK:    <key>line</key><integer>222</integer>
-// CHECK:    <key>col</key><integer>11</integer>
-// CHECK:    <key>file</key><integer>0</integer>
-// CHECK:   </dict>
-// CHECK:   </dict>
-// CHECK:   <dict>
-// CHECK:    <key>path</key>
-// CHECK:    <array>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>event</string>
-// CHECK:      <key>location</key>
-// CHECK:      <dict>
-// CHECK:       <key>line</key><integer>217</integer>
-// CHECK:       <key>col</key><integer>16</integer>
-// CHECK:       <key>file</key><integer>0</integer>
-// CHECK:      </dict>
-// CHECK:      <key>ranges</key>
-// CHECK:      <array>
-// CHECK:        <array>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>217</integer>
-// CHECK:          <key>col</key><integer>16</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>217</integer>
-// CHECK:          <key>col</key><integer>16</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:        </array>
-// CHECK:      </array>
-// CHECK:      <key>depth</key><integer>0</integer>
-// CHECK:      <key>extended_message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSNumber *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSNumber *&gt; *&apos; to &apos;NSArray *&apos;)</string>
-// CHECK:      <key>message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSNumber *&gt; *&apos; is inferred from implicit cast (from &apos;NSArray&lt;NSNumber *&gt; *&apos; to &apos;NSArray *&apos;)</string>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>control</string>
-// CHECK:      <key>edges</key>
-// CHECK:       <array>
-// CHECK:        <dict>
-// CHECK:         <key>start</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>217</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>217</integer>
-// CHECK:            <key>col</key><integer>9</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:         <key>end</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>224</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>224</integer>
-// CHECK:            <key>col</key><integer>5</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:        </dict>
-// CHECK:       </array>
-// CHECK:     </dict>
-// CHECK:     <dict>
-// CHECK:      <key>kind</key><string>control</string>
-// CHECK:      <key>edges</key>
-// CHECK:       <array>
-// CHECK:        <dict>
-// CHECK:         <key>start</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>224</integer>
-// CHECK:            <key>col</key><integer>3</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>224</integer>
-// CHECK:            <key>col</key><integer>5</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:         <key>end</key>
-// CHECK:          <array>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>224</integer>
-// CHECK:            <key>col</key><integer>9</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:           <dict>
-// CHECK:            <key>line</key><integer>224</integer>
-// CHECK:            <key>col</key><integer>9</integer>
-// CHECK:            <key>file</key><integer>0</integer>
-// CHECK:           </dict>
-// CHECK:          </array>
-// CHECK:        </dict>
-// CHECK:       </array>
+// CHECK:      <string>Type &apos;NSNumber *&apos; is inferred from this context</string>
 // CHECK:     </dict>
 // CHECK:     <dict>
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>224</integer>
+// CHECK:       <key>line</key><integer>243</integer>
 // CHECK:       <key>col</key><integer>9</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -4365,12 +4823,127 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>224</integer>
+// CHECK:          <key>line</key><integer>243</integer>
 // CHECK:          <key>col</key><integer>9</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>224</integer>
+// CHECK:          <key>line</key><integer>243</integer>
+// CHECK:          <key>col</key><integer>21</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Object has a dynamic type &apos;NSNumber *&apos; which is incompatible with static type &apos;NSString *&apos;</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Object has a dynamic type &apos;NSNumber *&apos; which is incompatible with static type &apos;NSString *&apos;</string>
+// CHECK:     </dict>
+// CHECK:    </array>
+// CHECK:    <key>description</key><string>Object has a dynamic type &apos;NSNumber *&apos; which is incompatible with static type &apos;NSString *&apos;</string>
+// CHECK:    <key>category</key><string>Type Error</string>
+// CHECK:    <key>type</key><string>Dynamic and static type mismatch</string>
+// CHECK:    <key>check_name</key><string>alpha.core.DynamicTypeChecker</string>
+// CHECK:   <key>issue_context_kind</key><string>function</string>
+// CHECK:   <key>issue_context</key><string>workWithProperties</string>
+// CHECK:   <key>issue_hash</key><string>6</string>
+// CHECK:   <key>location</key>
+// CHECK:   <dict>
+// CHECK:    <key>line</key><integer>243</integer>
+// CHECK:    <key>col</key><integer>9</integer>
+// CHECK:    <key>file</key><integer>0</integer>
+// CHECK:   </dict>
+// CHECK:   </dict>
+// CHECK:   <dict>
+// CHECK:    <key>path</key>
+// CHECK:    <array>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>238</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>238</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>245</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>245</integer>
+// CHECK:            <key>col</key><integer>5</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>245</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>245</integer>
+// CHECK:            <key>col</key><integer>5</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>245</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>245</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>245</integer>
+// CHECK:       <key>col</key><integer>9</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>245</integer>
+// CHECK:          <key>col</key><integer>9</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>245</integer>
 // CHECK:          <key>col</key><integer>9</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -4378,21 +4951,50 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:      <string>Type &apos;NSNumber *&apos; is inferred from this context</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:      <string>Type &apos;NSNumber *&apos; is inferred from this context</string>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>245</integer>
+// CHECK:       <key>col</key><integer>9</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>245</integer>
+// CHECK:          <key>col</key><integer>9</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>245</integer>
+// CHECK:          <key>col</key><integer>12</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Object has a dynamic type &apos;NSNumber *&apos; which is incompatible with static type &apos;NSString *&apos;</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Object has a dynamic type &apos;NSNumber *&apos; which is incompatible with static type &apos;NSString *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
-// CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
-// CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>description</key><string>Object has a dynamic type &apos;NSNumber *&apos; which is incompatible with static type &apos;NSString *&apos;</string>
+// CHECK:    <key>category</key><string>Type Error</string>
+// CHECK:    <key>type</key><string>Dynamic and static type mismatch</string>
+// CHECK:    <key>check_name</key><string>alpha.core.DynamicTypeChecker</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>workWithProperties</string>
 // CHECK:   <key>issue_hash</key><string>8</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>224</integer>
+// CHECK:    <key>line</key><integer>245</integer>
 // CHECK:    <key>col</key><integer>9</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -4404,7 +5006,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>230</integer>
+// CHECK:       <key>line</key><integer>251</integer>
 // CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -4412,12 +5014,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>230</integer>
+// CHECK:          <key>line</key><integer>251</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>230</integer>
+// CHECK:          <key>line</key><integer>251</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -4437,12 +5039,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>230</integer>
+// CHECK:            <key>line</key><integer>251</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>230</integer>
+// CHECK:            <key>line</key><integer>251</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4450,12 +5052,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>231</integer>
+// CHECK:            <key>line</key><integer>252</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>231</integer>
+// CHECK:            <key>line</key><integer>252</integer>
 // CHECK:            <key>col</key><integer>4</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4471,12 +5073,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>231</integer>
+// CHECK:            <key>line</key><integer>252</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>231</integer>
+// CHECK:            <key>line</key><integer>252</integer>
 // CHECK:            <key>col</key><integer>4</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4484,12 +5086,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>232</integer>
+// CHECK:            <key>line</key><integer>253</integer>
 // CHECK:            <key>col</key><integer>5</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>232</integer>
+// CHECK:            <key>line</key><integer>253</integer>
 // CHECK:            <key>col</key><integer>5</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4505,12 +5107,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>232</integer>
+// CHECK:            <key>line</key><integer>253</integer>
 // CHECK:            <key>col</key><integer>5</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>232</integer>
+// CHECK:            <key>line</key><integer>253</integer>
 // CHECK:            <key>col</key><integer>5</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4518,12 +5120,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>233</integer>
+// CHECK:            <key>line</key><integer>254</integer>
 // CHECK:            <key>col</key><integer>5</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>233</integer>
+// CHECK:            <key>line</key><integer>254</integer>
 // CHECK:            <key>col</key><integer>5</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4535,7 +5137,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>233</integer>
+// CHECK:       <key>line</key><integer>254</integer>
 // CHECK:       <key>col</key><integer>5</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -4543,12 +5145,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>233</integer>
+// CHECK:          <key>line</key><integer>254</integer>
 // CHECK:          <key>col</key><integer>19</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>233</integer>
+// CHECK:          <key>line</key><integer>254</integer>
 // CHECK:          <key>col</key><integer>41</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -4556,21 +5158,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSMutableString *&apos; from &apos;NSString *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSString *&apos; to incompatible type &apos;NSMutableString *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSMutableString *&apos; from &apos;NSString *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSString *&apos; to incompatible type &apos;NSMutableString *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSMutableString *&apos; from &apos;NSString *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSString *&apos; to incompatible type &apos;NSMutableString *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>findMethodDeclInTrackedType</string>
 // CHECK:   <key>issue_hash</key><string>4</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>233</integer>
+// CHECK:    <key>line</key><integer>254</integer>
 // CHECK:    <key>col</key><integer>5</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -4582,7 +5184,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>242</integer>
+// CHECK:       <key>line</key><integer>263</integer>
 // CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -4590,12 +5192,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>242</integer>
+// CHECK:          <key>line</key><integer>263</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>242</integer>
+// CHECK:          <key>line</key><integer>263</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -4615,12 +5217,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>242</integer>
+// CHECK:            <key>line</key><integer>263</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>242</integer>
+// CHECK:            <key>line</key><integer>263</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4628,12 +5230,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>243</integer>
+// CHECK:            <key>line</key><integer>264</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>243</integer>
+// CHECK:            <key>line</key><integer>264</integer>
 // CHECK:            <key>col</key><integer>4</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4649,12 +5251,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>243</integer>
+// CHECK:            <key>line</key><integer>264</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>243</integer>
+// CHECK:            <key>line</key><integer>264</integer>
 // CHECK:            <key>col</key><integer>4</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4662,12 +5264,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>244</integer>
+// CHECK:            <key>line</key><integer>265</integer>
 // CHECK:            <key>col</key><integer>5</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>244</integer>
+// CHECK:            <key>line</key><integer>265</integer>
 // CHECK:            <key>col</key><integer>5</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4679,7 +5281,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>244</integer>
+// CHECK:       <key>line</key><integer>265</integer>
 // CHECK:       <key>col</key><integer>5</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -4687,12 +5289,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>244</integer>
+// CHECK:          <key>line</key><integer>265</integer>
 // CHECK:          <key>col</key><integer>19</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>244</integer>
+// CHECK:          <key>line</key><integer>265</integer>
 // CHECK:          <key>col</key><integer>41</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -4700,21 +5302,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSMutableString *&apos; from &apos;NSString *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSString *&apos; to incompatible type &apos;NSMutableString *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSMutableString *&apos; from &apos;NSString *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSString *&apos; to incompatible type &apos;NSMutableString *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSMutableString *&apos; from &apos;NSString *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSString *&apos; to incompatible type &apos;NSMutableString *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>findMethodDeclInTrackedType2</string>
 // CHECK:   <key>issue_hash</key><string>3</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>244</integer>
+// CHECK:    <key>line</key><integer>265</integer>
 // CHECK:    <key>col</key><integer>5</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -4726,7 +5328,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>257</integer>
+// CHECK:       <key>line</key><integer>278</integer>
 // CHECK:       <key>col</key><integer>30</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -4734,12 +5336,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>257</integer>
+// CHECK:          <key>line</key><integer>278</integer>
 // CHECK:          <key>col</key><integer>30</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>257</integer>
+// CHECK:          <key>line</key><integer>278</integer>
 // CHECK:          <key>col</key><integer>42</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -4759,12 +5361,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>257</integer>
+// CHECK:            <key>line</key><integer>278</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>257</integer>
+// CHECK:            <key>line</key><integer>278</integer>
 // CHECK:            <key>col</key><integer>9</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4772,12 +5374,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>259</integer>
+// CHECK:            <key>line</key><integer>280</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>259</integer>
+// CHECK:            <key>line</key><integer>280</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4789,7 +5391,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>259</integer>
+// CHECK:       <key>line</key><integer>280</integer>
 // CHECK:       <key>col</key><integer>3</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -4797,12 +5399,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>259</integer>
+// CHECK:          <key>line</key><integer>280</integer>
 // CHECK:          <key>col</key><integer>19</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>259</integer>
+// CHECK:          <key>line</key><integer>280</integer>
 // CHECK:          <key>col</key><integer>41</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -4810,21 +5412,21 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSString *&apos; from &apos;NSNumber *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSNumber *&apos; to incompatible type &apos;NSString *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>testAnnotatedLiterals</string>
 // CHECK:   <key>issue_hash</key><string>3</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>259</integer>
+// CHECK:    <key>line</key><integer>280</integer>
 // CHECK:    <key>col</key><integer>3</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -4833,35 +5435,6 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:    <key>path</key>
 // CHECK:    <array>
 // CHECK:     <dict>
-// CHECK:      <key>kind</key><string>event</string>
-// CHECK:      <key>location</key>
-// CHECK:      <dict>
-// CHECK:       <key>line</key><integer>268</integer>
-// CHECK:       <key>col</key><integer>13</integer>
-// CHECK:       <key>file</key><integer>0</integer>
-// CHECK:      </dict>
-// CHECK:      <key>ranges</key>
-// CHECK:      <array>
-// CHECK:        <array>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>268</integer>
-// CHECK:          <key>col</key><integer>13</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>268</integer>
-// CHECK:          <key>col</key><integer>39</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:        </array>
-// CHECK:      </array>
-// CHECK:      <key>depth</key><integer>0</integer>
-// CHECK:      <key>extended_message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from this context</string>
-// CHECK:      <key>message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from this context</string>
-// CHECK:     </dict>
-// CHECK:     <dict>
 // CHECK:      <key>kind</key><string>control</string>
 // CHECK:      <key>edges</key>
 // CHECK:       <array>
@@ -4869,12 +5442,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>268</integer>
+// CHECK:            <key>line</key><integer>289</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>268</integer>
+// CHECK:            <key>line</key><integer>289</integer>
 // CHECK:            <key>col</key><integer>7</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4882,12 +5455,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>269</integer>
+// CHECK:            <key>line</key><integer>290</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>269</integer>
+// CHECK:            <key>line</key><integer>290</integer>
 // CHECK:            <key>col</key><integer>9</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4903,12 +5476,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>269</integer>
+// CHECK:            <key>line</key><integer>290</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>269</integer>
+// CHECK:            <key>line</key><integer>290</integer>
 // CHECK:            <key>col</key><integer>9</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4916,12 +5489,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>269</integer>
+// CHECK:            <key>line</key><integer>290</integer>
 // CHECK:            <key>col</key><integer>28</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>269</integer>
+// CHECK:            <key>line</key><integer>290</integer>
 // CHECK:            <key>col</key><integer>28</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -4933,7 +5506,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>269</integer>
+// CHECK:       <key>line</key><integer>290</integer>
 // CHECK:       <key>col</key><integer>28</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -4941,12 +5514,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>269</integer>
+// CHECK:          <key>line</key><integer>290</integer>
 // CHECK:          <key>col</key><integer>28</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>269</integer>
+// CHECK:          <key>line</key><integer>290</integer>
 // CHECK:          <key>col</key><integer>39</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -4954,21 +5527,50 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from this context</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from this context</string>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>290</integer>
+// CHECK:       <key>col</key><integer>28</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>290</integer>
+// CHECK:          <key>col</key><integer>28</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>290</integer>
+// CHECK:          <key>col</key><integer>39</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>trackedClassVariables</string>
 // CHECK:   <key>issue_hash</key><string>2</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>269</integer>
+// CHECK:    <key>line</key><integer>290</integer>
 // CHECK:    <key>col</key><integer>28</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -4977,35 +5579,6 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:    <key>path</key>
 // CHECK:    <array>
 // CHECK:     <dict>
-// CHECK:      <key>kind</key><string>event</string>
-// CHECK:      <key>location</key>
-// CHECK:      <dict>
-// CHECK:       <key>line</key><integer>268</integer>
-// CHECK:       <key>col</key><integer>13</integer>
-// CHECK:       <key>file</key><integer>0</integer>
-// CHECK:      </dict>
-// CHECK:      <key>ranges</key>
-// CHECK:      <array>
-// CHECK:        <array>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>268</integer>
-// CHECK:          <key>col</key><integer>13</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:         <dict>
-// CHECK:          <key>line</key><integer>268</integer>
-// CHECK:          <key>col</key><integer>39</integer>
-// CHECK:          <key>file</key><integer>0</integer>
-// CHECK:         </dict>
-// CHECK:        </array>
-// CHECK:      </array>
-// CHECK:      <key>depth</key><integer>0</integer>
-// CHECK:      <key>extended_message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from this context</string>
-// CHECK:      <key>message</key>
-// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from this context</string>
-// CHECK:     </dict>
-// CHECK:     <dict>
 // CHECK:      <key>kind</key><string>control</string>
 // CHECK:      <key>edges</key>
 // CHECK:       <array>
@@ -5013,12 +5586,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>268</integer>
+// CHECK:            <key>line</key><integer>289</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>268</integer>
+// CHECK:            <key>line</key><integer>289</integer>
 // CHECK:            <key>col</key><integer>7</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -5026,12 +5599,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>270</integer>
+// CHECK:            <key>line</key><integer>291</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>270</integer>
+// CHECK:            <key>line</key><integer>291</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -5047,12 +5620,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>270</integer>
+// CHECK:            <key>line</key><integer>291</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>270</integer>
+// CHECK:            <key>line</key><integer>291</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -5060,12 +5633,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>270</integer>
+// CHECK:            <key>line</key><integer>291</integer>
 // CHECK:            <key>col</key><integer>7</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>270</integer>
+// CHECK:            <key>line</key><integer>291</integer>
 // CHECK:            <key>col</key><integer>7</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -5077,7 +5650,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>270</integer>
+// CHECK:       <key>line</key><integer>291</integer>
 // CHECK:       <key>col</key><integer>7</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -5085,12 +5658,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>270</integer>
+// CHECK:          <key>line</key><integer>291</integer>
 // CHECK:          <key>col</key><integer>7</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>270</integer>
+// CHECK:          <key>line</key><integer>291</integer>
 // CHECK:          <key>col</key><integer>19</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -5098,21 +5671,50 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from this context</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from this context</string>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>291</integer>
+// CHECK:       <key>col</key><integer>7</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>291</integer>
+// CHECK:          <key>col</key><integer>7</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>291</integer>
+// CHECK:          <key>col</key><integer>19</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>trackedClassVariables</string>
 // CHECK:   <key>issue_hash</key><string>3</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>270</integer>
+// CHECK:    <key>line</key><integer>291</integer>
 // CHECK:    <key>col</key><integer>7</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
@@ -5124,7 +5726,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>274</integer>
+// CHECK:       <key>line</key><integer>295</integer>
 // CHECK:       <key>col</key><integer>13</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -5132,12 +5734,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>274</integer>
+// CHECK:          <key>line</key><integer>295</integer>
 // CHECK:          <key>col</key><integer>13</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>274</integer>
+// CHECK:          <key>line</key><integer>295</integer>
 // CHECK:          <key>col</key><integer>15</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -5157,12 +5759,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>274</integer>
+// CHECK:            <key>line</key><integer>295</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>274</integer>
+// CHECK:            <key>line</key><integer>295</integer>
 // CHECK:            <key>col</key><integer>4</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -5170,12 +5772,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>275</integer>
+// CHECK:            <key>line</key><integer>296</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>275</integer>
+// CHECK:            <key>line</key><integer>296</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -5191,12 +5793,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>start</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>275</integer>
+// CHECK:            <key>line</key><integer>296</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>275</integer>
+// CHECK:            <key>line</key><integer>296</integer>
 // CHECK:            <key>col</key><integer>3</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -5204,12 +5806,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:         <key>end</key>
 // CHECK:          <array>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>275</integer>
+// CHECK:            <key>line</key><integer>296</integer>
 // CHECK:            <key>col</key><integer>18</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
 // CHECK:           <dict>
-// CHECK:            <key>line</key><integer>275</integer>
+// CHECK:            <key>line</key><integer>296</integer>
 // CHECK:            <key>col</key><integer>21</integer>
 // CHECK:            <key>file</key><integer>0</integer>
 // CHECK:           </dict>
@@ -5221,7 +5823,7 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <key>kind</key><string>event</string>
 // CHECK:      <key>location</key>
 // CHECK:      <dict>
-// CHECK:       <key>line</key><integer>275</integer>
+// CHECK:       <key>line</key><integer>296</integer>
 // CHECK:       <key>col</key><integer>18</integer>
 // CHECK:       <key>file</key><integer>0</integer>
 // CHECK:      </dict>
@@ -5229,12 +5831,12 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      <array>
 // CHECK:        <array>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>275</integer>
+// CHECK:          <key>line</key><integer>296</integer>
 // CHECK:          <key>col</key><integer>18</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
 // CHECK:         <dict>
-// CHECK:          <key>line</key><integer>275</integer>
+// CHECK:          <key>line</key><integer>296</integer>
 // CHECK:          <key>col</key><integer>21</integer>
 // CHECK:          <key>file</key><integer>0</integer>
 // CHECK:         </dict>
@@ -5242,24 +5844,701 @@ void testMistmatchedTypeCast(MutableArray<NSMutableString *> *a) {
 // CHECK:      </array>
 // CHECK:      <key>depth</key><integer>0</integer>
 // CHECK:      <key>extended_message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:      <key>message</key>
-// CHECK:      <string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:     </dict>
 // CHECK:    </array>
-// CHECK:    <key>description</key><string>Incompatible pointer types assigning to &apos;NSArray&lt;NSNumber *&gt; *&apos; from &apos;NSArray&lt;NSString *&gt; *&apos;</string>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
 // CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
 // CHECK:    <key>type</key><string>Generics</string>
-// CHECK:    <key>check_name</key><string>alpha.osx.cocoa.ObjCGenerics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
 // CHECK:   <key>issue_context_kind</key><string>function</string>
 // CHECK:   <key>issue_context</key><string>nestedCollections</string>
 // CHECK:   <key>issue_hash</key><string>2</string>
 // CHECK:   <key>location</key>
 // CHECK:   <dict>
-// CHECK:    <key>line</key><integer>275</integer>
+// CHECK:    <key>line</key><integer>296</integer>
 // CHECK:    <key>col</key><integer>18</integer>
 // CHECK:    <key>file</key><integer>0</integer>
 // CHECK:   </dict>
 // CHECK:   </dict>
+// CHECK:   <dict>
+// CHECK:    <key>path</key>
+// CHECK:    <array>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>308</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>308</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>309</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>309</integer>
+// CHECK:            <key>col</key><integer>4</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>309</integer>
+// CHECK:       <key>col</key><integer>10</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>309</integer>
+// CHECK:          <key>col</key><integer>10</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>309</integer>
+// CHECK:          <key>col</key><integer>29</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from this context</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from this context</string>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>309</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>309</integer>
+// CHECK:            <key>col</key><integer>4</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>310</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>310</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>310</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>310</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>310</integer>
+// CHECK:            <key>col</key><integer>30</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>310</integer>
+// CHECK:            <key>col</key><integer>30</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>310</integer>
+// CHECK:       <key>col</key><integer>30</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>310</integer>
+// CHECK:          <key>col</key><integer>30</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>310</integer>
+// CHECK:          <key>col</key><integer>30</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
+// CHECK:     </dict>
+// CHECK:    </array>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
+// CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
+// CHECK:    <key>type</key><string>Generics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
+// CHECK:   <key>issue_context_kind</key><string>function</string>
+// CHECK:   <key>issue_context</key><string>returnCollectionToIdVariable</string>
+// CHECK:   <key>issue_hash</key><string>3</string>
+// CHECK:   <key>location</key>
+// CHECK:   <dict>
+// CHECK:    <key>line</key><integer>310</integer>
+// CHECK:    <key>col</key><integer>30</integer>
+// CHECK:    <key>file</key><integer>0</integer>
+// CHECK:   </dict>
+// CHECK:   </dict>
+// CHECK:   <dict>
+// CHECK:    <key>path</key>
+// CHECK:    <array>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>314</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>314</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>315</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>315</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>315</integer>
+// CHECK:       <key>col</key><integer>16</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>315</integer>
+// CHECK:          <key>col</key><integer>16</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>315</integer>
+// CHECK:          <key>col</key><integer>35</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from this context</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from this context</string>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>315</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>315</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>316</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>316</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>316</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>316</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>316</integer>
+// CHECK:            <key>col</key><integer>30</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>316</integer>
+// CHECK:            <key>col</key><integer>30</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>316</integer>
+// CHECK:       <key>col</key><integer>30</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>316</integer>
+// CHECK:          <key>col</key><integer>30</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>316</integer>
+// CHECK:          <key>col</key><integer>30</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
+// CHECK:     </dict>
+// CHECK:    </array>
+// CHECK:    <key>description</key><string>Conversion from value of type &apos;NSArray&lt;NSString *&gt; *&apos; to incompatible type &apos;NSArray&lt;NSNumber *&gt; *&apos;</string>
+// CHECK:    <key>category</key><string>Core Foundation/Objective-C</string>
+// CHECK:    <key>type</key><string>Generics</string>
+// CHECK:    <key>check_name</key><string>core.DynamicTypePropagation</string>
+// CHECK:   <key>issue_context_kind</key><string>function</string>
+// CHECK:   <key>issue_context</key><string>eraseSpecialization</string>
+// CHECK:   <key>issue_hash</key><string>3</string>
+// CHECK:   <key>location</key>
+// CHECK:   <dict>
+// CHECK:    <key>line</key><integer>316</integer>
+// CHECK:    <key>col</key><integer>30</integer>
+// CHECK:    <key>file</key><integer>0</integer>
+// CHECK:   </dict>
+// CHECK:   </dict>
+// CHECK:   <dict>
+// CHECK:    <key>path</key>
+// CHECK:    <array>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>320</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>320</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>321</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>321</integer>
+// CHECK:            <key>col</key><integer>7</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>321</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>321</integer>
+// CHECK:            <key>col</key><integer>7</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>321</integer>
+// CHECK:            <key>col</key><integer>14</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>321</integer>
+// CHECK:            <key>col</key><integer>14</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>321</integer>
+// CHECK:       <key>col</key><integer>14</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>321</integer>
+// CHECK:          <key>col</key><integer>14</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>321</integer>
+// CHECK:          <key>col</key><integer>33</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from this context</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Type &apos;NSArray&lt;NSString *&gt; *&apos; is inferred from this context</string>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>321</integer>
+// CHECK:       <key>col</key><integer>14</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>321</integer>
+// CHECK:          <key>col</key><integer>14</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>321</integer>
+// CHECK:          <key>col</key><integer>33</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Object has a dynamic type &apos;NSArray&lt;NSString *&gt; *&apos; which is incompatible with static type &apos;NSSet *&apos;</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Object has a dynamic type &apos;NSArray&lt;NSString *&gt; *&apos; which is incompatible with static type &apos;NSSet *&apos;</string>
+// CHECK:     </dict>
+// CHECK:    </array>
+// CHECK:    <key>description</key><string>Object has a dynamic type &apos;NSArray&lt;NSString *&gt; *&apos; which is incompatible with static type &apos;NSSet *&apos;</string>
+// CHECK:    <key>category</key><string>Type Error</string>
+// CHECK:    <key>type</key><string>Dynamic and static type mismatch</string>
+// CHECK:    <key>check_name</key><string>alpha.core.DynamicTypeChecker</string>
+// CHECK:   <key>issue_context_kind</key><string>function</string>
+// CHECK:   <key>issue_context</key><string>returnToUnrelatedType</string>
+// CHECK:   <key>issue_hash</key><string>2</string>
+// CHECK:   <key>location</key>
+// CHECK:   <dict>
+// CHECK:    <key>line</key><integer>321</integer>
+// CHECK:    <key>col</key><integer>14</integer>
+// CHECK:    <key>file</key><integer>0</integer>
+// CHECK:   </dict>
+// CHECK:   </dict>
+// CHECK:   <dict>
+// CHECK:    <key>path</key>
+// CHECK:    <array>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>326</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>326</integer>
+// CHECK:            <key>col</key><integer>9</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>327</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>327</integer>
+// CHECK:            <key>col</key><integer>4</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>327</integer>
+// CHECK:       <key>col</key><integer>10</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>327</integer>
+// CHECK:          <key>col</key><integer>10</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>327</integer>
+// CHECK:          <key>col</key><integer>29</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Type &apos;NSString *&apos; is inferred from this context</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Type &apos;NSString *&apos; is inferred from this context</string>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>327</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>327</integer>
+// CHECK:            <key>col</key><integer>4</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>328</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>328</integer>
+// CHECK:            <key>col</key><integer>10</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>control</string>
+// CHECK:      <key>edges</key>
+// CHECK:       <array>
+// CHECK:        <dict>
+// CHECK:         <key>start</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>328</integer>
+// CHECK:            <key>col</key><integer>3</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>328</integer>
+// CHECK:            <key>col</key><integer>10</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:         <key>end</key>
+// CHECK:          <array>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>328</integer>
+// CHECK:            <key>col</key><integer>19</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:           <dict>
+// CHECK:            <key>line</key><integer>328</integer>
+// CHECK:            <key>col</key><integer>19</integer>
+// CHECK:            <key>file</key><integer>0</integer>
+// CHECK:           </dict>
+// CHECK:          </array>
+// CHECK:        </dict>
+// CHECK:       </array>
+// CHECK:     </dict>
+// CHECK:     <dict>
+// CHECK:      <key>kind</key><string>event</string>
+// CHECK:      <key>location</key>
+// CHECK:      <dict>
+// CHECK:       <key>line</key><integer>328</integer>
+// CHECK:       <key>col</key><integer>19</integer>
+// CHECK:       <key>file</key><integer>0</integer>
+// CHECK:      </dict>
+// CHECK:      <key>ranges</key>
+// CHECK:      <array>
+// CHECK:        <array>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>328</integer>
+// CHECK:          <key>col</key><integer>19</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:         <dict>
+// CHECK:          <key>line</key><integer>328</integer>
+// CHECK:          <key>col</key><integer>19</integer>
+// CHECK:          <key>file</key><integer>0</integer>
+// CHECK:         </dict>
+// CHECK:        </array>
+// CHECK:      </array>
+// CHECK:      <key>depth</key><integer>0</integer>
+// CHECK:      <key>extended_message</key>
+// CHECK:      <string>Object has a dynamic type &apos;NSString *&apos; which is incompatible with static type &apos;NSNumber *&apos;</string>
+// CHECK:      <key>message</key>
+// CHECK:      <string>Object has a dynamic type &apos;NSString *&apos; which is incompatible with static type &apos;NSNumber *&apos;</string>
+// CHECK:     </dict>
+// CHECK:    </array>
+// CHECK:    <key>description</key><string>Object has a dynamic type &apos;NSString *&apos; which is incompatible with static type &apos;NSNumber *&apos;</string>
+// CHECK:    <key>category</key><string>Type Error</string>
+// CHECK:    <key>type</key><string>Dynamic and static type mismatch</string>
+// CHECK:    <key>check_name</key><string>alpha.core.DynamicTypeChecker</string>
+// CHECK:   <key>issue_context_kind</key><string>function</string>
+// CHECK:   <key>issue_context</key><string>returnToIdVariable</string>
+// CHECK:   <key>issue_hash</key><string>3</string>
+// CHECK:   <key>location</key>
+// CHECK:   <dict>
+// CHECK:    <key>line</key><integer>328</integer>
+// CHECK:    <key>col</key><integer>19</integer>
+// CHECK:    <key>file</key><integer>0</integer>
+// CHECK:   </dict>
+// CHECK:   </dict>
 // CHECK:  </array>
-

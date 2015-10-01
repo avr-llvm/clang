@@ -536,9 +536,11 @@ struct AdditionalKeywords {
     kw_finally = &IdentTable.get("finally");
     kw_function = &IdentTable.get("function");
     kw_import = &IdentTable.get("import");
+    kw_let = &IdentTable.get("let");
     kw_var = &IdentTable.get("var");
 
     kw_abstract = &IdentTable.get("abstract");
+    kw_assert = &IdentTable.get("assert");
     kw_extends = &IdentTable.get("extends");
     kw_implements = &IdentTable.get("implements");
     kw_instanceof = &IdentTable.get("instanceof");
@@ -576,10 +578,12 @@ struct AdditionalKeywords {
   IdentifierInfo *kw_finally;
   IdentifierInfo *kw_function;
   IdentifierInfo *kw_import;
+  IdentifierInfo *kw_let;
   IdentifierInfo *kw_var;
 
   // Java keywords.
   IdentifierInfo *kw_abstract;
+  IdentifierInfo *kw_assert;
   IdentifierInfo *kw_extends;
   IdentifierInfo *kw_implements;
   IdentifierInfo *kw_instanceof;

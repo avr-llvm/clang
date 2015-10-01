@@ -1496,10 +1496,6 @@ TryStaticImplicitCast(Sema &Self, ExprResult &SrcExpr, QualType DestType,
       msg = 0;
       return TC_Failed;
     }
-  } else if (DestType->isMemberPointerType()) {
-    if (Self.Context.getTargetInfo().getCXXABI().isMicrosoft()) {
-      Self.RequireCompleteType(OpRange.getBegin(), DestType, 0);
-    }
   }
 
   InitializedEntity Entity = InitializedEntity::InitializeTemporary(DestType);
@@ -2483,8 +2479,11 @@ ExprResult Sema::BuildCXXFunctionalCastExpr(TypeSourceInfo *CastTypeInfo,
   Op.CheckCXXCStyleCast(/*FunctionalStyle=*/true, /*ListInit=*/false);
   if (Op.SrcExpr.isInvalid())
     return ExprError();
-  
-  if (CXXConstructExpr *ConstructExpr = dyn_cast<CXXConstructExpr>(Op.SrcExpr.get()))
+
+  auto *SubExpr = Op.SrcExpr.get();
+  if (auto *BindExpr = dyn_cast<CXXBindTemporaryExpr>(SubExpr))
+    SubExpr = BindExpr->getSubExpr();
+  if (auto *ConstructExpr = dyn_cast<CXXConstructExpr>(SubExpr))
     ConstructExpr->setParenOrBraceRange(SourceRange(LPLoc, RPLoc));
 
   return Op.complete(CXXFunctionalCastExpr::Create(Context, Op.ResultType,

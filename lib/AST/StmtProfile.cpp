@@ -333,6 +333,10 @@ void OMPClauseProfiler::VisitOMPCaptureClause(const OMPCaptureClause *) {}
 
 void OMPClauseProfiler::VisitOMPSeqCstClause(const OMPSeqCstClause *) {}
 
+void OMPClauseProfiler::VisitOMPThreadsClause(const OMPThreadsClause *) {}
+
+void OMPClauseProfiler::VisitOMPSIMDClause(const OMPSIMDClause *) {}
+
 template<typename T>
 void OMPClauseProfiler::VisitOMPClauseList(T *Node) {
   for (auto *E : Node->varlists()) {
@@ -1313,6 +1317,14 @@ void StmtProfiler::VisitPackExpansionExpr(const PackExpansionExpr *S) {
 void StmtProfiler::VisitSizeOfPackExpr(const SizeOfPackExpr *S) {
   VisitExpr(S);
   VisitDecl(S->getPack());
+  if (S->isPartiallySubstituted()) {
+    auto Args = S->getPartialArguments();
+    ID.AddInteger(Args.size());
+    for (const auto &TA : Args)
+      VisitTemplateArgument(TA);
+  } else {
+    ID.AddInteger(0);
+  }
 }
 
 void StmtProfiler::VisitSubstNonTypeTemplateParmPackExpr(

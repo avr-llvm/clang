@@ -152,10 +152,10 @@ public:
 /// \brief This represents 'if' clause in the '#pragma omp ...' directive.
 ///
 /// \code
-/// #pragma omp parallel if(a > 5)
+/// #pragma omp parallel if(parallel:a > 5)
 /// \endcode
-/// In this example directive '#pragma omp parallel' has simple 'if'
-/// clause with condition 'a > 5'.
+/// In this example directive '#pragma omp parallel' has simple 'if' clause with
+/// condition 'a > 5' and directive name modifier 'parallel'.
 ///
 class OMPIfClause : public OMPClause {
   friend class OMPClauseReader;
@@ -163,37 +163,67 @@ class OMPIfClause : public OMPClause {
   SourceLocation LParenLoc;
   /// \brief Condition of the 'if' clause.
   Stmt *Condition;
+  /// \brief Location of ':' (if any).
+  SourceLocation ColonLoc;
+  /// \brief Directive name modifier for the clause.
+  OpenMPDirectiveKind NameModifier;
+  /// \brief Name modifier location.
+  SourceLocation NameModifierLoc;
 
   /// \brief Set condition.
   ///
   void setCondition(Expr *Cond) { Condition = Cond; }
+  /// \brief Set directive name modifier for the clause.
+  ///
+  void setNameModifier(OpenMPDirectiveKind NM) { NameModifier = NM; }
+  /// \brief Set location of directive name modifier for the clause.
+  ///
+  void setNameModifierLoc(SourceLocation Loc) { NameModifierLoc = Loc; }
+  /// \brief Set location of ':'.
+  ///
+  void setColonLoc(SourceLocation Loc) { ColonLoc = Loc; }
 
 public:
   /// \brief Build 'if' clause with condition \a Cond.
   ///
+  /// \param NameModifier [OpenMP 4.1] Directive name modifier of clause.
+  /// \param Cond Condition of the clause.
   /// \param StartLoc Starting location of the clause.
   /// \param LParenLoc Location of '('.
-  /// \param Cond Condition of the clause.
+  /// \param NameModifierLoc Location of directive name modifier.
+  /// \param ColonLoc [OpenMP 4.1] Location of ':'.
   /// \param EndLoc Ending location of the clause.
   ///
-  OMPIfClause(Expr *Cond, SourceLocation StartLoc, SourceLocation LParenLoc,
+  OMPIfClause(OpenMPDirectiveKind NameModifier, Expr *Cond,
+              SourceLocation StartLoc, SourceLocation LParenLoc,
+              SourceLocation NameModifierLoc, SourceLocation ColonLoc,
               SourceLocation EndLoc)
       : OMPClause(OMPC_if, StartLoc, EndLoc), LParenLoc(LParenLoc),
-        Condition(Cond) {}
+        Condition(Cond), ColonLoc(ColonLoc), NameModifier(NameModifier),
+        NameModifierLoc(NameModifierLoc) {}
 
   /// \brief Build an empty clause.
   ///
   OMPIfClause()
-      : OMPClause(OMPC_if, SourceLocation(), SourceLocation()),
-        LParenLoc(SourceLocation()), Condition(nullptr) {}
+      : OMPClause(OMPC_if, SourceLocation(), SourceLocation()), LParenLoc(),
+        Condition(nullptr), ColonLoc(), NameModifier(OMPD_unknown),
+        NameModifierLoc() {}
 
   /// \brief Sets the location of '('.
   void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
   /// \brief Returns the location of '('.
   SourceLocation getLParenLoc() const { return LParenLoc; }
 
+  /// \brief Return the location of ':'.
+  SourceLocation getColonLoc() const { return ColonLoc; }
+
   /// \brief Returns condition.
   Expr *getCondition() const { return cast_or_null<Expr>(Condition); }
+  /// \brief Return directive name modifier associated with the clause.
+  OpenMPDirectiveKind getNameModifier() const { return NameModifier; }
+
+  /// \brief Return the location of directive name modifier.
+  SourceLocation getNameModifierLoc() const { return NameModifierLoc; }
 
   static bool classof(const OMPClause *T) {
     return T->getClauseKind() == OMPC_if;
@@ -2483,7 +2513,7 @@ public:
   ///
   OMPDeviceClause()
       : OMPClause(OMPC_device, SourceLocation(), SourceLocation()), 
-        LParenLoc(SourceLocation()), Device(0) {}
+        LParenLoc(SourceLocation()), Device(nullptr) {}
   /// \brief Sets the location of '('.
   void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
   /// \brief Returns the location of '('.
@@ -2500,7 +2530,67 @@ public:
   child_range children() { return child_range(&Device, &Device + 1); }
 };
 
+/// \brief This represents 'threads' clause in the '#pragma omp ...' directive.
+///
+/// \code
+/// #pragma omp ordered threads
+/// \endcode
+/// In this example directive '#pragma omp ordered' has simple 'threads' clause.
+///
+class OMPThreadsClause : public OMPClause {
+public:
+  /// \brief Build 'threads' clause.
+  ///
+  /// \param StartLoc Starting location of the clause.
+  /// \param EndLoc Ending location of the clause.
+  ///
+  OMPThreadsClause(SourceLocation StartLoc, SourceLocation EndLoc)
+      : OMPClause(OMPC_threads, StartLoc, EndLoc) {}
+
+  /// \brief Build an empty clause.
+  ///
+  OMPThreadsClause()
+      : OMPClause(OMPC_threads, SourceLocation(), SourceLocation()) {}
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == OMPC_threads;
+  }
+
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+};
+
+/// \brief This represents 'simd' clause in the '#pragma omp ...' directive.
+///
+/// \code
+/// #pragma omp ordered simd
+/// \endcode
+/// In this example directive '#pragma omp ordered' has simple 'simd' clause.
+///
+class OMPSIMDClause : public OMPClause {
+public:
+  /// \brief Build 'simd' clause.
+  ///
+  /// \param StartLoc Starting location of the clause.
+  /// \param EndLoc Ending location of the clause.
+  ///
+  OMPSIMDClause(SourceLocation StartLoc, SourceLocation EndLoc)
+      : OMPClause(OMPC_simd, StartLoc, EndLoc) {}
+
+  /// \brief Build an empty clause.
+  ///
+  OMPSIMDClause() : OMPClause(OMPC_simd, SourceLocation(), SourceLocation()) {}
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == OMPC_simd;
+  }
+
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+};
+
 } // end namespace clang
 
-#endif
-
+#endif // LLVM_CLANG_AST_OPENMPCLAUSE_H

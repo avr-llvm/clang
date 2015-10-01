@@ -416,7 +416,8 @@ def note_unreachable_silence : Note<
 
 /// Built-in functions.
 def ext_implicit_lib_function_decl : ExtWarn<
-  "implicitly declaring library function '%0' with type %1">;
+  "implicitly declaring library function '%0' with type %1">,
+  InGroup<ImplicitFunctionDeclare>;
 def note_include_header_or_declare : Note<
   "include the header <%0> or explicitly provide a declaration for '%1'">;
 def note_previous_builtin_declaration : Note<"%0 is a builtin with type %1">;
@@ -1152,7 +1153,10 @@ def err_incompatible_exception_specs : Error<
   "target exception specification is not superset of source">;
 def err_deep_exception_specs_differ : Error<
   "exception specifications of %select{return|argument}0 types differ">;
-def warn_missing_exception_specification : Warning<
+def ext_missing_exception_specification : ExtWarn<
+  "%0 is missing exception specification '%1'">,
+  InGroup<DiagGroup<"missing-exception-spec">>;
+def err_missing_exception_specification : Error<
   "%0 is missing exception specification '%1'">;
 def err_noexcept_needs_constant_expression : Error<
   "argument to noexcept specifier must be a constant expression">;
@@ -1979,6 +1983,9 @@ def err_var_concept_not_initialized : Error<
   "variable concept declaration must be initialized">;
 def err_function_concept_exception_spec : Error<
   "function concept cannot have exception specification">;
+def err_concept_decl_invalid_specifiers : Error<
+  "%select{variable|function}0 concept cannot be declared "
+  "'%select{thread_local|inline|friend|constexpr}1'">;
 
 // C++11 char16_t/char32_t
 def warn_cxx98_compat_unicode_type : Warning<
@@ -2270,6 +2277,8 @@ def err_attribute_dll_not_extern : Error<
   "%q0 must have external linkage when declared %q1">;
 def err_attribute_dll_thread_local : Error<
   "%q0 cannot be thread local when declared %q1">;
+def err_attribute_dll_lambda : Error<
+  "lambda cannot be declared %0">;
 def warn_attribute_invalid_on_definition : Warning<
   "'%0' attribute cannot be specified on a definition">,
   InGroup<IgnoredAttributes>;
@@ -2370,6 +2379,9 @@ def err_cconv_varargs : Error<
   "variadic function cannot use %0 calling convention">;
 def warn_cconv_varargs : Warning<
   "%0 calling convention ignored on variadic function">,
+  InGroup<IgnoredAttributes>;
+def warn_cconv_structors : Warning<
+  "%0 calling convention ignored on constructor/destructor">,
   InGroup<IgnoredAttributes>;
 def err_regparm_mismatch : Error<"function declared with regparm(%0) "
   "attribute was previously declared "
@@ -4310,20 +4322,22 @@ def err_bitfield_has_negative_width : Error<
 def err_anon_bitfield_has_negative_width : Error<
   "anonymous bit-field has negative width (%0)">;
 def err_bitfield_has_zero_width : Error<"named bit-field %0 has zero width">;
-def err_bitfield_width_exceeds_type_size : Error<
-  "size of bit-field %0 (%1 bits) exceeds size of its type (%2 bits)">;
-def err_anon_bitfield_width_exceeds_type_size : Error<
-  "size of anonymous bit-field (%0 bits) exceeds size of its type (%1 bits)">;
+def err_bitfield_width_exceeds_type_width : Error<
+  "width of bit-field %0 (%1 bits) exceeds %select{width|size}2 "
+  "of its type (%3 bit%s3)">;
+def err_anon_bitfield_width_exceeds_type_width : Error<
+  "width of anonymous bit-field (%0 bits) exceeds %select{width|size}1 "
+  "of its type (%2 bit%s2)">;
 def err_incorrect_number_of_vector_initializers : Error<
   "number of elements must be either one or match the size of the vector">;
 
 // Used by C++ which allows bit-fields that are wider than the type.
-def warn_bitfield_width_exceeds_type_size: Warning<
-  "size of bit-field %0 (%1 bits) exceeds the size of its type; value will be "
-  "truncated to %2 bits">;
-def warn_anon_bitfield_width_exceeds_type_size : Warning<
-  "size of anonymous bit-field (%0 bits) exceeds size of its type; value will "
-  "be truncated to %1 bits">;
+def warn_bitfield_width_exceeds_type_width: Warning<
+  "width of bit-field %0 (%1 bits) exceeds the width of its type; value will "
+  "be truncated to %2 bit%s2">, InGroup<BitFieldWidth>;
+def warn_anon_bitfield_width_exceeds_type_width : Warning<
+  "width of anonymous bit-field (%0 bits) exceeds width of its type; value "
+  "will be truncated to %1 bit%s1">, InGroup<BitFieldWidth>;
 
 def warn_missing_braces : Warning<
   "suggest braces around initialization of subobject">,
@@ -5215,6 +5229,8 @@ def err_builtin_func_cast_more_than_one_arg : Error<
   "function-style cast to a builtin type can only take one argument">;
 def err_value_init_for_array_type : Error<
   "array types cannot be value-initialized">;
+def err_value_init_for_function_type : Error<
+  "function types cannot be value-initialized">;
 def warn_format_nonliteral_noargs : Warning<
   "format string is not a string literal (potentially insecure)">,
   InGroup<FormatSecurity>;
@@ -6199,6 +6215,12 @@ def err_atomic_load_store_uses_lib : Error<
   "atomic %select{load|store}0 requires runtime support that is not "
   "available for this target">;
 
+def err_nontemporal_builtin_must_be_pointer : Error<
+  "address argument to nontemporal builtin must be a pointer (%0 invalid)">;
+def err_nontemporal_builtin_must_be_pointer_intfltptr_or_vector : Error<
+  "address argument to nontemporal builtin must be a pointer to integer, float, "
+  "pointer, or a vector of such types (%0 invalid)">;
+
 def err_deleted_function_use : Error<"attempt to use a deleted function">;
 
 def err_kern_type_not_void_return : Error<
@@ -6400,6 +6422,8 @@ let CategoryName = "Inline Assembly Issue" in {
   def err_asm_non_addr_value_in_memory_constraint : Error <
     "reference to a %select{bit-field|vector element|global register variable}0"
     " in asm %select{input|output}1 with a memory constraint '%2'">;
+  def err_asm_input_duplicate_match : Error<
+    "more than one input constraint matches the same output '%0'">;
 
   def warn_asm_label_on_auto_decl : Warning<
     "ignored asm label '%0' on automatic variable">;
@@ -6414,6 +6438,8 @@ let CategoryName = "Inline Assembly Issue" in {
 
   def note_asm_missing_constraint_modifier : Note<
     "use constraint modifier \"%0\"">;
+  def note_asm_input_duplicate_first : Note<
+    "constraint '%0' is already present here">;
 }
 
 let CategoryName = "Semantic Issue" in {
@@ -7084,6 +7110,10 @@ def note_empty_body_on_separate_line : Note<
 
 def err_va_start_used_in_non_variadic_function : Error<
   "'va_start' used in function with fixed args">;
+def err_va_start_used_in_wrong_abi_function : Error<
+  "'va_start' used in %select{System V|Win64}0 ABI function">;
+def err_ms_va_start_used_in_sysv_function : Error<
+  "'__builtin_ms_va_start' used in System V ABI function">;
 def warn_second_parameter_of_va_start_not_last_named_argument : Warning<
   "second parameter of 'va_start' not last named argument">, InGroup<Varargs>;
 def warn_va_start_of_reference_type_is_undefined : Warning<
@@ -7198,6 +7228,8 @@ def err_64_bit_builtin_32_bit_tgt : Error<
   "this builtin is only available on 64-bit targets">;
 def err_ppc_builtin_only_on_pwr7 : Error<
   "this builtin is only valid on POWER7 or later CPUs">;
+def err_x86_builtin_32_bit_tgt : Error<
+  "this builtin is only available on x86-64 targets">;
 
 def err_builtin_longjmp_unsupported : Error<
   "__builtin_longjmp is not supported for the current target">;
@@ -7413,6 +7445,8 @@ def err_opencl_ptrptr_kernel_param : Error<
   "kernel parameter cannot be declared as a pointer to a pointer">;
 def err_opencl_private_ptr_kernel_param : Error<
   "kernel parameter cannot be declared as a pointer to the __private address space">;
+def err_opencl_non_kernel_variable : Error<
+  "non-kernel function variable cannot be declared in %0 address space">;
 def err_static_function_scope : Error<
   "variables in function scope cannot be declared static">;
 def err_opencl_bitfields : Error<
@@ -7440,7 +7474,7 @@ def err_sampler_argument_required : Error<
 def err_wrong_sampler_addressspace: Error<
   "sampler type cannot be used with the __local and __global address space qualifiers">;
 def err_opencl_global_invalid_addr_space : Error<
-  "global variables must have a constant address space qualifier">;
+  "program scope variable must reside in %0 address space">;
 def err_opencl_no_main : Error<"%select{function|kernel}0 cannot be called 'main'">;
 def err_opencl_kernel_attr :
   Error<"attribute %0 can only be applied to a kernel function">;
@@ -7448,6 +7482,9 @@ def err_opencl_return_value_with_address_space : Error<
   "return value cannot be qualified with address space">;
 def err_opencl_constant_no_init : Error<
   "variable in constant address space must be initialized">;
+def err_atomic_init_constant : Error<
+  "atomic variable can only be assigned to a compile time constant"
+  " in the declaration statement in the program scope">;
 def err_opencl_implicit_vector_conversion : Error<
   "implicit conversions between vector types (%0 and %1) are not permitted">;
 } // end of sema category
@@ -7476,7 +7513,7 @@ def err_omp_firstprivate_incomplete_type : Error<
 def err_omp_lastprivate_incomplete_type : Error<
   "a lastprivate variable with incomplete type %0">;
 def err_omp_reduction_incomplete_type : Error<
-  "a reduction variable with incomplete type %0">;
+  "a reduction list item with incomplete type %0">;
 def err_omp_unexpected_clause_value : Error<
   "expected %0 in OpenMP clause '%1'">;
 def err_omp_expected_var_name : Error<
@@ -7533,6 +7570,8 @@ def err_omp_required_access : Error<
   "%0 variable must be %1">;
 def err_omp_const_variable : Error<
   "const-qualified variable cannot be %0">;
+def err_omp_const_reduction_list_item : Error<
+  "const-qualified list item cannot be reduction">;
 def err_omp_linear_incomplete_type : Error<
   "a linear variable with incomplete type %0">;
 def err_omp_linear_expected_int_or_ptr : Error<
@@ -7584,7 +7623,7 @@ def warn_omp_loop_64_bit_var : Warning<
 def err_omp_unknown_reduction_identifier : Error<
   "incorrect reduction identifier, expected one of '+', '-', '*', '&', '|', '^', '&&', '||', 'min' or 'max'">;
 def err_omp_reduction_type_array : Error<
-  "a reduction variable with array type %0">;
+  "a reduction list item with array type %0">;
 def err_omp_reduction_ref_type_arg : Error<
   "argument of OpenMP clause 'reduction' must reference the same object in all threads">;
 def err_omp_clause_not_arithmetic_type_arg : Error<
@@ -7598,7 +7637,7 @@ def note_omp_referenced : Note<
 def err_omp_reduction_in_task : Error<
   "reduction variables may not be accessed in an explicit task">;
 def err_omp_reduction_id_not_compatible : Error<
-  "variable of type %0 is not valid for specified reduction operation: unable to provide default initialization value">;
+  "list item of type %0 is not valid for specified reduction operation: unable to provide default initialization value">;
 def err_omp_prohibited_region : Error<
   "region cannot be%select{| closely}0 nested inside '%1' region"
   "%select{|; perhaps you forget to enclose 'omp %3' directive into a parallel region?|"
@@ -7694,6 +7733,20 @@ def err_omp_wrong_linear_modifier_non_reference : Error<
   "variable of non-reference type %0 can be used only with 'val' modifier, but used with '%1'">;
 def err_omp_wrong_simdlen_safelen_values : Error<
   "the value of 'simdlen' parameter must be less than or equal to the value of the 'safelen' parameter">;
+def err_omp_wrong_if_directive_name_modifier : Error<
+  "directive name modifier '%0' is not allowed for '#pragma omp %1'">;
+def err_omp_no_more_if_clause : Error<
+  "no more 'if' clause is allowed">;
+def err_omp_unnamed_if_clause : Error<
+  "expected %select{|one of}0 %1 directive name modifier%select{|s}0">;
+def note_omp_previous_named_if_clause : Note<
+  "previous clause with directive name modifier specified here">;
+def err_omp_ordered_directive_with_param : Error<
+  "'ordered' directive %select{without any clauses|with 'threads' clause}0 cannot be closely nested inside ordered region with specified parameter">;
+def note_omp_ordered_param : Note<
+  "'ordered' clause with specified parameter">;
+def err_omp_expected_array_sect_reduction_lb_not_zero : Error<
+  "lower bound expected to be evaluated to zero">;
 } // end of OpenMP category
 
 let CategoryName = "Related Result Type Issue" in {
@@ -7742,8 +7795,8 @@ def err_module_import_in_extern_c : Error<
   "specification">;
 def note_module_import_in_extern_c : Note<
   "extern \"C\" language linkage specification begins here">;
-def err_module_import_not_at_top_level : Error<
-  "import of module '%0' appears within %1">;
+def err_module_import_not_at_top_level_fatal : Error<
+  "import of module '%0' appears within %1">, DefaultFatal;
 def note_module_import_not_at_top_level : Note<"%0 begins here">;
 def err_module_self_import : Error<
   "import of module '%0' appears within same top-level module '%1'">;
@@ -7806,10 +7859,10 @@ def warn_nullability_missing : Warning<
   "type specifier (_Nonnull, _Nullable, or _Null_unspecified)">,
   InGroup<NullabilityCompleteness>;
 
-def err_type_arg_explicit_nullability : Error<
+def err_objc_type_arg_explicit_nullability : Error<
   "type argument %0 cannot explicitly specify nullability">;
 
-def err_type_param_bound_explicit_nullability : Error<
+def err_objc_type_param_bound_explicit_nullability : Error<
   "type parameter %0 bound %1 cannot explicitly specify nullability">;
 
 }
@@ -7821,6 +7874,8 @@ def err_objc_type_param_bound_nonobject : Error<
 
 def err_objc_type_param_bound_missing_pointer : Error<
   "missing '*' in type bound %0 for type parameter %1">;
+def err_objc_type_param_bound_qualified : Error<
+  "type bound %1 for type parameter %0 cannot be qualified with '%2'">;
 
 def err_objc_type_param_redecl : Error<
   "redeclaration of type parameter %0">;
@@ -7855,6 +7910,8 @@ def err_objc_parameterized_forward_class_first : Error<
 
 def err_objc_type_arg_missing_star : Error<
   "type argument %0 must be a pointer (requires a '*')">;
+def err_objc_type_arg_qualified : Error<
+  "type argument %0 cannot be qualified with '%1'">;
 
 def err_objc_type_arg_missing : Error<
   "no type or protocol named %0">;

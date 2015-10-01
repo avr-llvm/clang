@@ -58,12 +58,12 @@ enum class Nullability : char {
 /// the nullability of the receiver or the nullability of the return type of the
 /// method, depending on which is more nullable. Contradicted is considered to
 /// be the most nullable, to avoid false positive results.
-static Nullability getMostNullable(Nullability Lhs, Nullability Rhs) {
+Nullability getMostNullable(Nullability Lhs, Nullability Rhs) {
   return static_cast<Nullability>(
       std::min(static_cast<char>(Lhs), static_cast<char>(Rhs)));
 }
 
-static const char *getNullabilityString(Nullability Nullab) {
+const char *getNullabilityString(Nullability Nullab) {
   switch (Nullab) {
   case Nullability::Contradicted:
     return "contradicted";
@@ -74,7 +74,7 @@ static const char *getNullabilityString(Nullability Nullab) {
   case Nullability::Nonnull:
     return "nonnull";
   }
-  assert(false);
+  llvm_unreachable("Unexpected enumeration.");
   return "";
 }
 
@@ -89,19 +89,17 @@ enum class ErrorKind : int {
   NullablePassedToNonnull
 };
 
-const char *ErrorMessages[] = {"Null pointer is assigned to a pointer which "
-                               "has _Nonnull type",
-                               "Null pointer is passed to a parameter which is "
-                               "marked as _Nonnull",
-                               "Null pointer is returned from a function that "
-                               "has _Nonnull return type",
-                               "Nullable pointer is assigned to a pointer "
-                               "which has _Nonnull type",
-                               "Nullable pointer is returned from a function "
-                               "that has _Nonnull return type",
-                               "Nullable pointer is dereferenced",
-                               "Nullable pointer is passed to a parameter "
-                               "which is marked as _Nonnull"};
+const char *const ErrorMessages[] = {
+    "Null is assigned to a pointer which is expected to have non-null value",
+    "Null passed to a callee that requires a non-null argument",
+    "Null is returned from a function that is expected to return a non-null "
+    "value",
+    "Nullable pointer is assigned to a pointer which is expected to have "
+    "non-null value",
+    "Nullable pointer is returned from a function that is expected to return a "
+    "non-null value",
+    "Nullable pointer is dereferenced",
+    "Nullable pointer is passed to a callee that requires a non-null argument"};
 
 class NullabilityChecker
     : public Checker<check::Bind, check::PreCall, check::PreStmt<ReturnStmt>,
@@ -138,6 +136,11 @@ public:
   };
 
   NullabilityChecksFilter Filter;
+  // When set to false no nullability information will be tracked in
+  // NullabilityMap. It is possible to catch errors like passing a null pointer
+  // to a callee that expects nonnull argument without the information that is
+  // stroed in the NullabilityMap. This is an optimization.
+  DefaultBool NeedTracking;
 
 private:
   class NullabilityBugVisitor
@@ -161,12 +164,21 @@ private:
     const MemRegion *Region;
   };
 
+  /// When any of the nonnull arguments of the analyzed function is null, do not
+  /// report anything and turn off the check.
+  ///
+  /// When \p SuppressPath is set to true, no more bugs will be reported on this
+  /// path by this checker.
+  void reportBugIfPreconditionHolds(ErrorKind Error, ExplodedNode *N,
+                                    const MemRegion *Region, CheckerContext &C,
+                                    const Stmt *ValueExpr = nullptr,
+                                    bool SuppressPath = false) const;
+
   void reportBug(ErrorKind Error, ExplodedNode *N, const MemRegion *Region,
                  BugReporter &BR, const Stmt *ValueExpr = nullptr) const {
     if (!BT)
       BT.reset(new BugType(this, "Nullability", "Memory error"));
     const char *Msg = ErrorMessages[static_cast<int>(Error)];
-    assert(Msg);
     std::unique_ptr<BugReport> R(new BugReport(*BT, Msg, N));
     if (Region) {
       R->markInteresting(Region);
@@ -181,6 +193,11 @@ private:
     }
     BR.emitReport(std::move(R));
   }
+
+  /// If an SVal wraps a region that should be tracked, it will return a pointer
+  /// to the wrapped region. Otherwise it will return a nullptr.
+  const SymbolicRegion *getTrackRegion(SVal Val,
+                                       bool CheckSuperRegion = false) const;
 };
 
 class NullabilityState {
@@ -220,6 +237,13 @@ bool operator==(NullabilityState Lhs, NullabilityState Rhs) {
 REGISTER_MAP_WITH_PROGRAMSTATE(NullabilityMap, const MemRegion *,
                                NullabilityState)
 
+// If the nullability precondition of a function is violated, we should not
+// report nullability related issues on that path. For this reason once a
+// precondition is not met on a path, this checker will be esentially turned off
+// for the rest of the analysis. We do not want to generate a sink node however,
+// so this checker would not lead to reduced coverage.
+REGISTER_TRAIT_WITH_PROGRAMSTATE(PreconditionViolated, bool)
+
 enum class NullConstraint { IsNull, IsNotNull, Unknown };
 
 static NullConstraint getNullConstraint(DefinedOrUnknownSVal Val,
@@ -232,10 +256,11 @@ static NullConstraint getNullConstraint(DefinedOrUnknownSVal Val,
   return NullConstraint::Unknown;
 }
 
-// If an SVal wraps a region that should be tracked, it will return a pointer
-// to the wrapped region. Otherwise it will return a nullptr.
-static const SymbolicRegion *getTrackRegion(SVal Val,
-                                            bool CheckSuperRegion = false) {
+const SymbolicRegion *
+NullabilityChecker::getTrackRegion(SVal Val, bool CheckSuperRegion) const {
+  if (!NeedTracking)
+    return nullptr;
+
   auto RegionSVal = Val.getAs<loc::MemRegionVal>();
   if (!RegionSVal)
     return nullptr;
@@ -245,7 +270,7 @@ static const SymbolicRegion *getTrackRegion(SVal Val,
   if (CheckSuperRegion) {
     if (auto FieldReg = Region->getAs<FieldRegion>())
       return dyn_cast<SymbolicRegion>(FieldReg->getSuperRegion());
-    else if (auto ElementReg = Region->getAs<ElementRegion>())
+    if (auto ElementReg = Region->getAs<ElementRegion>())
       return dyn_cast<SymbolicRegion>(ElementReg->getSuperRegion());
   }
 
@@ -255,12 +280,12 @@ static const SymbolicRegion *getTrackRegion(SVal Val,
 PathDiagnosticPiece *NullabilityChecker::NullabilityBugVisitor::VisitNode(
     const ExplodedNode *N, const ExplodedNode *PrevN, BugReporterContext &BRC,
     BugReport &BR) {
-  ProgramStateRef state = N->getState();
-  ProgramStateRef statePrev = PrevN->getState();
+  ProgramStateRef State = N->getState();
+  ProgramStateRef StatePrev = PrevN->getState();
 
-  const NullabilityState *TrackedNullab = state->get<NullabilityMap>(Region);
+  const NullabilityState *TrackedNullab = State->get<NullabilityMap>(Region);
   const NullabilityState *TrackedNullabPrev =
-      statePrev->get<NullabilityMap>(Region);
+      StatePrev->get<NullabilityMap>(Region);
   if (!TrackedNullab)
     return nullptr;
 
@@ -302,24 +327,115 @@ static Nullability getNullabilityAnnotation(QualType Type) {
   return Nullability::Unspecified;
 }
 
+template <typename ParamVarDeclRange>
+static bool
+checkParamsForPreconditionViolation(const ParamVarDeclRange &Params,
+                                    ProgramStateRef State,
+                                    const LocationContext *LocCtxt) {
+  for (const auto *ParamDecl : Params) {
+    if (ParamDecl->isParameterPack())
+      break;
+
+    if (getNullabilityAnnotation(ParamDecl->getType()) != Nullability::Nonnull)
+      continue;
+
+    auto RegVal = State->getLValue(ParamDecl, LocCtxt)
+                      .template getAs<loc::MemRegionVal>();
+    if (!RegVal)
+      continue;
+
+    auto ParamValue = State->getSVal(RegVal->getRegion())
+                          .template getAs<DefinedOrUnknownSVal>();
+    if (!ParamValue)
+      continue;
+
+    if (getNullConstraint(*ParamValue, State) == NullConstraint::IsNull) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool checkPreconditionViolation(ProgramStateRef State, ExplodedNode *N,
+                                       CheckerContext &C) {
+  if (State->get<PreconditionViolated>())
+    return true;
+
+  const LocationContext *LocCtxt = C.getLocationContext();
+  const Decl *D = LocCtxt->getDecl();
+  if (!D)
+    return false;
+
+  if (const auto *BlockD = dyn_cast<BlockDecl>(D)) {
+    if (checkParamsForPreconditionViolation(BlockD->parameters(), State,
+                                            LocCtxt)) {
+      if (!N->isSink())
+        C.addTransition(State->set<PreconditionViolated>(true), N);
+      return true;
+    }
+    return false;
+  }
+
+  if (const auto *FuncDecl = dyn_cast<FunctionDecl>(D)) {
+    if (checkParamsForPreconditionViolation(FuncDecl->parameters(), State,
+                                            LocCtxt)) {
+      if (!N->isSink())
+        C.addTransition(State->set<PreconditionViolated>(true), N);
+      return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+void NullabilityChecker::reportBugIfPreconditionHolds(
+    ErrorKind Error, ExplodedNode *N, const MemRegion *Region,
+    CheckerContext &C, const Stmt *ValueExpr, bool SuppressPath) const {
+  ProgramStateRef OriginalState = N->getState();
+
+  if (checkPreconditionViolation(OriginalState, N, C))
+    return;
+  if (SuppressPath) {
+    OriginalState = OriginalState->set<PreconditionViolated>(true);
+    N = C.addTransition(OriginalState, N);
+  }
+
+  reportBug(Error, N, Region, C.getBugReporter(), ValueExpr);
+}
+
 /// Cleaning up the program state.
 void NullabilityChecker::checkDeadSymbols(SymbolReaper &SR,
                                           CheckerContext &C) const {
+  if (!SR.hasDeadSymbols())
+    return;
+
   ProgramStateRef State = C.getState();
   NullabilityMapTy Nullabilities = State->get<NullabilityMap>();
   for (NullabilityMapTy::iterator I = Nullabilities.begin(),
                                   E = Nullabilities.end();
        I != E; ++I) {
-    if (!SR.isLiveRegion(I->first)) {
+    const auto *Region = I->first->getAs<SymbolicRegion>();
+    assert(Region && "Non-symbolic region is tracked.");
+    if (SR.isDead(Region->getSymbol())) {
       State = State->remove<NullabilityMap>(I->first);
     }
   }
+  // When one of the nonnull arguments are constrained to be null, nullability
+  // preconditions are violated. It is not enough to check this only when we
+  // actually report an error, because at that time interesting symbols might be
+  // reaped.
+  if (checkPreconditionViolation(State, C.getPredecessor(), C))
+    return;
+  C.addTransition(State);
 }
 
 /// This callback triggers when a pointer is dereferenced and the analyzer does
 /// not know anything about the value of that pointer. When that pointer is
 /// nullable, this code emits a warning.
 void NullabilityChecker::checkEvent(ImplicitNullDerefEvent Event) const {
+  if (Event.SinkNode->getState()->get<PreconditionViolated>())
+    return;
+
   const MemRegion *Region =
       getTrackRegion(Event.Location, /*CheckSuperregion=*/true);
   if (!Region)
@@ -335,6 +451,8 @@ void NullabilityChecker::checkEvent(ImplicitNullDerefEvent Event) const {
   if (Filter.CheckNullableDereferenced &&
       TrackedNullability->getValue() == Nullability::Nullable) {
     BugReporter &BR = *Event.BR;
+    // Do not suppress errors on defensive code paths, because dereferencing
+    // a nullable pointer is always an error.
     if (Event.IsDirectDereference)
       reportBug(ErrorKind::NullableDereferenced, Event.SinkNode, Region, BR);
     else
@@ -358,6 +476,9 @@ void NullabilityChecker::checkPreStmt(const ReturnStmt *S,
     return;
 
   ProgramStateRef State = C.getState();
+  if (State->get<PreconditionViolated>())
+    return;
+
   auto RetSVal =
       State->getSVal(S, C.getLocationContext()).getAs<DefinedOrUnknownSVal>();
   if (!RetSVal)
@@ -378,9 +499,11 @@ void NullabilityChecker::checkPreStmt(const ReturnStmt *S,
       Nullness == NullConstraint::IsNull &&
       StaticNullability == Nullability::Nonnull) {
     static CheckerProgramPointTag Tag(this, "NullReturnedFromNonnull");
-    ExplodedNode *N = C.addTransition(State, C.getPredecessor(), &Tag);
-    reportBug(ErrorKind::NilReturnedToNonnull, N, nullptr, C.getBugReporter(),
-              S);
+    ExplodedNode *N = C.generateErrorNode(State, &Tag);
+    if (!N)
+      return;
+    reportBugIfPreconditionHolds(ErrorKind::NilReturnedToNonnull, N, nullptr, C,
+                                 RetExpr);
     return;
   }
 
@@ -398,8 +521,8 @@ void NullabilityChecker::checkPreStmt(const ReturnStmt *S,
         StaticNullability == Nullability::Nonnull) {
       static CheckerProgramPointTag Tag(this, "NullableReturnedFromNonnull");
       ExplodedNode *N = C.addTransition(State, C.getPredecessor(), &Tag);
-      reportBug(ErrorKind::NullableReturnedToNonnull, N, Region,
-                C.getBugReporter());
+      reportBugIfPreconditionHolds(ErrorKind::NullableReturnedToNonnull, N,
+                                   Region, C);
     }
     return;
   }
@@ -418,6 +541,9 @@ void NullabilityChecker::checkPreCall(const CallEvent &Call,
     return;
 
   ProgramStateRef State = C.getState();
+  if (State->get<PreconditionViolated>())
+    return;
+
   ProgramStateRef OrigState = State;
 
   unsigned Idx = 0;
@@ -445,10 +571,11 @@ void NullabilityChecker::checkPreCall(const CallEvent &Call,
     if (Filter.CheckNullPassedToNonnull && Nullness == NullConstraint::IsNull &&
         ArgStaticNullability != Nullability::Nonnull &&
         ParamNullability == Nullability::Nonnull) {
-      static CheckerProgramPointTag Tag(this, "NullPassedToNonnull");
-      ExplodedNode *N = C.generateSink(State, C.getPredecessor(), &Tag);
-      reportBug(ErrorKind::NilPassedToNonnull, N, nullptr, C.getBugReporter(),
-                ArgExpr);
+      ExplodedNode *N = C.generateErrorNode(State);
+      if (!N)
+        return;
+      reportBugIfPreconditionHolds(ErrorKind::NilPassedToNonnull, N, nullptr, C,
+                                   ArgExpr);
       return;
     }
 
@@ -466,18 +593,16 @@ void NullabilityChecker::checkPreCall(const CallEvent &Call,
 
       if (Filter.CheckNullablePassedToNonnull &&
           ParamNullability == Nullability::Nonnull) {
-        static CheckerProgramPointTag Tag(this, "NullablePassedToNonnull");
-        ExplodedNode *N = C.generateSink(State, C.getPredecessor(), &Tag);
-        reportBug(ErrorKind::NullablePassedToNonnull, N, Region,
-                  C.getBugReporter(), ArgExpr);
+        ExplodedNode *N = C.addTransition(State);
+        reportBugIfPreconditionHolds(ErrorKind::NullablePassedToNonnull, N,
+                                     Region, C, ArgExpr, /*SuppressPath=*/true);
         return;
       }
       if (Filter.CheckNullableDereferenced &&
           Param->getType()->isReferenceType()) {
-        static CheckerProgramPointTag Tag(this, "NullableDereferenced");
-        ExplodedNode *N = C.generateSink(State, C.getPredecessor(), &Tag);
-        reportBug(ErrorKind::NullableDereferenced, N, Region,
-                  C.getBugReporter(), ArgExpr);
+        ExplodedNode *N = C.addTransition(State);
+        reportBugIfPreconditionHolds(ErrorKind::NullableDereferenced, N, Region,
+                                     C, ArgExpr, /*SuppressPath=*/true);
         return;
       }
       continue;
@@ -507,10 +632,13 @@ void NullabilityChecker::checkPostCall(const CallEvent &Call,
   QualType ReturnType = FuncType->getReturnType();
   if (!ReturnType->isAnyPointerType())
     return;
+  ProgramStateRef State = C.getState();
+  if (State->get<PreconditionViolated>())
+    return;
+
   const MemRegion *Region = getTrackRegion(Call.getReturnValue());
   if (!Region)
     return;
-  ProgramStateRef State = C.getState();
 
   // CG headers are misannotated. Do not warn for symbols that are the results
   // of CG calls.
@@ -534,34 +662,31 @@ void NullabilityChecker::checkPostCall(const CallEvent &Call,
 
 static Nullability getReceiverNullability(const ObjCMethodCall &M,
                                           ProgramStateRef State) {
-  Nullability RetNullability = Nullability::Unspecified;
   if (M.isReceiverSelfOrSuper()) {
     // For super and super class receivers we assume that the receiver is
     // nonnull.
-    RetNullability = Nullability::Nonnull;
-  } else {
-    // Otherwise look up nullability in the state.
-    SVal Receiver = M.getReceiverSVal();
-    auto ValueRegionSVal = Receiver.getAs<loc::MemRegionVal>();
-    if (ValueRegionSVal) {
-      const MemRegion *SelfRegion = ValueRegionSVal->getRegion();
-      assert(SelfRegion);
-
-      const NullabilityState *TrackedSelfNullability =
-          State->get<NullabilityMap>(SelfRegion);
-      if (TrackedSelfNullability) {
-        RetNullability = TrackedSelfNullability->getValue();
-      }
-    }
-    if (auto DefOrUnknown = Receiver.getAs<DefinedOrUnknownSVal>()) {
-      // If the receiver is constrained to be nonnull, assume that it is nonnull
-      // regardless of its type.
-      NullConstraint Nullness = getNullConstraint(*DefOrUnknown, State);
-      if (Nullness == NullConstraint::IsNotNull)
-        RetNullability = Nullability::Nonnull;
-    }
+    return Nullability::Nonnull;
   }
-  return RetNullability;
+  // Otherwise look up nullability in the state.
+  SVal Receiver = M.getReceiverSVal();
+  if (auto DefOrUnknown = Receiver.getAs<DefinedOrUnknownSVal>()) {
+    // If the receiver is constrained to be nonnull, assume that it is nonnull
+    // regardless of its type.
+    NullConstraint Nullness = getNullConstraint(*DefOrUnknown, State);
+    if (Nullness == NullConstraint::IsNotNull)
+      return Nullability::Nonnull;
+  }
+  auto ValueRegionSVal = Receiver.getAs<loc::MemRegionVal>();
+  if (ValueRegionSVal) {
+    const MemRegion *SelfRegion = ValueRegionSVal->getRegion();
+    assert(SelfRegion);
+
+    const NullabilityState *TrackedSelfNullability =
+        State->get<NullabilityMap>(SelfRegion);
+    if (TrackedSelfNullability)
+      return TrackedSelfNullability->getValue();
+  }
+  return Nullability::Unspecified;
 }
 
 /// Calculate the nullability of the result of a message expr based on the
@@ -576,11 +701,14 @@ void NullabilityChecker::checkPostObjCMessage(const ObjCMethodCall &M,
   if (!RetType->isAnyPointerType())
     return;
 
+  ProgramStateRef State = C.getState();
+  if (State->get<PreconditionViolated>())
+    return;
+
   const MemRegion *ReturnRegion = getTrackRegion(M.getReturnValue());
   if (!ReturnRegion)
     return;
 
-  ProgramStateRef State = C.getState();
   auto Interface = Decl->getClassInterface();
   auto Name = Interface ? Interface->getName() : "";
   // In order to reduce the noise in the diagnostics generated by this checker,
@@ -688,6 +816,10 @@ void NullabilityChecker::checkPostStmt(const ExplicitCastExpr *CE,
   if (!DestType->isAnyPointerType())
     return;
 
+  ProgramStateRef State = C.getState();
+  if (State->get<PreconditionViolated>())
+    return;
+
   Nullability DestNullability = getNullabilityAnnotation(DestType);
 
   // No explicit nullability in the destination type, so this cast does not
@@ -695,7 +827,6 @@ void NullabilityChecker::checkPostStmt(const ExplicitCastExpr *CE,
   if (DestNullability == Nullability::Unspecified)
     return;
 
-  ProgramStateRef State = C.getState();
   auto RegionSVal =
       State->getSVal(CE, C.getLocationContext()).getAs<DefinedOrUnknownSVal>();
   const MemRegion *Region = getTrackRegion(*RegionSVal);
@@ -744,11 +875,14 @@ void NullabilityChecker::checkBind(SVal L, SVal V, const Stmt *S,
   if (!LocType->isAnyPointerType())
     return;
 
+  ProgramStateRef State = C.getState();
+  if (State->get<PreconditionViolated>())
+    return;
+
   auto ValDefOrUnknown = V.getAs<DefinedOrUnknownSVal>();
   if (!ValDefOrUnknown)
     return;
 
-  ProgramStateRef State = C.getState();
   NullConstraint RhsNullness = getNullConstraint(*ValDefOrUnknown, State);
 
   Nullability ValNullability = Nullability::Unspecified;
@@ -761,9 +895,11 @@ void NullabilityChecker::checkBind(SVal L, SVal V, const Stmt *S,
       ValNullability != Nullability::Nonnull &&
       LocNullability == Nullability::Nonnull) {
     static CheckerProgramPointTag Tag(this, "NullPassedToNonnull");
-    ExplodedNode *N = C.addTransition(State, C.getPredecessor(), &Tag);
-    reportBug(ErrorKind::NilAssignedToNonnull, N, nullptr, C.getBugReporter(),
-              S);
+    ExplodedNode *N = C.generateErrorNode(State, &Tag);
+    if (!N)
+      return;
+    reportBugIfPreconditionHolds(ErrorKind::NilAssignedToNonnull, N, nullptr, C,
+                                 S);
     return;
   }
   // Intentionally missing case: '0' is bound to a reference. It is handled by
@@ -784,8 +920,8 @@ void NullabilityChecker::checkBind(SVal L, SVal V, const Stmt *S,
         LocNullability == Nullability::Nonnull) {
       static CheckerProgramPointTag Tag(this, "NullablePassedToNonnull");
       ExplodedNode *N = C.addTransition(State, C.getPredecessor(), &Tag);
-      reportBug(ErrorKind::NullableAssignedToNonnull, N, ValueRegion,
-                C.getBugReporter());
+      reportBugIfPreconditionHolds(ErrorKind::NullableAssignedToNonnull, N,
+                                   ValueRegion, C);
     }
     return;
   }
@@ -827,15 +963,21 @@ void NullabilityChecker::printState(raw_ostream &Out, ProgramStateRef State,
   }
 }
 
-#define REGISTER_CHECKER(name)                                                 \
+#define REGISTER_CHECKER(name, trackingRequired)                               \
   void ento::register##name##Checker(CheckerManager &mgr) {                    \
     NullabilityChecker *checker = mgr.registerChecker<NullabilityChecker>();   \
     checker->Filter.Check##name = true;                                        \
     checker->Filter.CheckName##name = mgr.getCurrentCheckName();               \
+    checker->NeedTracking = checker->NeedTracking || trackingRequired;         \
   }
 
-REGISTER_CHECKER(NullPassedToNonnull)
-REGISTER_CHECKER(NullReturnedFromNonnull)
-REGISTER_CHECKER(NullableDereferenced)
-REGISTER_CHECKER(NullablePassedToNonnull)
-REGISTER_CHECKER(NullableReturnedFromNonnull)
+// The checks are likely to be turned on by default and it is possible to do
+// them without tracking any nullability related information. As an optimization
+// no nullability information will be tracked when only these two checks are
+// enables.
+REGISTER_CHECKER(NullPassedToNonnull, false)
+REGISTER_CHECKER(NullReturnedFromNonnull, false)
+
+REGISTER_CHECKER(NullableDereferenced, true)
+REGISTER_CHECKER(NullablePassedToNonnull, true)
+REGISTER_CHECKER(NullableReturnedFromNonnull, true)
