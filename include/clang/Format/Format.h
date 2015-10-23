@@ -48,8 +48,8 @@ struct FormatStyle {
   /// This applies to round brackets (parentheses), angle brackets and square
   /// brackets. This will result in formattings like
   /// \code
-  /// someLongFunction(argument1,
-  ///                  argument2);
+  ///   someLongFunction(argument1,
+  ///                    argument2);
   /// \endcode
   bool AlignAfterOpenBracket;
 
@@ -58,11 +58,22 @@ struct FormatStyle {
   /// This will align the assignment operators of consecutive lines. This
   /// will result in formattings like
   /// \code
-  /// int aaaa = 12;
-  /// int b    = 23;
-  /// int ccc  = 23;
+  ///   int aaaa = 12;
+  ///   int b    = 23;
+  ///   int ccc  = 23;
   /// \endcode
   bool AlignConsecutiveAssignments;
+
+  /// \brief If \c true, aligns consecutive declarations.
+  ///
+  /// This will align the declaration names of consecutive lines. This
+  /// will result in formattings like
+  /// \code
+  ///   int         aaaa = 12;
+  ///   float       b = 23;
+  ///   std::string ccc = 23;
+  /// \endcode
+  bool AlignConsecutiveDeclarations;
 
   /// \brief If \c true, aligns escaped newlines as far left as possible.
   /// Otherwise puts them into the right-most column.
@@ -225,6 +236,9 @@ struct FormatStyle {
   /// the commas with the colon.
   bool BreakConstructorInitializersBeforeComma;
 
+  /// \brief Break after each annotation on a field in Java files.
+  bool BreakAfterJavaFieldAnnotations;
+
   /// \brief The column limit.
   ///
   /// A column limit of \c 0 means that there is no column limit. In this case,
@@ -286,12 +300,28 @@ struct FormatStyle {
   ///
   /// These are expected to be macros of the form:
   /// \code
-  /// FOREACH(<variable-declaration>, ...)
-  ///   <loop-body>
+  ///   FOREACH(<variable-declaration>, ...)
+  ///     <loop-body>
+  /// \endcode
+  ///
+  /// In the .clang-format configuration file, this can be configured like:
+  /// \code
+  ///   ForEachMacros: ['RANGES_FOR', 'FOREACH']
   /// \endcode
   ///
   /// For example: BOOST_FOREACH.
   std::vector<std::string> ForEachMacros;
+
+  /// \brief See documentation of \c IncludeCategories.
+  struct IncludeCategory {
+    /// \brief The regular expression that this category matches.
+    std::string Regex;
+    /// \brief The priority to assign to this category.
+    unsigned Priority;
+    bool operator==(const IncludeCategory &Other) const {
+      return Regex == Other.Regex && Priority == Other.Priority;
+    }
+  };
 
   /// \brief Regular expressions denoting the different #include categories used
   /// for ordering #includes.
@@ -306,7 +336,18 @@ struct FormatStyle {
   /// category. The main header for a source file automatically gets category 0,
   /// so that it is kept at the beginning of the #includes
   /// (http://llvm.org/docs/CodingStandards.html#include-style).
-  std::vector<std::pair<std::string, unsigned>> IncludeCategories;
+  ///
+  /// To configure this in the .clang-format file, use:
+  /// \code
+  ///   IncludeCategories:
+  ///     - Regex:           '^"(llvm|llvm-c|clang|clang-c)/'
+  ///       Priority:        2
+  ///     - Regex:           '^(<|"(gtest|isl|json)/)'
+  ///       Priority:        3
+  ///     - Regex:           '.*'
+  ///       Priority:        1
+  /// \endcode
+  std::vector<IncludeCategory> IncludeCategories;
 
   /// \brief Indent case labels one level from the switch statement.
   ///
@@ -495,6 +536,7 @@ struct FormatStyle {
     return AccessModifierOffset == R.AccessModifierOffset &&
            AlignAfterOpenBracket == R.AlignAfterOpenBracket &&
            AlignConsecutiveAssignments == R.AlignConsecutiveAssignments &&
+           AlignConsecutiveDeclarations == R.AlignConsecutiveDeclarations &&
            AlignEscapedNewlinesLeft == R.AlignEscapedNewlinesLeft &&
            AlignOperands == R.AlignOperands &&
            AlignTrailingComments == R.AlignTrailingComments &&
@@ -521,8 +563,8 @@ struct FormatStyle {
            BreakBeforeTernaryOperators == R.BreakBeforeTernaryOperators &&
            BreakConstructorInitializersBeforeComma ==
                R.BreakConstructorInitializersBeforeComma &&
-           ColumnLimit == R.ColumnLimit &&
-           CommentPragmas == R.CommentPragmas &&
+           BreakAfterJavaFieldAnnotations == R.BreakAfterJavaFieldAnnotations &&
+           ColumnLimit == R.ColumnLimit && CommentPragmas == R.CommentPragmas &&
            ConstructorInitializerAllOnOneLineOrOnePerLine ==
                R.ConstructorInitializerAllOnOneLineOrOnePerLine &&
            ConstructorInitializerIndentWidth ==
@@ -534,6 +576,7 @@ struct FormatStyle {
            ExperimentalAutoDetectBinPacking ==
                R.ExperimentalAutoDetectBinPacking &&
            ForEachMacros == R.ForEachMacros &&
+           IncludeCategories == R.IncludeCategories &&
            IndentCaseLabels == R.IndentCaseLabels &&
            IndentWidth == R.IndentWidth && Language == R.Language &&
            IndentWrappedFunctionNames == R.IndentWrappedFunctionNames &&
@@ -564,8 +607,7 @@ struct FormatStyle {
            SpacesInCStyleCastParentheses == R.SpacesInCStyleCastParentheses &&
            SpacesInParentheses == R.SpacesInParentheses &&
            SpacesInSquareBrackets == R.SpacesInSquareBrackets &&
-           Standard == R.Standard &&
-           TabWidth == R.TabWidth &&
+           Standard == R.Standard && TabWidth == R.TabWidth &&
            UseTab == R.UseTab;
   }
 };

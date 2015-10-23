@@ -108,17 +108,14 @@ struct OrderGlobalInits {
   }
 };
 
-struct RREntrypoints {
-  RREntrypoints() { memset(this, 0, sizeof(*this)); }
-  /// void objc_autoreleasePoolPop(void*);
+struct ObjCEntrypoints {
+  ObjCEntrypoints() { memset(this, 0, sizeof(*this)); }
+
+    /// void objc_autoreleasePoolPop(void*);
   llvm::Constant *objc_autoreleasePoolPop;
 
   /// void *objc_autoreleasePoolPush(void);
   llvm::Constant *objc_autoreleasePoolPush;
-};
-
-struct ARCEntrypoints {
-  ARCEntrypoints() { memset(this, 0, sizeof(*this)); }
 
   /// id objc_autorelease(id);
   llvm::Constant *objc_autorelease;
@@ -288,9 +285,8 @@ private:
   CGOpenMPRuntime* OpenMPRuntime;
   CGCUDARuntime* CUDARuntime;
   CGDebugInfo* DebugInfo;
-  ARCEntrypoints *ARCData;
+  ObjCEntrypoints *ObjCData;
   llvm::MDNode *NoObjCARCExceptionsMetadata;
-  RREntrypoints *RRData;
   std::unique_ptr<llvm::IndexedInstrProfReader> PGOReader;
   InstrProfStats PGOStats;
 
@@ -530,14 +526,9 @@ public:
     return *CUDARuntime;
   }
 
-  ARCEntrypoints &getARCEntrypoints() const {
-    assert(getLangOpts().ObjCAutoRefCount && ARCData != nullptr);
-    return *ARCData;
-  }
-
-  RREntrypoints &getRREntrypoints() const {
-    assert(RRData != nullptr);
-    return *RRData;
+  ObjCEntrypoints &getObjCEntrypoints() const {
+    assert(ObjCData != nullptr);
+    return *ObjCData;
   }
 
   InstrProfStats &getPGOStats() { return PGOStats; }
@@ -643,8 +634,6 @@ public:
   llvm::MDNode *getTBAAInfo(QualType QTy);
   llvm::MDNode *getTBAAInfoForVTablePtr();
   llvm::MDNode *getTBAAStructInfo(QualType QTy);
-  /// Return the MDNode in the type DAG for the given struct type.
-  llvm::MDNode *getTBAAStructTypeInfo(QualType QTy);
   /// Return the path-aware tag for given base type, access node and offset.
   llvm::MDNode *getTBAAStructTagInfo(QualType BaseTy, llvm::MDNode *AccessN,
                                      uint64_t O);
@@ -923,6 +912,11 @@ public:
                                              QualType DestType,
                                              CodeGenFunction *CGF = nullptr);
 
+  /// \brief Emit type info if type of an expression is a variably modified
+  /// type. Also emit proper debug info for cast types.
+  void EmitExplicitCastExprType(const ExplicitCastExpr *E,
+                                CodeGenFunction *CGF = nullptr);
+
   /// Return the result of value-initializing the given type, i.e. a null
   /// expression of the given type.  This is usually, but not always, an LLVM
   /// null constant.
@@ -990,9 +984,6 @@ public:
   void EmitTentativeDefinition(const VarDecl *D);
 
   void EmitVTable(CXXRecordDecl *Class);
-
-  /// Emit the RTTI descriptors for the builtin types.
-  void EmitFundamentalRTTIDescriptors();
 
   /// \brief Appends Opts to the "Linker Options" metadata value.
   void AppendLinkerOptions(StringRef Opts);
@@ -1072,13 +1063,6 @@ public:
   /// Emit code for a singal global function or var decl. Forward declarations
   /// are emitted lazily.
   void EmitGlobal(GlobalDecl D);
-
-  bool
-  HasTrivialDestructorBody(ASTContext &Context,
-                           const CXXRecordDecl *BaseClassDecl,
-                           const CXXRecordDecl *MostDerivedClassDecl);
-  bool
-  FieldHasTrivialDestructorBody(ASTContext &Context, const FieldDecl *Field);
 
   bool TryEmitDefinitionAsAlias(GlobalDecl Alias, GlobalDecl Target,
                                 bool InEveryTU);
@@ -1191,9 +1175,6 @@ private:
   /// and name. This array will have appending linkage and is suitable for use
   /// as a LLVM constructor or destructor array.
   void EmitCtorList(const CtorList &Fns, const char *GlobalName);
-
-  /// Emit the RTTI descriptors for the given type.
-  void EmitFundamentalRTTIDescriptor(QualType Type);
 
   /// Emit any needed decls for which code generation was deferred.
   void EmitDeferred();

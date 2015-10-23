@@ -23,7 +23,9 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/TargetRegistry.h"
+
 using namespace clang::driver;
+using namespace clang::driver::tools;
 using namespace clang;
 using namespace llvm::opt;
 
@@ -73,9 +75,7 @@ ToolChain::ToolChain(const Driver &D, const llvm::Triple &T,
 ToolChain::~ToolChain() {
 }
 
-const Driver &ToolChain::getDriver() const {
- return D;
-}
+vfs::FileSystem &ToolChain::getVFS() const { return getDriver().getVFS(); }
 
 bool ToolChain::useIntegratedAs() const {
   return Args.hasFlag(options::OPT_fintegrated_as,
@@ -265,9 +265,64 @@ Tool *ToolChain::getTool(Action::ActionClass AC) const {
   llvm_unreachable("Invalid tool kind.");
 }
 
+static StringRef getArchNameForCompilerRTLib(const ToolChain &TC,
+                                             const ArgList &Args) {
+  const llvm::Triple &Triple = TC.getTriple();
+  bool IsWindows = Triple.isOSWindows();
+
+  if (Triple.isWindowsMSVCEnvironment() && TC.getArch() == llvm::Triple::x86)
+    return "i386";
+
+  if (TC.getArch() == llvm::Triple::arm || TC.getArch() == llvm::Triple::armeb)
+    return (arm::getARMFloatABI(TC, Args) == arm::FloatABI::Hard && !IsWindows)
+               ? "armhf"
+               : "arm";
+
+  return TC.getArchName();
+}
+
+std::string ToolChain::getCompilerRT(const ArgList &Args, StringRef Component,
+                                     bool Shared) const {
+  const llvm::Triple &TT = getTriple();
+  const char *Env = TT.isAndroid() ? "-android" : "";
+  bool IsITANMSVCWindows =
+      TT.isWindowsMSVCEnvironment() || TT.isWindowsItaniumEnvironment();
+
+  StringRef Arch = getArchNameForCompilerRTLib(*this, Args);
+  const char *Prefix = IsITANMSVCWindows ? "" : "lib";
+  const char *Suffix = Shared ? (Triple.isOSWindows() ? ".dll" : ".so")
+                              : (IsITANMSVCWindows ? ".lib" : ".a");
+
+  SmallString<128> Path(getDriver().ResourceDir);
+  StringRef OSLibName = Triple.isOSFreeBSD() ? "freebsd" : getOS();
+  llvm::sys::path::append(Path, "lib", OSLibName);
+  llvm::sys::path::append(Path, Prefix + Twine("clang_rt.") + Component + "-" +
+                                    Arch + Env + Suffix);
+  return Path.str();
+}
+
+const char *ToolChain::getCompilerRTArgString(const llvm::opt::ArgList &Args,
+                                              StringRef Component,
+                                              bool Shared) const {
+  return Args.MakeArgString(getCompilerRT(Args, Component, Shared));
+}
+
+bool ToolChain::needsProfileRT(const ArgList &Args) {
+  if (Args.hasFlag(options::OPT_fprofile_arcs, options::OPT_fno_profile_arcs,
+                   false) ||
+      Args.hasArg(options::OPT_fprofile_generate) ||
+      Args.hasArg(options::OPT_fprofile_generate_EQ) ||
+      Args.hasArg(options::OPT_fprofile_instr_generate) ||
+      Args.hasArg(options::OPT_fprofile_instr_generate_EQ) ||
+      Args.hasArg(options::OPT_fcreate_profile) ||
+      Args.hasArg(options::OPT_coverage))
+    return true;
+
+  return false;
+}
+
 Tool *ToolChain::SelectTool(const JobAction &JA) const {
-  if (getDriver().ShouldUseClangCompiler(JA))
-    return getClang();
+  if (getDriver().ShouldUseClangCompiler(JA)) return getClang();
   Action::ActionClass AC = JA.getKind();
   if (AC == Action::AssembleJobClass && useIntegratedAs())
     return getClangAs();
@@ -305,7 +360,6 @@ std::string ToolChain::GetLinkerPath() const {
 
   return GetProgramPath("ld");
 }
-
 
 types::ID ToolChain::LookupTypeForExtension(const char *Ext) const {
   return types::lookupTypeForExtension(Ext);
@@ -456,9 +510,16 @@ void ToolChain::addClangTargetOptions(const ArgList &DriverArgs,
 
 void ToolChain::addClangWarningOptions(ArgStringList &CC1Args) const {}
 
+void ToolChain::addProfileRTLibs(const llvm::opt::ArgList &Args,
+                                 llvm::opt::ArgStringList &CmdArgs) const {
+  if (!needsProfileRT(Args)) return;
+
+  CmdArgs.push_back(getCompilerRTArgString(Args, "profile"));
+  return;
+}
+
 ToolChain::RuntimeLibType ToolChain::GetRuntimeLibType(
-  const ArgList &Args) const
-{
+    const ArgList &Args) const {
   if (Arg *A = Args.getLastArg(options::OPT_rtlib_EQ)) {
     StringRef Value = A->getValue();
     if (Value == "compiler-rt")

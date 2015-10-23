@@ -30,7 +30,10 @@ namespace opt {
 }
 
 namespace clang {
-  class ObjCRuntime;
+class ObjCRuntime;
+namespace vfs {
+class FileSystem;
+}
 
 namespace driver {
   class Compilation;
@@ -119,7 +122,8 @@ public:
 
   // Accessors
 
-  const Driver &getDriver() const;
+  const Driver &getDriver() const { return D; }
+  vfs::FileSystem &getVFS() const;
   const llvm::Triple &getTriple() const { return Triple; }
 
   llvm::Triple::ArchType getArch() const { return Triple.getArch(); }
@@ -250,6 +254,16 @@ public:
     return ToolChain::RLT_Libgcc;
   }
 
+  virtual std::string getCompilerRT(const llvm::opt::ArgList &Args,
+                                    StringRef Component,
+                                    bool Shared = false) const;
+
+  const char *getCompilerRTArgString(const llvm::opt::ArgList &Args,
+                                     StringRef Component,
+                                     bool Shared = false) const;
+  /// needsProfileRT - returns true if instrumentation profile is on.
+  static bool needsProfileRT(const llvm::opt::ArgList &Args);
+
   /// IsUnwindTablesDefault - Does this tool chain use -funwind-tables
   /// by default.
   virtual bool IsUnwindTablesDefault() const;
@@ -278,6 +292,16 @@ public:
   /// UseDwarfDebugFlags - Embed the compile options to clang into the Dwarf
   /// compile unit information.
   virtual bool UseDwarfDebugFlags() const { return false; }
+
+  // Return the DWARF version to emit, in the absence of arguments
+  // to the contrary.
+  virtual unsigned GetDefaultDwarfVersion() const { return 4; }
+
+  // True if the driver should assume "-fstandalone-debug"
+  // in the absence of an option specifying otherwise,
+  // provided that debugging was requested in the first place.
+  // i.e. a value of 'true' does not imply that debugging is wanted.
+  virtual bool GetDefaultStandaloneDebug() const { return false; }
 
   /// UseSjLjExceptions - Does this tool chain use SjLj exceptions.
   virtual bool UseSjLjExceptions() const { return false; }
@@ -360,8 +384,11 @@ public:
   /// global flags for unsafe floating point math, add it and return true.
   ///
   /// This checks for presence of the -Ofast, -ffast-math or -funsafe-math flags.
-  virtual bool
-  AddFastMathRuntimeIfAvailable(const llvm::opt::ArgList &Args,
+  virtual bool AddFastMathRuntimeIfAvailable(
+      const llvm::opt::ArgList &Args, llvm::opt::ArgStringList &CmdArgs) const;
+  /// addProfileRTLibs - When -fprofile-instr-profile is specified, add profile
+  /// runtime library, otherwise return false.
+  virtual void addProfileRTLibs(const llvm::opt::ArgList &Args,
                                 llvm::opt::ArgStringList &CmdArgs) const;
 
   /// \brief Return sanitizers which are available in this toolchain.

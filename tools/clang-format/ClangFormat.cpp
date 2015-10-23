@@ -109,11 +109,11 @@ namespace clang {
 namespace format {
 
 static FileID createInMemoryFile(StringRef FileName, MemoryBuffer *Source,
-                                 SourceManager &Sources, FileManager &Files) {
-  const FileEntry *Entry = Files.getVirtualFile(FileName,
-                                                Source->getBufferSize(), 0);
-  Sources.overrideFileContents(Entry, Source, true);
-  return Sources.createFileID(Entry, SourceLocation(), SrcMgr::C_User);
+                                 SourceManager &Sources, FileManager &Files,
+                                 vfs::InMemoryFileSystem *MemFS) {
+  MemFS->addFileNoOwn(FileName, 0, Source);
+  return Sources.createFileID(Files.getFile(FileName), SourceLocation(),
+                              SrcMgr::C_User);
 }
 
 // Parses <start line>:<end line> input to a pair of line numbers.
@@ -127,12 +127,15 @@ static bool parseLineRange(StringRef Input, unsigned &FromLine,
 
 static bool fillRanges(MemoryBuffer *Code,
                        std::vector<tooling::Range> &Ranges) {
-  FileManager Files((FileSystemOptions()));
+  IntrusiveRefCntPtr<vfs::InMemoryFileSystem> InMemoryFileSystem(
+      new vfs::InMemoryFileSystem);
+  FileManager Files(FileSystemOptions(), InMemoryFileSystem);
   DiagnosticsEngine Diagnostics(
       IntrusiveRefCntPtr<DiagnosticIDs>(new DiagnosticIDs),
       new DiagnosticOptions);
   SourceManager Sources(Diagnostics, Files);
-  FileID ID = createInMemoryFile("<irrelevant>", Code, Sources, Files);
+  FileID ID = createInMemoryFile("<irrelevant>", Code, Sources, Files,
+                                 InMemoryFileSystem.get());
   if (!LineRanges.empty()) {
     if (!Offsets.empty() || !Lengths.empty()) {
       llvm::errs() << "error: cannot use -lines with -offset/-length\n";
@@ -196,9 +199,11 @@ static bool fillRanges(MemoryBuffer *Code,
 }
 
 static void outputReplacementXML(StringRef Text) {
+  // FIXME: When we sort includes, we need to make sure the stream is correct
+  // utf-8.
   size_t From = 0;
   size_t Index;
-  while ((Index = Text.find_first_of("\n\r", From)) != StringRef::npos) {
+  while ((Index = Text.find_first_of("\n\r<&", From)) != StringRef::npos) {
     llvm::outs() << Text.substr(From, Index - From);
     switch (Text[Index]) {
     case '\n':
@@ -206,6 +211,12 @@ static void outputReplacementXML(StringRef Text) {
       break;
     case '\r':
       llvm::outs() << "&#13;";
+      break;
+    case '<':
+      llvm::outs() << "&lt;";
+      break;
+    case '&':
+      llvm::outs() << "&amp;";
       break;
     default:
       llvm_unreachable("Unexpected character encountered!");
@@ -269,12 +280,15 @@ static bool format(StringRef FileName) {
     outputReplacementsXML(Replaces); 
     llvm::outs() << "</replacements>\n";
   } else {
-    FileManager Files((FileSystemOptions()));
+    IntrusiveRefCntPtr<vfs::InMemoryFileSystem> InMemoryFileSystem(
+        new vfs::InMemoryFileSystem);
+    FileManager Files(FileSystemOptions(), InMemoryFileSystem);
     DiagnosticsEngine Diagnostics(
         IntrusiveRefCntPtr<DiagnosticIDs>(new DiagnosticIDs),
         new DiagnosticOptions);
     SourceManager Sources(Diagnostics, Files);
-    FileID ID = createInMemoryFile(AssumedFileName, Code.get(), Sources, Files);
+    FileID ID = createInMemoryFile(AssumedFileName, Code.get(), Sources, Files,
+                                   InMemoryFileSystem.get());
     Rewriter Rewrite(Sources, LangOptions());
     tooling::applyAllReplacements(Replaces, Rewrite);
     if (Inplace) {
@@ -310,7 +324,7 @@ int main(int argc, const char **argv) {
   cl::SetVersionPrinter(PrintVersion);
   cl::ParseCommandLineOptions(
       argc, argv,
-      "A tool to format C/C++/Obj-C code.\n\n"
+      "A tool to format C/C++/Java/JavaScript/Objective-C/Protobuf code.\n\n"
       "If no arguments are specified, it formats the code from standard input\n"
       "and writes the result to the standard output.\n"
       "If <file>s are given, it reformats the files. If -i is specified\n"

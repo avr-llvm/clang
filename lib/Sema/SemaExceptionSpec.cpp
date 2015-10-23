@@ -68,7 +68,7 @@ bool Sema::isLibstdcxxEagerExceptionSpecHack(const Declarator &D) {
 ///
 /// \param[in,out] T  The exception type. This will be decayed to a pointer type
 ///                   when the input is an array or a function type.
-bool Sema::CheckSpecifiedExceptionType(QualType &T, const SourceRange &Range) {
+bool Sema::CheckSpecifiedExceptionType(QualType &T, SourceRange Range) {
   // C++11 [except.spec]p2:
   //   A type cv T, "array of T", or "function returning T" denoted
   //   in an exception-specification is adjusted to type T, "pointer to T", or
@@ -232,7 +232,7 @@ bool Sema::CheckEquivalentExceptionSpec(FunctionDecl *Old, FunctionDecl *New) {
         hasImplicitExceptionSpec(Old) != hasImplicitExceptionSpec(New)) {
       Diag(New->getLocation(), diag::ext_implicit_exception_spec_mismatch)
         << hasImplicitExceptionSpec(Old);
-      if (!Old->getLocation().isInvalid())
+      if (Old->getLocation().isValid())
         Diag(Old->getLocation(), diag::note_previous_declaration);
     }
     return false;
@@ -285,10 +285,14 @@ bool Sema::CheckEquivalentExceptionSpec(FunctionDecl *Old, FunctionDecl *New) {
         NewProto->getExtProtoInfo().withExceptionSpec(ESI)));
   }
 
-  // Allow missing exception specifications in redeclarations as an extension,
-  // when declaring a replaceable global allocation function.
-  if (New->isReplaceableGlobalAllocationFunction() &&
-      ESI.Type != EST_ComputedNoexcept) {
+  if (getLangOpts().MicrosoftExt && ESI.Type != EST_ComputedNoexcept) {
+    // Allow missing exception specifications in redeclarations as an extension.
+    DiagID = diag::ext_ms_missing_exception_specification;
+    ReturnValueOnError = false;
+  } else if (New->isReplaceableGlobalAllocationFunction() &&
+             ESI.Type != EST_ComputedNoexcept) {
+    // Allow missing exception specifications in redeclarations as an extension,
+    // when declaring a replaceable global allocation function.
     DiagID = diag::ext_missing_exception_specification;
     ReturnValueOnError = false;
   } else {
@@ -353,7 +357,7 @@ bool Sema::CheckEquivalentExceptionSpec(FunctionDecl *Old, FunctionDecl *New) {
       << FixItHint::CreateInsertion(FixItLoc, " " + OS.str().str());
   }
 
-  if (!Old->getLocation().isInvalid())
+  if (Old->getLocation().isValid())
     Diag(Old->getLocation(), diag::note_previous_declaration);
 
   return ReturnValueOnError;

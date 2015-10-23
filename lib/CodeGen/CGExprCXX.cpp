@@ -1526,9 +1526,8 @@ static void EmitObjectDelete(CodeGenFunction &CGF,
                               /*ForVirtualBase=*/false,
                               /*Delegating=*/false,
                               Ptr);
-  else if (CGF.getLangOpts().ObjCAutoRefCount &&
-           ElementType->isObjCLifetimeType()) {
-    switch (ElementType.getObjCLifetime()) {
+  else if (auto Lifetime = ElementType.getObjCLifetime()) {
+    switch (Lifetime) {
     case Qualifiers::OCL_None:
     case Qualifiers::OCL_ExplicitNone:
     case Qualifiers::OCL_Autoreleasing:
@@ -1806,6 +1805,7 @@ static llvm::Value *EmitDynamicCastToNull(CodeGenFunction &CGF,
 
 llvm::Value *CodeGenFunction::EmitDynamicCast(Address ThisAddr,
                                               const CXXDynamicCastExpr *DCE) {
+  CGM.EmitExplicitCastExprType(DCE, this);
   QualType DestTy = DCE->getTypeAsWritten();
 
   if (DCE->isAlwaysNull())

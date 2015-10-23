@@ -1278,7 +1278,7 @@ public:
                                                 const FunctionProtoType *FPT);
   void UpdateExceptionSpec(FunctionDecl *FD,
                            const FunctionProtoType::ExceptionSpecInfo &ESI);
-  bool CheckSpecifiedExceptionType(QualType &T, const SourceRange &Range);
+  bool CheckSpecifiedExceptionType(QualType &T, SourceRange Range);
   bool CheckDistantExceptionSpec(QualType T);
   bool CheckEquivalentExceptionSpec(FunctionDecl *Old, FunctionDecl *New);
   bool CheckEquivalentExceptionSpec(
@@ -1984,7 +1984,9 @@ public:
                                       Expr *val);
   bool CheckEnumUnderlyingType(TypeSourceInfo *TI);
   bool CheckEnumRedeclaration(SourceLocation EnumLoc, bool IsScoped,
-                              QualType EnumUnderlyingTy, const EnumDecl *Prev);
+                              QualType EnumUnderlyingTy,
+                              bool EnumUnderlyingIsImplicit,
+                              const EnumDecl *Prev);
 
   /// Determine whether the body of an anonymous enumeration should be skipped.
   /// \param II The name of the first enumerator.
@@ -2438,11 +2440,13 @@ public:
                                             bool PartialOverloading = false);
 
   // Emit as a 'note' the specific overload candidate
-  void NoteOverloadCandidate(FunctionDecl *Fn, QualType DestType = QualType());
+  void NoteOverloadCandidate(FunctionDecl *Fn, QualType DestType = QualType(),
+                             bool TakingAddress = false);
 
-  // Emit as a series of 'note's all template and non-templates
-  // identified by the expression Expr
-  void NoteAllOverloadCandidates(Expr* E, QualType DestType = QualType());
+  // Emit as a series of 'note's all template and non-templates identified by
+  // the expression Expr
+  void NoteAllOverloadCandidates(Expr *E, QualType DestType = QualType(),
+                                 bool TakingAddress = false);
 
   /// Check the enable_if expressions on the given function. Returns the first
   /// failing attribute, or NULL if they were all successful.
@@ -2473,7 +2477,7 @@ public:
                       ExprResult &SrcExpr,
                       bool DoFunctionPointerConverion = false,
                       bool Complain = false,
-                      const SourceRange& OpRangeForComplaining = SourceRange(),
+                      SourceRange OpRangeForComplaining = SourceRange(),
                       QualType DestTypeForComplaining = QualType(),
                       unsigned DiagIDForComplaining = 0);
 
@@ -3330,11 +3334,14 @@ public:
     BFRK_Check
   };
 
-  StmtResult ActOnCXXForRangeStmt(SourceLocation ForLoc, Stmt *LoopVar,
+  StmtResult ActOnCXXForRangeStmt(SourceLocation ForLoc,
+                                  SourceLocation CoawaitLoc,
+                                  Stmt *LoopVar,
                                   SourceLocation ColonLoc, Expr *Collection,
                                   SourceLocation RParenLoc,
                                   BuildForRangeKind Kind);
   StmtResult BuildCXXForRangeStmt(SourceLocation ForLoc,
+                                  SourceLocation CoawaitLoc,
                                   SourceLocation ColonLoc,
                                   Stmt *RangeDecl, Stmt *BeginEndDecl,
                                   Expr *Cond, Expr *Inc,
@@ -3783,7 +3790,7 @@ public:
     ActOnUnaryExprOrTypeTraitExpr(SourceLocation OpLoc,
                                   UnaryExprOrTypeTrait ExprKind,
                                   bool IsType, void *TyOrEx,
-                                  const SourceRange &ArgRange);
+                                  SourceRange ArgRange);
 
   ExprResult CheckPlaceholderExpr(Expr *E);
   bool CheckVecStepExpr(Expr *E);
@@ -3962,15 +3969,13 @@ public:
   /// __builtin_offsetof(type, a.b[123][456].c)
   ExprResult BuildBuiltinOffsetOf(SourceLocation BuiltinLoc,
                                   TypeSourceInfo *TInfo,
-                                  OffsetOfComponent *CompPtr,
-                                  unsigned NumComponents,
+                                  ArrayRef<OffsetOfComponent> Components,
                                   SourceLocation RParenLoc);
   ExprResult ActOnBuiltinOffsetOf(Scope *S,
                                   SourceLocation BuiltinLoc,
                                   SourceLocation TypeLoc,
                                   ParsedType ParsedArgTy,
-                                  OffsetOfComponent *CompPtr,
-                                  unsigned NumComponents,
+                                  ArrayRef<OffsetOfComponent> Components,
                                   SourceLocation RParenLoc);
 
   // __builtin_choose_expr(constExpr, expr1, expr2)
@@ -6613,12 +6618,6 @@ public:
 
   friend class ArgumentPackSubstitutionRAII;
 
-  /// \brief The stack of calls expression undergoing template instantiation.
-  ///
-  /// The top of this stack is used by a fixit instantiating unresolved
-  /// function calls to fix the AST to match the textual change it prints.
-  SmallVector<CallExpr *, 8> CallsUndergoingInstantiation;
-
   /// \brief For each declaration that involved template argument deduction, the
   /// set of diagnostics that were suppressed during that template argument
   /// deduction.
@@ -7204,13 +7203,11 @@ public:
                    unsigned NumElts);
 
   DeclGroupPtrTy ActOnForwardProtocolDeclaration(SourceLocation AtProtoclLoc,
-                                        const IdentifierLocPair *IdentList,
-                                        unsigned NumElts,
+                                        ArrayRef<IdentifierLocPair> IdentList,
                                         AttributeList *attrList);
 
   void FindProtocolDeclaration(bool WarnOnDeclarations, bool ForObjCContainer,
-                               const IdentifierLocPair *ProtocolId,
-                               unsigned NumProtocols,
+                               ArrayRef<IdentifierLocPair> ProtocolId,
                                SmallVectorImpl<Decl *> &Protocols);
 
   /// Given a list of identifiers (and their locations), resolve the
@@ -7709,7 +7706,18 @@ public:
   void AddLaunchBoundsAttr(SourceRange AttrRange, Decl *D, Expr *MaxThreads,
                            Expr *MinBlocks, unsigned SpellingListIndex);
 
+  //===--------------------------------------------------------------------===//
+  // C++ Coroutines TS
+  //
+  ExprResult ActOnCoawaitExpr(SourceLocation KwLoc, Expr *E);
+  ExprResult ActOnCoyieldExpr(SourceLocation KwLoc, Expr *E);
+  StmtResult ActOnCoreturnStmt(SourceLocation KwLoc, Expr *E);
+
+  void CheckCompletedCoroutineBody(FunctionDecl *FD, Stmt *Body);
+
+  //===--------------------------------------------------------------------===//
   // OpenMP directives and clauses.
+  //
 private:
   void *VarDataSharingAttributesStack;
   /// \brief Initialization of data-sharing attributes stack.
@@ -7727,6 +7735,11 @@ public:
   /// \param Level Relative level of nested OpenMP construct for that the check
   /// is performed.
   bool isOpenMPPrivateVar(VarDecl *VD, unsigned Level);
+
+  /// \brief Check if the specified variable is captured  by 'target' directive.
+  /// \param Level Relative level of nested OpenMP construct for that the check
+  /// is performed.
+  bool isOpenMPTargetCapturedVar(VarDecl *VD, unsigned Level);
 
   ExprResult PerformOpenMPImplicitIntegerConversion(SourceLocation OpLoc,
                                                     Expr *Op);
@@ -8291,19 +8304,23 @@ public:
                                                QualType LHSType,
                                                QualType RHSType);
 
-  /// Check assignment constraints and prepare for a conversion of the
-  /// RHS to the LHS type.
+  /// Check assignment constraints and optionally prepare for a conversion of
+  /// the RHS to the LHS type. The conversion is prepared for if ConvertRHS
+  /// is true.
   AssignConvertType CheckAssignmentConstraints(QualType LHSType,
                                                ExprResult &RHS,
-                                               CastKind &Kind);
+                                               CastKind &Kind,
+                                               bool ConvertRHS = true);
 
   // CheckSingleAssignmentConstraints - Currently used by
   // CheckAssignmentOperands, and ActOnReturnStmt. Prior to type checking,
-  // this routine performs the default function/array converions.
+  // this routine performs the default function/array converions, if ConvertRHS
+  // is true.
   AssignConvertType CheckSingleAssignmentConstraints(QualType LHSType,
                                                      ExprResult &RHS,
                                                      bool Diagnose = true,
-                                                     bool DiagnoseCFAudited = false);
+                                                     bool DiagnoseCFAudited = false,
+                                                     bool ConvertRHS = true);
 
   // \brief If the lhs type is a transparent union, check whether we
   // can initialize the transparent union with the given expression.
