@@ -43,15 +43,34 @@ struct FormatStyle {
   /// \brief The extra indent or outdent of access modifiers, e.g. \c public:.
   int AccessModifierOffset;
 
+  /// \brief Different styles for aligning after open brackets.
+  enum BracketAlignmentStyle {
+    /// \brief Align parameters on the open bracket, e.g.:
+    /// \code
+    ///   someLongFunction(argument1,
+    ///                    argument2);
+    /// \endcode
+    BAS_Align,
+    /// \brief Don't align, instead use \c ContinuationIndentWidth, e.g.:
+    /// \code
+    ///   someLongFunction(argument1,
+    ///       argument2);
+    /// \endcode
+    BAS_DontAlign,
+    /// \brief Always break after an open bracket, if the parameters don't fit
+    /// on a single line, e.g.:
+    /// \code
+    ///   someLongFunction(
+    ///       argument1, argument2);
+    /// \endcode
+    BAS_AlwaysBreak,
+  };
+
   /// \brief If \c true, horizontally aligns arguments after an open bracket.
   ///
   /// This applies to round brackets (parentheses), angle brackets and square
-  /// brackets. This will result in formattings like
-  /// \code
-  ///   someLongFunction(argument1,
-  ///                    argument2);
-  /// \endcode
-  bool AlignAfterOpenBracket;
+  /// brackets.
+  BracketAlignmentStyle AlignAfterOpenBracket;
 
   /// \brief If \c true, aligns consecutive assignments.
   ///
@@ -81,6 +100,13 @@ struct FormatStyle {
 
   /// \brief If \c true, horizontally align operands of binary and ternary
   /// expressions.
+  ///
+  /// Specifically, this aligns operands of a single expression that needs to be
+  /// split over multiple lines, e.g.:
+  /// \code
+  ///   int aaa = bbbbbbbbbbbbbbb +
+  ///             ccccccccccccccc;
+  /// \endcode
   bool AlignOperands;
 
   /// \brief If \c true, aligns trailing comments.
@@ -130,12 +156,32 @@ struct FormatStyle {
     DRTBS_None,
     /// Always break after the return type.
     DRTBS_All,
-    /// Always break after the return types of top level functions.
+    /// Always break after the return types of top-level functions.
     DRTBS_TopLevel,
   };
 
-  /// \brief The function definition return type breaking style to use.
+  /// \brief Different ways to break after the function definition or
+  /// declaration return type.
+  enum ReturnTypeBreakingStyle {
+    /// Break after return type automatically.
+    /// \c PenaltyReturnTypeOnItsOwnLine is taken into account.
+    RTBS_None,
+    /// Always break after the return type.
+    RTBS_All,
+    /// Always break after the return types of top-level functions.
+    RTBS_TopLevel,
+    /// Always break after the return type of function definitions.
+    RTBS_AllDefinitions,
+    /// Always break after the return type of top-level definitions.
+    RTBS_TopLevelDefinitions,
+  };
+
+  /// \brief The function definition return type breaking style to use.  This
+  /// option is deprecated and is retained for backwards compatibility.
   DefinitionReturnTypeBreakingStyle AlwaysBreakAfterDefinitionReturnType;
+
+  /// \brief The function declaration return type breaking style to use.
+  ReturnTypeBreakingStyle AlwaysBreakAfterReturnType;
 
   /// \brief If \c true, always break before multiline string literals.
   ///
@@ -317,7 +363,7 @@ struct FormatStyle {
     /// \brief The regular expression that this category matches.
     std::string Regex;
     /// \brief The priority to assign to this category.
-    unsigned Priority;
+    int Priority;
     bool operator==(const IncludeCategory &Other) const {
       return Regex == Other.Regex && Priority == Other.Priority;
     }
@@ -332,10 +378,12 @@ struct FormatStyle {
   /// according to increasing category number and then alphabetically within
   /// each category.
   ///
-  /// If none of the regular expressions match, UINT_MAX is assigned as
-  /// category. The main header for a source file automatically gets category 0,
-  /// so that it is kept at the beginning of the #includes
-  /// (http://llvm.org/docs/CodingStandards.html#include-style).
+  /// If none of the regular expressions match, INT_MAX is assigned as
+  /// category. The main header for a source file automatically gets category 0.
+  /// so that it is generally kept at the beginning of the #includes
+  /// (http://llvm.org/docs/CodingStandards.html#include-style). However, you
+  /// can also assign negative priorities if you have certain headers that
+  /// always need to be first.
   ///
   /// To configure this in the .clang-format file, use:
   /// \code
@@ -379,7 +427,9 @@ struct FormatStyle {
     LK_JavaScript,
     /// Should be used for Protocol Buffers
     /// (https://developers.google.com/protocol-buffers/).
-    LK_Proto
+    LK_Proto,
+    /// Should be used for TableGen code.
+    LK_TableGen
   };
 
   /// \brief Language, this format style is targeted at.
@@ -447,8 +497,14 @@ struct FormatStyle {
     PAS_Middle
   };
 
-  /// Pointer and reference alignment style.
+  /// \brief Pointer and reference alignment style.
   PointerAlignmentStyle PointerAlignment;
+
+  /// \brief If true, clang-format will attempt to re-flow comments.
+  bool ReflowComments;
+
+  /// \brief If true, clang-format will sort #includes.
+  bool SortIncludes;
 
   /// \brief If \c true, a space may be inserted after C style casts.
   bool SpaceAfterCStyleCast;
@@ -550,8 +606,7 @@ struct FormatStyle {
            AllowShortIfStatementsOnASingleLine ==
                R.AllowShortIfStatementsOnASingleLine &&
            AllowShortLoopsOnASingleLine == R.AllowShortLoopsOnASingleLine &&
-           AlwaysBreakAfterDefinitionReturnType ==
-               R.AlwaysBreakAfterDefinitionReturnType &&
+           AlwaysBreakAfterReturnType == R.AlwaysBreakAfterReturnType &&
            AlwaysBreakBeforeMultilineStrings ==
                R.AlwaysBreakBeforeMultilineStrings &&
            AlwaysBreakTemplateDeclarations ==
@@ -666,7 +721,8 @@ std::string configurationAsText(const FormatStyle &Style);
 /// are affected by 'Ranges'.
 tooling::Replacements sortIncludes(const FormatStyle &Style, StringRef Code,
                                    ArrayRef<tooling::Range> Ranges,
-                                   StringRef FileName);
+                                   StringRef FileName,
+                                   unsigned *Cursor = nullptr);
 
 /// \brief Reformats the given \p Ranges in the file \p ID.
 ///

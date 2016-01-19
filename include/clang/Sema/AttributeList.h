@@ -557,8 +557,10 @@ public:
   /// Create a new pool for a factory.
   AttributePool(AttributeFactory &factory) : Factory(factory), Head(nullptr) {}
 
+  AttributePool(const AttributePool &) = delete;
+
   /// Move the given pool's allocations to this pool.
-  AttributePool(AttributePool &pool) : Factory(pool.Factory), Head(pool.Head) {
+  AttributePool(AttributePool &&pool) : Factory(pool.Factory), Head(pool.Head) {
     pool.Head = nullptr;
   }
 
@@ -853,6 +855,7 @@ enum AttributeDeclKind {
   ExpectedStructOrTypedef,
   ExpectedObjectiveCInterfaceOrProtocol,
   ExpectedKernelFunction,
+  ExpectedFunctionWithProtoType,
   ExpectedVarGlobalVarOrTypedef
 };
 

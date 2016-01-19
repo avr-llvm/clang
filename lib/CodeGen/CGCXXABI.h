@@ -425,6 +425,9 @@ public:
   virtual size_t getSrcArgforCopyCtor(const CXXConstructorDecl *,
                                       FunctionArgList &Args) const = 0;
 
+  /// Gets the offsets of all the virtual base pointers in a given class.
+  virtual std::vector<CharUnits> getVBPtrOffsets(const CXXRecordDecl *RD);
+
   /// Gets the pure virtual member call function.
   virtual StringRef GetPureVirtualCallName() = 0;
 
@@ -535,11 +538,9 @@ public:
   ///        thread_local variables, a list of functions to perform the
   ///        initialization.
   virtual void EmitThreadLocalInitFuncs(
-      CodeGenModule &CGM,
-      ArrayRef<std::pair<const VarDecl *, llvm::GlobalVariable *>>
-          CXXThreadLocals,
+      CodeGenModule &CGM, ArrayRef<const VarDecl *> CXXThreadLocals,
       ArrayRef<llvm::Function *> CXXThreadLocalInits,
-      ArrayRef<llvm::GlobalVariable *> CXXThreadLocalInitVars) = 0;
+      ArrayRef<const VarDecl *> CXXThreadLocalInitVars) = 0;
 
   // Determine if references to thread_local global variables can be made
   // directly or require access through a thread wrapper function.

@@ -85,7 +85,7 @@ llvm::Value *CGCXXABI::EmitLoadOfMemberFunctionPointer(
   const CXXRecordDecl *RD = 
     cast<CXXRecordDecl>(MPT->getClass()->getAs<RecordType>()->getDecl());
   llvm::FunctionType *FTy = CGM.getTypes().GetFunctionType(
-                              CGM.getTypes().arrangeCXXMethodType(RD, FPT));
+      CGM.getTypes().arrangeCXXMethodType(RD, FPT, /*FD=*/nullptr));
   return llvm::Constant::getNullValue(FTy->getPointerTo());
 }
 
@@ -325,4 +325,8 @@ CGCXXABI::emitTerminateForUnexpectedException(CodeGenFunction &CGF,
 
 CatchTypeInfo CGCXXABI::getCatchAllTypeInfo() {
   return CatchTypeInfo{nullptr, 0};
+}
+
+std::vector<CharUnits> CGCXXABI::getVBPtrOffsets(const CXXRecordDecl *RD) {
+  return std::vector<CharUnits>();
 }

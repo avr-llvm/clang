@@ -214,25 +214,15 @@ namespace {
   // FIXME. This duplicates one in RewriteObjCFoundationAPI.cpp
   bool subscriptOperatorNeedsParens(const Expr *FullExpr) {
     const Expr* Expr = FullExpr->IgnoreImpCasts();
-    if (isa<ArraySubscriptExpr>(Expr) ||
-        isa<CallExpr>(Expr) ||
-        isa<DeclRefExpr>(Expr) ||
-        isa<CXXNamedCastExpr>(Expr) ||
-        isa<CXXConstructExpr>(Expr) ||
-        isa<CXXThisExpr>(Expr) ||
-        isa<CXXTypeidExpr>(Expr) ||
-        isa<CXXUnresolvedConstructExpr>(Expr) ||
-        isa<ObjCMessageExpr>(Expr) ||
-        isa<ObjCPropertyRefExpr>(Expr) ||
-        isa<ObjCProtocolExpr>(Expr) ||
-        isa<MemberExpr>(Expr) ||
-        isa<ObjCIvarRefExpr>(Expr) ||
-        isa<ParenExpr>(FullExpr) ||
-        isa<ParenListExpr>(Expr) ||
-        isa<SizeOfPackExpr>(Expr))
-      return false;
-    
-    return true;
+    return !(isa<ArraySubscriptExpr>(Expr) || isa<CallExpr>(Expr) ||
+             isa<DeclRefExpr>(Expr) || isa<CXXNamedCastExpr>(Expr) ||
+             isa<CXXConstructExpr>(Expr) || isa<CXXThisExpr>(Expr) ||
+             isa<CXXTypeidExpr>(Expr) ||
+             isa<CXXUnresolvedConstructExpr>(Expr) ||
+             isa<ObjCMessageExpr>(Expr) || isa<ObjCPropertyRefExpr>(Expr) ||
+             isa<ObjCProtocolExpr>(Expr) || isa<MemberExpr>(Expr) ||
+             isa<ObjCIvarRefExpr>(Expr) || isa<ParenExpr>(FullExpr) ||
+             isa<ParenListExpr>(Expr) || isa<SizeOfPackExpr>(Expr));
   }
   
   /// \brief - Rewrite message expression for Objective-C setter and getters into
@@ -665,9 +655,7 @@ ClassImplementsAllMethodsAndProperties(ASTContext &Ctx,
         return false;
     }
   }
-  if (HasAtleastOneRequiredProperty || HasAtleastOneRequiredMethod)
-    return true;
-  return false;
+  return HasAtleastOneRequiredProperty || HasAtleastOneRequiredMethod;
 }
 
 static bool rewriteToObjCInterfaceDecl(const ObjCInterfaceDecl *IDecl,
@@ -1536,7 +1524,7 @@ ObjCMigrateASTConsumer::CF_BRIDGING_KIND
                                 FuncDecl->hasAttr<NSReturnsNotRetainedAttr>() ||
                                 FuncDecl->hasAttr<NSReturnsAutoreleasedAttr>());
   
-  // Trivial case of when funciton is annotated and has no argument.
+  // Trivial case of when function is annotated and has no argument.
   if (FuncIsReturnAnnotated && FuncDecl->getNumParams() == 0)
     return CF_BRIDGING_NONE;
   
@@ -1665,7 +1653,7 @@ void ObjCMigrateASTConsumer::migrateAddMethodAnnotation(
     Editor->commit(commit);
   }
   
-  // Trivial case of when funciton is annotated and has no argument.
+  // Trivial case of when function is annotated and has no argument.
   if (MethodIsReturnAnnotated &&
       (MethodDecl->param_begin() == MethodDecl->param_end()))
     return;

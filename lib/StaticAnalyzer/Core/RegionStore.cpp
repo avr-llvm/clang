@@ -1365,6 +1365,10 @@ SVal RegionStoreManager::getBinding(RegionBindingsConstRef B, Loc L, QualType T)
 
   const MemRegion *MR = L.castAs<loc::MemRegionVal>().getRegion();
 
+  if (isa<BlockDataRegion>(MR)) {
+    return UnknownVal();
+  }
+
   if (isa<AllocaRegion>(MR) ||
       isa<SymbolicRegion>(MR) ||
       isa<CodeTextRegion>(MR)) {
@@ -2344,8 +2348,12 @@ void removeDeadBindingsWorker::VisitCluster(const MemRegion *baseR,
   if (const SymbolicRegion *SymR = dyn_cast<SymbolicRegion>(baseR))
     SymReaper.markLive(SymR->getSymbol());
 
-  for (ClusterBindings::iterator I = C->begin(), E = C->end(); I != E; ++I)
+  for (ClusterBindings::iterator I = C->begin(), E = C->end(); I != E; ++I) {
+    // Element index of a binding key is live.
+    SymReaper.markElementIndicesLive(I.getKey().getRegion());
+
     VisitBinding(I.getData());
+  }
 }
 
 void removeDeadBindingsWorker::VisitBinding(SVal V) {
@@ -2366,6 +2374,7 @@ void removeDeadBindingsWorker::VisitBinding(SVal V) {
   // If V is a region, then add it to the worklist.
   if (const MemRegion *R = V.getAsRegion()) {
     AddToWorkList(R);
+    SymReaper.markLive(R);
 
     // All regions captured by a block are also live.
     if (const BlockDataRegion *BR = dyn_cast<BlockDataRegion>(R)) {

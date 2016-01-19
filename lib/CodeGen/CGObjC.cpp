@@ -557,7 +557,7 @@ static llvm::Value *emitARCRetainLoadOfScalar(CodeGenFunction &CGF,
 /// its pointer, name, and types registered in the class struture.
 void CodeGenFunction::GenerateObjCMethod(const ObjCMethodDecl *OMD) {
   StartObjCMethod(OMD, OMD->getClassInterface());
-  PGO.assignRegionCounters(OMD, CurFn);
+  PGO.assignRegionCounters(GlobalDecl(OMD), CurFn);
   assert(isa<CompoundStmt>(OMD->getBody()));
   incrementProfileCounter(OMD->getBody());
   EmitCompoundStmtWithoutScope(*cast<CompoundStmt>(OMD->getBody()));
@@ -949,11 +949,11 @@ CodeGenFunction::generateObjCGetterBody(const ObjCImplementationDecl *classImpl,
     // FIXME: We shouldn't need to get the function info here, the
     // runtime already should have computed it to build the function.
     llvm::Instruction *CallInstruction;
-    RValue RV = EmitCall(getTypes().arrangeFreeFunctionCall(propType, args,
-                                                       FunctionType::ExtInfo(),
-                                                            RequiredArgs::All),
-                         getPropertyFn, ReturnValueSlot(), args, nullptr,
-                         &CallInstruction);
+    RValue RV = EmitCall(
+        getTypes().arrangeFreeFunctionCall(
+            propType, args, FunctionType::ExtInfo(), RequiredArgs::All),
+        getPropertyFn, ReturnValueSlot(), args, CGCalleeInfo(),
+        &CallInstruction);
     if (llvm::CallInst *call = dyn_cast<llvm::CallInst>(CallInstruction))
       call->setTailCall();
 
@@ -2944,7 +2944,9 @@ CodeGenFunction::GenerateObjCAtomicSetterCopyHelperFunction(
     llvm::Function::Create(LTy, llvm::GlobalValue::InternalLinkage,
                            "__assign_helper_atomic_property_",
                            &CGM.getModule());
-  
+
+  CGM.SetInternalFunctionAttributes(nullptr, Fn, FI);
+
   StartFunction(FD, C.VoidTy, Fn, FI, args);
   
   DeclRefExpr DstExpr(&dstDecl, false, DestTy,
@@ -3023,6 +3025,8 @@ CodeGenFunction::GenerateObjCAtomicGetterCopyHelperFunction(
   llvm::Function::Create(LTy, llvm::GlobalValue::InternalLinkage,
                          "__copy_helper_atomic_property_", &CGM.getModule());
   
+  CGM.SetInternalFunctionAttributes(nullptr, Fn, FI);
+
   StartFunction(FD, C.VoidTy, Fn, FI, args);
   
   DeclRefExpr SrcExpr(&srcDecl, false, SrcTy,

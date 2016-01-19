@@ -1102,6 +1102,9 @@ CursorKind.CUDASHARED_ATTR = CursorKind(416)
 
 CursorKind.VISIBILITY_ATTR = CursorKind(417)
 
+CursorKind.DLLEXPORT_ATTR = CursorKind(418)
+CursorKind.DLLIMPORT_ATTR = CursorKind(419)
+
 ###
 # Preprocessing
 CursorKind.PREPROCESSING_DIRECTIVE = CursorKind(500)
@@ -1114,7 +1117,8 @@ CursorKind.INCLUSION_DIRECTIVE = CursorKind(503)
 
 # A module import declaration.
 CursorKind.MODULE_IMPORT_DECL = CursorKind(600)
-
+# A type alias template declaration
+CursorKind.TYPE_ALIAS_TEMPLATE_DECL = CursorKind(601)
 
 ### Template Argument Kinds ###
 class TemplateArgumentKind(BaseEnumeration):
@@ -1169,6 +1173,12 @@ class Cursor(Structure):
         function template that is declared 'const'.
         """
         return conf.lib.clang_CXXMethod_isConst(self)
+
+    def is_mutable_field(self):
+        """Returns True if the cursor refers to a C++ field that is declared
+        'mutable'.
+        """
+        return conf.lib.clang_CXXField_isMutable(self)
 
     def is_pure_virtual_method(self):
         """Returns True if the cursor refers to a C++ member function or member
@@ -1693,6 +1703,7 @@ TypeKind.INCOMPLETEARRAY = TypeKind(114)
 TypeKind.VARIABLEARRAY = TypeKind(115)
 TypeKind.DEPENDENTSIZEDARRAY = TypeKind(116)
 TypeKind.MEMBERPOINTER = TypeKind(117)
+TypeKind.AUTO = TypeKind(118)
 
 class RefQualifierKind(BaseEnumeration):
     """Describes a specific ref-qualifier of a type."""
@@ -2896,6 +2907,10 @@ functionList = [
   ("clang_createTranslationUnit",
    [Index, c_char_p],
    c_object_p),
+
+  ("clang_CXXField_isMutable",
+   [Cursor],
+   bool),
 
   ("clang_CXXMethod_isConst",
    [Cursor],

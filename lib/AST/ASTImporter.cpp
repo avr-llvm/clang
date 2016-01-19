@@ -878,6 +878,14 @@ static bool IsStructurallyEquivalent(StructuralEquivalenceContext &Context,
     break;
   }
 
+  case Type::Pipe: {
+    if (!IsStructurallyEquivalent(Context,
+                                  cast<PipeType>(T1)->getElementType(),
+                                  cast<PipeType>(T2)->getElementType()))
+      return false;
+    break;
+  }
+
   } // end switch
 
   return true;
@@ -1746,7 +1754,7 @@ QualType ASTNodeImporter::VisitAutoType(const AutoType *T) {
       return QualType();
   }
   
-  return Importer.getToContext().getAutoType(ToDeduced, T->isDecltypeAuto(), 
+  return Importer.getToContext().getAutoType(ToDeduced, T->getKeyword(),
                                              /*IsDependent*/false);
 }
 
@@ -2144,7 +2152,7 @@ TemplateParameterList *ASTNodeImporter::ImportTemplateParameterList(
   return TemplateParameterList::Create(Importer.getToContext(),
                                        Importer.Import(Params->getTemplateLoc()),
                                        Importer.Import(Params->getLAngleLoc()),
-                                       ToParams.data(), ToParams.size(),
+                                       ToParams,
                                        Importer.Import(Params->getRAngleLoc()));
 }
 
@@ -4915,13 +4923,14 @@ Stmt *ASTNodeImporter::VisitCXXForRangeStmt(CXXForRangeStmt *S) {
   if (!ToBody && S->getBody())
     return nullptr;
   SourceLocation ToForLoc = Importer.Import(S->getForLoc());
+  SourceLocation ToCoawaitLoc = Importer.Import(S->getCoawaitLoc());
   SourceLocation ToColonLoc = Importer.Import(S->getColonLoc());
   SourceLocation ToRParenLoc = Importer.Import(S->getRParenLoc());
   return new (Importer.getToContext()) CXXForRangeStmt(ToRange, ToBeginEnd,
                                                        ToCond, ToInc,
                                                        ToLoopVar, ToBody,
-                                                       ToForLoc, ToColonLoc,
-                                                       ToRParenLoc);
+                                                       ToForLoc, ToCoawaitLoc,
+                                                       ToColonLoc, ToRParenLoc);
 }
 
 Stmt *ASTNodeImporter::VisitObjCForCollectionStmt(ObjCForCollectionStmt *S) {

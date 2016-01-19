@@ -192,6 +192,10 @@ public:
   /// for AuxTarget).
   unsigned getAuxBuiltinID(unsigned ID) const { return ID - TSRecords.size(); }
 
+  /// Returns true if this is a libc/libm function without the '__builtin_'
+  /// prefix.
+  static bool isBuiltinFunc(const char *Name);
+
 private:
   const Info &getRecord(unsigned ID) const;
 
@@ -205,5 +209,12 @@ private:
 };
 
 }
+
+/// \brief Kinds of BuiltinTemplateDecl.
+enum BuiltinTemplateKind : int {
+  /// \brief This names the __make_integer_seq BuiltinTemplateDecl.
+  BTK__make_integer_seq
+};
+
 } // end namespace clang
 #endif

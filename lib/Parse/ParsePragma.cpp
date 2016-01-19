@@ -334,6 +334,7 @@ void Parser::HandlePragmaVisibility() {
   Actions.ActOnPragmaVisibility(VisType, VisLoc);
 }
 
+namespace {
 struct PragmaPackInfo {
   Sema::PragmaPackKind Kind;
   IdentifierInfo *Name;
@@ -341,6 +342,7 @@ struct PragmaPackInfo {
   SourceLocation LParenLoc;
   SourceLocation RParenLoc;
 };
+} // end anonymous namespace
 
 void Parser::HandlePragmaPack() {
   assert(Tok.is(tok::annot_pragma_pack));
@@ -373,6 +375,14 @@ void Parser::HandlePragmaAlign() {
     reinterpret_cast<uintptr_t>(Tok.getAnnotationValue()));
   SourceLocation PragmaLoc = ConsumeToken();
   Actions.ActOnPragmaOptionsAlign(Kind, PragmaLoc);
+}
+
+void Parser::HandlePragmaDump() {
+  assert(Tok.is(tok::annot_pragma_dump));
+  IdentifierInfo *II =
+      reinterpret_cast<IdentifierInfo *>(Tok.getAnnotationValue());
+  Actions.ActOnPragmaDump(getCurScope(), Tok.getLocation(), II);
+  ConsumeToken();
 }
 
 void Parser::HandlePragmaWeak() {
@@ -750,11 +760,13 @@ bool Parser::HandlePragmaMSInitSeg(StringRef PragmaName,
   return true;
 }
 
+namespace {
 struct PragmaLoopHintInfo {
   Token PragmaName;
   Token Option;
   ArrayRef<Token> Toks;
 };
+} // end anonymous namespace
 
 static std::string PragmaLoopHintString(Token PragmaName, Token Option) {
   std::string PragmaString;

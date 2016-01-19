@@ -186,7 +186,7 @@ struct ASTUnit::ASTWriterData {
   llvm::BitstreamWriter Stream;
   ASTWriter Writer;
 
-  ASTWriterData() : Stream(Buffer), Writer(Stream) { }
+  ASTWriterData() : Stream(Buffer), Writer(Stream, { }) { }
 };
 
 void ASTUnit::clearFileLevelDecls() {
@@ -709,7 +709,7 @@ std::unique_ptr<ASTUnit> ASTUnit::LoadFromASTFile(
   bool disableValid = false;
   if (::getenv("LIBCLANG_DISABLE_PCH_VALIDATION"))
     disableValid = true;
-  AST->Reader = new ASTReader(PP, Context, PCHContainerRdr,
+  AST->Reader = new ASTReader(PP, Context, PCHContainerRdr, { },
                               /*isysroot=*/"",
                               /*DisableValidation=*/disableValid,
                               AllowPCHWithCompilerErrors);
@@ -927,6 +927,7 @@ public:
                              const Preprocessor &PP, StringRef isysroot,
                              raw_ostream *Out)
       : PCHGenerator(PP, "", nullptr, isysroot, std::make_shared<PCHBuffer>(),
+                     ArrayRef<llvm::IntrusiveRefCntPtr<ModuleFileExtension>>(),
                      /*AllowASTWithErrors=*/true),
         Unit(Unit), Hash(Unit.getCurrentTopLevelHashValue()), Action(Action),
         Out(Out) {
@@ -1724,9 +1725,10 @@ ASTUnit *ASTUnit::LoadFromCompilerInvocationAction(
     std::shared_ptr<PCHContainerOperations> PCHContainerOps,
     IntrusiveRefCntPtr<DiagnosticsEngine> Diags, ASTFrontendAction *Action,
     ASTUnit *Unit, bool Persistent, StringRef ResourceFilesPath,
-    bool OnlyLocalDecls, bool CaptureDiagnostics, bool PrecompilePreamble,
-    bool CacheCodeCompletionResults, bool IncludeBriefCommentsInCodeCompletion,
-    bool UserFilesAreVolatile, std::unique_ptr<ASTUnit> *ErrAST) {
+    bool OnlyLocalDecls, bool CaptureDiagnostics,
+    unsigned PrecompilePreambleAfterNParses, bool CacheCodeCompletionResults,
+    bool IncludeBriefCommentsInCodeCompletion, bool UserFilesAreVolatile,
+    std::unique_ptr<ASTUnit> *ErrAST) {
   assert(CI && "A CompilerInvocation is required");
 
   std::unique_ptr<ASTUnit> OwnAST;
@@ -1745,8 +1747,8 @@ ASTUnit *ASTUnit::LoadFromCompilerInvocationAction(
   }
   AST->OnlyLocalDecls = OnlyLocalDecls;
   AST->CaptureDiagnostics = CaptureDiagnostics;
-  if (PrecompilePreamble)
-    AST->PreambleRebuildCounter = 2;
+  if (PrecompilePreambleAfterNParses > 0)
+    AST->PreambleRebuildCounter = PrecompilePreambleAfterNParses;
   AST->TUKind = Action ? Action->getTranslationUnitKind() : TU_Complete;
   AST->ShouldCacheCodeCompletionResults = CacheCodeCompletionResults;
   AST->IncludeBriefCommentsInCodeCompletion
@@ -1863,7 +1865,7 @@ ASTUnit *ASTUnit::LoadFromCompilerInvocationAction(
 
 bool ASTUnit::LoadFromCompilerInvocation(
     std::shared_ptr<PCHContainerOperations> PCHContainerOps,
-    bool PrecompilePreamble) {
+    unsigned PrecompilePreambleAfterNParses) {
   if (!Invocation)
     return true;
   
@@ -1873,8 +1875,8 @@ bool ASTUnit::LoadFromCompilerInvocation(
   ProcessWarningOptions(getDiagnostics(), Invocation->getDiagnosticOpts());
 
   std::unique_ptr<llvm::MemoryBuffer> OverrideMainBuffer;
-  if (PrecompilePreamble) {
-    PreambleRebuildCounter = 2;
+  if (PrecompilePreambleAfterNParses > 0) {
+    PreambleRebuildCounter = PrecompilePreambleAfterNParses;
     OverrideMainBuffer =
         getMainBufferWithPrecompiledPreamble(PCHContainerOps, *Invocation);
   }
@@ -1893,9 +1895,10 @@ std::unique_ptr<ASTUnit> ASTUnit::LoadFromCompilerInvocation(
     CompilerInvocation *CI,
     std::shared_ptr<PCHContainerOperations> PCHContainerOps,
     IntrusiveRefCntPtr<DiagnosticsEngine> Diags, FileManager *FileMgr,
-    bool OnlyLocalDecls, bool CaptureDiagnostics, bool PrecompilePreamble,
-    TranslationUnitKind TUKind, bool CacheCodeCompletionResults,
-    bool IncludeBriefCommentsInCodeCompletion, bool UserFilesAreVolatile) {
+    bool OnlyLocalDecls, bool CaptureDiagnostics,
+    unsigned PrecompilePreambleAfterNParses, TranslationUnitKind TUKind,
+    bool CacheCodeCompletionResults, bool IncludeBriefCommentsInCodeCompletion,
+    bool UserFilesAreVolatile) {
   // Create the AST unit.
   std::unique_ptr<ASTUnit> AST(new ASTUnit(false));
   ConfigureDiags(Diags, *AST, CaptureDiagnostics);
@@ -1918,7 +1921,8 @@ std::unique_ptr<ASTUnit> ASTUnit::LoadFromCompilerInvocation(
     llvm::CrashRecoveryContextReleaseRefCleanup<DiagnosticsEngine> >
     DiagCleanup(Diags.get());
 
-  if (AST->LoadFromCompilerInvocation(PCHContainerOps, PrecompilePreamble))
+  if (AST->LoadFromCompilerInvocation(PCHContainerOps,
+                                      PrecompilePreambleAfterNParses))
     return nullptr;
   return AST;
 }
@@ -1929,11 +1933,11 @@ ASTUnit *ASTUnit::LoadFromCommandLine(
     IntrusiveRefCntPtr<DiagnosticsEngine> Diags, StringRef ResourceFilesPath,
     bool OnlyLocalDecls, bool CaptureDiagnostics,
     ArrayRef<RemappedFile> RemappedFiles, bool RemappedFilesKeepOriginalName,
-    bool PrecompilePreamble, TranslationUnitKind TUKind,
+    unsigned PrecompilePreambleAfterNParses, TranslationUnitKind TUKind,
     bool CacheCodeCompletionResults, bool IncludeBriefCommentsInCodeCompletion,
     bool AllowPCHWithCompilerErrors, bool SkipFunctionBodies,
     bool UserFilesAreVolatile, bool ForSerialization,
-    std::unique_ptr<ASTUnit> *ErrAST) {
+    llvm::Optional<StringRef> ModuleFormat, std::unique_ptr<ASTUnit> *ErrAST) {
   assert(Diags.get() && "no DiagnosticsEngine was provided");
 
   SmallVector<StoredDiagnostic, 4> StoredDiagnostics;
@@ -1966,6 +1970,9 @@ ASTUnit *ASTUnit::LoadFromCommandLine(
 
   CI->getFrontendOpts().SkipFunctionBodies = SkipFunctionBodies;
 
+  if (ModuleFormat)
+    CI->getHeaderSearchOpts().ModuleFormat = ModuleFormat.getValue();
+
   // Create the AST unit.
   std::unique_ptr<ASTUnit> AST;
   AST.reset(new ASTUnit(false));
@@ -1997,7 +2004,8 @@ ASTUnit *ASTUnit::LoadFromCommandLine(
   llvm::CrashRecoveryContextCleanupRegistrar<ASTUnit>
     ASTUnitCleanup(AST.get());
 
-  if (AST->LoadFromCompilerInvocation(PCHContainerOps, PrecompilePreamble)) {
+  if (AST->LoadFromCompilerInvocation(PCHContainerOps,
+                                      PrecompilePreambleAfterNParses)) {
     // Some error occurred, if caller wants to examine diagnostics, pass it the
     // ASTUnit.
     if (ErrAST) {
@@ -2500,7 +2508,7 @@ bool ASTUnit::serialize(raw_ostream &OS) {
 
   SmallString<128> Buffer;
   llvm::BitstreamWriter Stream(Buffer);
-  ASTWriter Writer(Stream);
+  ASTWriter Writer(Stream, { });
   return serializeUnit(Writer, Buffer, getSema(), hasErrors, OS);
 }
 

@@ -16,6 +16,8 @@ endif()
 
 if(CLANG_ENABLE_STATIC_ANALYZER)
   add_clang_subdirectory(clang-check)
+  add_clang_subdirectory(scan-build)
+  add_clang_subdirectory(scan-view)
 endif()
 
 # We support checking out the clang-tools-extra repository into the 'extra'

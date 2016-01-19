@@ -160,6 +160,12 @@ bool ChainedASTReaderListener::visitInputFile(StringRef Filename,
   return Continue;
 }
 
+void ChainedASTReaderListener::readModuleFileExtension(
+       const ModuleFileExtensionMetadata &Metadata) {
+  First->readModuleFileExtension(Metadata);
+  Second->readModuleFileExtension(Metadata);
+}
+
 //===----------------------------------------------------------------------===//
 // PCH validator implementation
 //===----------------------------------------------------------------------===//
@@ -780,7 +786,8 @@ IdentifierInfo *ASTIdentifierLookupTrait::ReadData(const internal_key_type& k,
   }
   if (!II->isFromAST()) {
     II->setIsFromAST();
-    if (isInterestingIdentifier(Reader, *II, F.isModule()))
+    bool IsModule = Reader.PP.getCurrentModule() != nullptr;
+    if (isInterestingIdentifier(Reader, *II, IsModule))
       II->setChangedSinceDeserialization();
   }
   Reader.markIdentifierUpToDate(II);
@@ -1252,7 +1259,8 @@ bool ASTReader::ReadSLocEntry(int ID) {
       = SourceMgr.getOrCreateContentCache(File,
                               /*isSystemFile=*/FileCharacter != SrcMgr::C_User);
     if (OverriddenBuffer && !ContentCache->BufferOverridden &&
-        ContentCache->ContentsEntry == ContentCache->OrigEntry) {
+        ContentCache->ContentsEntry == ContentCache->OrigEntry &&
+        !ContentCache->getRawBuffer()) {
       unsigned Code = SLocEntryCursor.ReadCode();
       Record.clear();
       unsigned RecCode = SLocEntryCursor.readRecord(Code, Record, &Blob);
@@ -1883,19 +1891,14 @@ ASTReader::readInputFileInfo(ModuleFile &F, unsigned ID) {
          "invalid record type for input file");
   (void)Result;
 
-  std::string Filename;
-  off_t StoredSize;
-  time_t StoredTime;
-  bool Overridden;
-
   assert(Record[0] == ID && "Bogus stored ID or offset");
-  StoredSize = static_cast<off_t>(Record[1]);
-  StoredTime = static_cast<time_t>(Record[2]);
-  Overridden = static_cast<bool>(Record[3]);
-  Filename = Blob;
-  ResolveImportedPath(F, Filename);
-
-  InputFileInfo R = { std::move(Filename), StoredSize, StoredTime, Overridden };
+  InputFileInfo R;
+  R.StoredSize = static_cast<off_t>(Record[1]);
+  R.StoredTime = static_cast<time_t>(Record[2]);
+  R.Overridden = static_cast<bool>(Record[3]);
+  R.Transient = static_cast<bool>(Record[4]);
+  R.Filename = Blob;
+  ResolveImportedPath(F, R.Filename);
   return R;
 }
 
@@ -1920,11 +1923,10 @@ InputFile ASTReader::getInputFile(ModuleFile &F, unsigned ID, bool Complain) {
   off_t StoredSize = FI.StoredSize;
   time_t StoredTime = FI.StoredTime;
   bool Overridden = FI.Overridden;
+  bool Transient = FI.Transient;
   StringRef Filename = FI.Filename;
 
-  const FileEntry *File
-    = Overridden? FileMgr.getVirtualFile(Filename, StoredSize, StoredTime)
-                : FileMgr.getFile(Filename, /*OpenFile=*/false);
+  const FileEntry *File = FileMgr.getFile(Filename, /*OpenFile=*/false);
 
   // If we didn't find the file, resolve it relative to the
   // original directory from which this AST file was created.
@@ -1939,9 +1941,8 @@ InputFile ASTReader::getInputFile(ModuleFile &F, unsigned ID, bool Complain) {
 
   // For an overridden file, create a virtual file with the stored
   // size/timestamp.
-  if (Overridden && File == nullptr) {
+  if ((Overridden || Transient) && File == nullptr)
     File = FileMgr.getVirtualFile(Filename, StoredSize, StoredTime);
-  }
 
   if (File == nullptr) {
     if (Complain) {
@@ -1962,11 +1963,17 @@ InputFile ASTReader::getInputFile(ModuleFile &F, unsigned ID, bool Complain) {
   // can lead to problems when lexing using the source locations from the
   // PCH.
   SourceManager &SM = getSourceManager();
-  if (!Overridden && SM.isFileOverridden(File)) {
+  // FIXME: Reject if the overrides are different.
+  if ((!Overridden && !Transient) && SM.isFileOverridden(File)) {
     if (Complain)
       Error(diag::err_fe_pch_file_overridden, Filename);
     // After emitting the diagnostic, recover by disabling the override so
     // that the original file will be used.
+    //
+    // FIXME: This recovery is just as broken as the original state; there may
+    // be another precompiled module that's using the overridden contents, or
+    // we might be half way through parsing it. Instead, we should treat the
+    // overridden contents as belonging to a separate FileEntry.
     SM.disableFileContentsOverride(File);
     // The FileEntry is a virtual file entry with the size of the contents
     // that would override the original contents. Set it to the original's
@@ -2017,8 +2024,10 @@ InputFile ASTReader::getInputFile(ModuleFile &F, unsigned ID, bool Complain) {
 
     IsOutOfDate = true;
   }
+  // FIXME: If the file is overridden and we've already opened it,
+  // issue an error (or split it into a separate FileEntry).
 
-  InputFile IF = InputFile(File, Overridden, IsOutOfDate);
+  InputFile IF = InputFile(File, Overridden || Transient, IsOutOfDate);
 
   // Note that we've loaded this input file.
   F.InputFilesLoaded[ID-1] = IF;
@@ -2144,6 +2153,7 @@ ASTReader::ReadControlBlock(ModuleFile &F,
                             const ModuleFile *ImportedBy,
                             unsigned ClientLoadCapabilities) {
   BitstreamCursor &Stream = F.Stream;
+  ASTReadResult Result = Success;
 
   if (Stream.EnterSubBlock(CONTROL_BLOCK_ID)) {
     Error("malformed block record in AST file");
@@ -2204,7 +2214,7 @@ ASTReader::ReadControlBlock(ModuleFile &F,
         }
       }
 
-      return Success;
+      return Result;
     }
 
     case llvm::BitstreamEntry::SubBlock:
@@ -2232,16 +2242,21 @@ ASTReader::ReadControlBlock(ModuleFile &F,
           bool AllowCompatibleConfigurationMismatch =
               F.Kind == MK_ExplicitModule;
 
-          auto Result = ReadOptionsBlock(Stream, ClientLoadCapabilities,
-                                         AllowCompatibleConfigurationMismatch,
-                                         *Listener, SuggestedPredefines);
+          Result = ReadOptionsBlock(Stream, ClientLoadCapabilities,
+                                    AllowCompatibleConfigurationMismatch,
+                                    *Listener, SuggestedPredefines);
           if (Result == Failure) {
             Error("malformed block record in AST file");
             return Result;
           }
 
-          if (!DisableValidation && Result != Success &&
-              (Result != ConfigurationMismatch || !AllowConfigurationMismatch))
+          if (DisableValidation ||
+              (AllowConfigurationMismatch && Result == ConfigurationMismatch))
+            Result = Success;
+
+          // If we've diagnosed a problem, we're done.
+          if (Result != Success &&
+              isDiagnosedResult(Result, ClientLoadCapabilities))
             return Result;
         } else if (Stream.SkipBlock()) {
           Error("malformed block record in AST file");
@@ -3422,6 +3437,36 @@ static void updateModuleTimestamp(ModuleFile &MF) {
   OS << "Timestamp file\n";
 }
 
+/// \brief Given a cursor at the start of an AST file, scan ahead and drop the
+/// cursor into the start of the given block ID, returning false on success and
+/// true on failure.
+static bool SkipCursorToBlock(BitstreamCursor &Cursor, unsigned BlockID) {
+  while (1) {
+    llvm::BitstreamEntry Entry = Cursor.advance();
+    switch (Entry.Kind) {
+    case llvm::BitstreamEntry::Error:
+    case llvm::BitstreamEntry::EndBlock:
+      return true;
+
+    case llvm::BitstreamEntry::Record:
+      // Ignore top-level records.
+      Cursor.skipRecord(Entry.ID);
+      break;
+
+    case llvm::BitstreamEntry::SubBlock:
+      if (Entry.ID == BlockID) {
+        if (Cursor.EnterSubBlock(BlockID))
+          return true;
+        // Found it!
+        return false;
+      }
+
+      if (Cursor.SkipBlock())
+        return true;
+    }
+  }
+}
+
 ASTReader::ASTReadResult ASTReader::ReadAST(const std::string &FileName,
                                             ModuleKind Type,
                                             SourceLocation ImportLoc,
@@ -3479,6 +3524,12 @@ ASTReader::ASTReadResult ASTReader::ReadAST(const std::string &FileName,
     if (ASTReadResult Result = ReadASTBlock(F, ClientLoadCapabilities))
       return Result;
 
+    // Read the extension blocks.
+    while (!SkipCursorToBlock(F.Stream, EXTENSION_BLOCK_ID)) {
+      if (ASTReadResult Result = ReadExtensionBlock(F))
+        return Result;
+    }
+
     // Once read, set the ModuleFile bit base offset and update the size in 
     // bits of all files we've seen.
     F.GlobalBitOffset = TotalModulesSizeInBits;
@@ -3511,7 +3562,8 @@ ASTReader::ASTReadResult ASTReader::ReadAST(const std::string &FileName,
       // whether we need to serialize it.
       if (!II.isFromAST()) {
         II.setIsFromAST();
-        if (isInterestingIdentifier(*this, II, F.isModule()))
+        bool IsModule = PP.getCurrentModule() != nullptr;
+        if (isInterestingIdentifier(*this, II, IsModule))
           II.setChangedSinceDeserialization();
       }
 
@@ -3736,14 +3788,13 @@ ASTReader::ReadASTCore(StringRef FileName,
 
   // This is used for compatibility with older PCH formats.
   bool HaveReadControlBlock = false;
-
   while (1) {
     llvm::BitstreamEntry Entry = Stream.advance();
     
     switch (Entry.Kind) {
     case llvm::BitstreamEntry::Error:
-    case llvm::BitstreamEntry::EndBlock:
     case llvm::BitstreamEntry::Record:
+    case llvm::BitstreamEntry::EndBlock:
       Error("invalid record at top-level of AST file");
       return Failure;
         
@@ -3798,6 +3849,79 @@ ASTReader::ReadASTCore(StringRef FileName,
       break;
     }
   }
+
+  return Success;
+}
+
+/// Parse a record and blob containing module file extension metadata.
+static bool parseModuleFileExtensionMetadata(
+              const SmallVectorImpl<uint64_t> &Record,
+              StringRef Blob,
+              ModuleFileExtensionMetadata &Metadata) {
+  if (Record.size() < 4) return true;
+
+  Metadata.MajorVersion = Record[0];
+  Metadata.MinorVersion = Record[1];
+
+  unsigned BlockNameLen = Record[2];
+  unsigned UserInfoLen = Record[3];
+
+  if (BlockNameLen + UserInfoLen > Blob.size()) return true;
+
+  Metadata.BlockName = std::string(Blob.data(), Blob.data() + BlockNameLen);
+  Metadata.UserInfo = std::string(Blob.data() + BlockNameLen,
+                                  Blob.data() + BlockNameLen + UserInfoLen);
+  return false;
+}
+
+ASTReader::ASTReadResult ASTReader::ReadExtensionBlock(ModuleFile &F) {
+  BitstreamCursor &Stream = F.Stream;
+
+  RecordData Record;
+  while (true) {
+    llvm::BitstreamEntry Entry = Stream.advance();
+    switch (Entry.Kind) {
+    case llvm::BitstreamEntry::SubBlock:
+      if (Stream.SkipBlock())
+        return Failure;
+
+      continue;
+
+    case llvm::BitstreamEntry::EndBlock:
+      return Success;
+
+    case llvm::BitstreamEntry::Error:
+      return HadErrors;
+
+    case llvm::BitstreamEntry::Record:
+      break;
+    }
+
+    Record.clear();
+    StringRef Blob;
+    unsigned RecCode = Stream.readRecord(Entry.ID, Record, &Blob);
+    switch (RecCode) {
+    case EXTENSION_METADATA: {
+      ModuleFileExtensionMetadata Metadata;
+      if (parseModuleFileExtensionMetadata(Record, Blob, Metadata))
+        return Failure;
+
+      // Find a module file extension with this block name.
+      auto Known = ModuleFileExtensions.find(Metadata.BlockName);
+      if (Known == ModuleFileExtensions.end()) break;
+
+      // Form a reader.
+      if (auto Reader = Known->second->createExtensionReader(Metadata, *this,
+                                                             F, Stream)) {
+        F.ExtensionReaders.push_back(std::move(Reader));
+      }
+
+      break;
+    }
+    }
+  }
+
+  return Success;
 }
 
 void ASTReader::InitializeContext() {
@@ -3938,36 +4062,6 @@ void ASTReader::finalizeForWriting() {
   // Nothing to do for now.
 }
 
-/// \brief Given a cursor at the start of an AST file, scan ahead and drop the
-/// cursor into the start of the given block ID, returning false on success and
-/// true on failure.
-static bool SkipCursorToBlock(BitstreamCursor &Cursor, unsigned BlockID) {
-  while (1) {
-    llvm::BitstreamEntry Entry = Cursor.advance();
-    switch (Entry.Kind) {
-    case llvm::BitstreamEntry::Error:
-    case llvm::BitstreamEntry::EndBlock:
-      return true;
-        
-    case llvm::BitstreamEntry::Record:
-      // Ignore top-level records.
-      Cursor.skipRecord(Entry.ID);
-      break;
-        
-    case llvm::BitstreamEntry::SubBlock:
-      if (Entry.ID == BlockID) {
-        if (Cursor.EnterSubBlock(BlockID))
-          return true;
-        // Found it!
-        return false;
-      }
-      
-      if (Cursor.SkipBlock())
-        return true;
-    }
-  }
-}
-
 /// \brief Reads and return the signature record from \p StreamFile's control
 /// block, or else returns 0.
 static ASTFileSignature readASTFileSignature(llvm::BitstreamReader &StreamFile){
@@ -4095,6 +4189,7 @@ namespace {
 bool ASTReader::readASTFileControlBlock(
     StringRef Filename, FileManager &FileMgr,
     const PCHContainerReader &PCHContainerRdr,
+    bool FindModuleFileExtensions,
     ASTReaderListener &Listener) {
   // Open the AST file.
   // FIXME: This allows use of the VFS; we do not allow use of the
@@ -4124,7 +4219,8 @@ bool ASTReader::readASTFileControlBlock(
 
   RecordData Record;
   std::string ModuleDir;
-  while (1) {
+  bool DoneWithControlBlock = false;
+  while (!DoneWithControlBlock) {
     llvm::BitstreamEntry Entry = Stream.advance();
 
     switch (Entry.Kind) {
@@ -4157,7 +4253,8 @@ bool ASTReader::readASTFileControlBlock(
     }
 
     case llvm::BitstreamEntry::EndBlock:
-      return false;
+      DoneWithControlBlock = true;
+      break;
 
     case llvm::BitstreamEntry::Error:
       return true;
@@ -4165,6 +4262,8 @@ bool ASTReader::readASTFileControlBlock(
     case llvm::BitstreamEntry::Record:
       break;
     }
+
+    if (DoneWithControlBlock) break;
 
     Record.clear();
     StringRef Blob;
@@ -4249,6 +4348,50 @@ bool ASTReader::readASTFileControlBlock(
       break;
     }
   }
+
+  // Look for module file extension blocks, if requested.
+  if (FindModuleFileExtensions) {
+    while (!SkipCursorToBlock(Stream, EXTENSION_BLOCK_ID)) {
+      bool DoneWithExtensionBlock = false;
+      while (!DoneWithExtensionBlock) {
+       llvm::BitstreamEntry Entry = Stream.advance();
+
+       switch (Entry.Kind) {
+       case llvm::BitstreamEntry::SubBlock:
+         if (Stream.SkipBlock())
+           return true;
+
+         continue;
+
+       case llvm::BitstreamEntry::EndBlock:
+         DoneWithExtensionBlock = true;
+         continue;
+
+       case llvm::BitstreamEntry::Error:
+         return true;
+
+       case llvm::BitstreamEntry::Record:
+         break;
+       }
+
+       Record.clear();
+       StringRef Blob;
+       unsigned RecCode = Stream.readRecord(Entry.ID, Record, &Blob);
+       switch (RecCode) {
+       case EXTENSION_METADATA: {
+         ModuleFileExtensionMetadata Metadata;
+         if (parseModuleFileExtensionMetadata(Record, Blob, Metadata))
+           return true;
+
+         Listener.readModuleFileExtension(Metadata);
+         break;
+       }
+       }
+      }
+    }
+  }
+
+  return false;
 }
 
 bool ASTReader::isAcceptableASTFile(
@@ -4259,6 +4402,7 @@ bool ASTReader::isAcceptableASTFile(
   SimplePCHValidator validator(LangOpts, TargetOpts, PPOpts,
                                ExistingModuleCachePath, FileMgr);
   return !readASTFileControlBlock(Filename, FileMgr, PCHContainerRdr,
+                                  /*FindModuleFileExtensions=*/false,
                                   validator);
 }
 
@@ -4554,6 +4698,13 @@ bool ASTReader::ParseLanguageOptions(const RecordData &Record,
       ReadString(Record, Idx));
   }
   LangOpts.CommentOpts.ParseAllComments = Record[Idx++];
+
+  // OpenMP offloading options.
+  for (unsigned N = Record[Idx++]; N; --N) {
+    LangOpts.OMPTargetTriples.push_back(llvm::Triple(ReadString(Record, Idx)));
+  }
+
+  LangOpts.OMPHostIRFile = ReadString(Record, Idx);
 
   return Listener.ReadLanguageOptions(LangOpts, Complain,
                                       AllowCompatibleDifferences);
@@ -5271,9 +5422,9 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
 
   case TYPE_AUTO: {
     QualType Deduced = readType(*Loc.F, Record, Idx);
-    bool IsDecltypeAuto = Record[Idx++];
+    AutoTypeKeyword Keyword = (AutoTypeKeyword)Record[Idx++];
     bool IsDependent = Deduced.isNull() ? Record[Idx++] : false;
-    return Context.getAutoType(Deduced, IsDecltypeAuto, IsDependent);
+    return Context.getAutoType(Deduced, Keyword, IsDependent);
   }
 
   case TYPE_RECORD: {
@@ -5488,6 +5639,17 @@ QualType ASTReader::readTypeRecord(unsigned Index) {
     }
     QualType ValueType = readType(*Loc.F, Record, Idx);
     return Context.getAtomicType(ValueType);
+  }
+
+  case TYPE_PIPE: {
+    if (Record.size() != 1) {
+      Error("Incorrect encoding of pipe type");
+      return QualType();
+    }
+
+    // Reading the pipe element type.
+    QualType ElementType = readType(*Loc.F, Record, Idx);
+    return Context.getPipeType(ElementType);
   }
   }
   llvm_unreachable("Invalid TypeCode!");
@@ -5759,6 +5921,9 @@ void TypeLocReader::VisitAtomicTypeLoc(AtomicTypeLoc TL) {
   TL.setKWLoc(ReadSourceLocation(Record, Idx));
   TL.setLParenLoc(ReadSourceLocation(Record, Idx));
   TL.setRParenLoc(ReadSourceLocation(Record, Idx));
+}
+void TypeLocReader::VisitPipeTypeLoc(PipeTypeLoc TL) {
+  TL.setKWLoc(ReadSourceLocation(Record, Idx));
 }
 
 TypeSourceInfo *ASTReader::GetTypeSourceInfo(ModuleFile &F,
@@ -6276,6 +6441,9 @@ static Decl *getPredefinedDecl(ASTContext &Context, PredefinedDeclIDs ID) {
 
   case PREDEF_DECL_EXTERN_C_CONTEXT_ID:
     return Context.getExternCContextDecl();
+
+  case PREDEF_DECL_MAKE_INTEGER_SEQ_ID:
+    return Context.getMakeIntegerSeqDecl();
   }
   llvm_unreachable("PredefinedDeclIDs unknown enum value");
 }
@@ -7691,7 +7859,7 @@ ASTReader::ReadTemplateParameterList(ModuleFile &F,
 
   TemplateParameterList* TemplateParams =
     TemplateParameterList::Create(Context, TemplateLoc, LAngleLoc,
-                                  Params.data(), Params.size(), RAngleLoc);
+                                  Params, RAngleLoc);
   return TemplateParams;
 }
 
@@ -8481,13 +8649,15 @@ void ASTReader::pushExternalDeclIntoScope(NamedDecl *D, DeclarationName Name) {
   }
 }
 
-ASTReader::ASTReader(Preprocessor &PP, ASTContext &Context,
-                     const PCHContainerReader &PCHContainerRdr,
-                     StringRef isysroot, bool DisableValidation,
-                     bool AllowASTWithCompilerErrors,
-                     bool AllowConfigurationMismatch, bool ValidateSystemInputs,
-                     bool UseGlobalIndex,
-                     std::unique_ptr<llvm::Timer> ReadTimer)
+ASTReader::ASTReader(
+  Preprocessor &PP, ASTContext &Context,
+  const PCHContainerReader &PCHContainerRdr,
+  ArrayRef<IntrusiveRefCntPtr<ModuleFileExtension>> Extensions,
+  StringRef isysroot, bool DisableValidation,
+  bool AllowASTWithCompilerErrors,
+  bool AllowConfigurationMismatch, bool ValidateSystemInputs,
+  bool UseGlobalIndex,
+  std::unique_ptr<llvm::Timer> ReadTimer)
     : Listener(new PCHValidator(PP, *this)), DeserializationListener(nullptr),
       OwnsDeserializationListener(false), SourceMgr(PP.getSourceManager()),
       FileMgr(PP.getFileManager()), PCHContainerRdr(PCHContainerRdr),
@@ -8511,6 +8681,18 @@ ASTReader::ASTReader(Preprocessor &PP, ASTContext &Context,
       TotalModulesSizeInBits(0), NumCurrentElementsDeserializing(0),
       PassingDeclsToConsumer(false), ReadingKind(Read_None) {
   SourceMgr.setExternalSLocEntrySource(this);
+
+  for (const auto &Ext : Extensions) {
+    auto BlockName = Ext->getExtensionMetadata().BlockName;
+    auto Known = ModuleFileExtensions.find(BlockName);
+    if (Known != ModuleFileExtensions.end()) {
+      Diags.Report(diag::warn_duplicate_module_file_extension)
+        << BlockName;
+      continue;
+    }
+
+    ModuleFileExtensions.insert({BlockName, Ext});
+  }
 }
 
 ASTReader::~ASTReader() {

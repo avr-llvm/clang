@@ -197,9 +197,6 @@ public:
 
   bool shouldVisitTemplateInstantiations() const { return true; }
   bool shouldVisitImplicitCode() const { return true; }
-  // Disables data recursion. We intercept Traverse* methods in the RAV, which
-  // are not triggered during data recursion.
-  bool shouldUseDataRecursionFor(clang::Stmt *S) const { return false; }
 
 private:
   // Used for updating the depth during traversal.
@@ -487,9 +484,6 @@ public:
 
   bool shouldVisitTemplateInstantiations() const { return true; }
   bool shouldVisitImplicitCode() const { return true; }
-  // Disables data recursion. We intercept Traverse* methods in the RAV, which
-  // are not triggered during data recursion.
-  bool shouldUseDataRecursionFor(clang::Stmt *S) const { return false; }
 
 private:
   class TimeBucketRegion {
@@ -621,9 +615,6 @@ private:
     if (Node.get<TranslationUnitDecl>() ==
         ActiveASTContext->getTranslationUnitDecl())
       return false;
-    assert(Node.getMemoizationData() &&
-           "Invariant broken: only nodes that support memoization may be "
-           "used in the parent map.");
 
     MatchKey Key;
     Key.MatcherID = Matcher.getID();
@@ -867,7 +858,11 @@ bool MatchASTVisitor::TraverseNestedNameSpecifier(NestedNameSpecifier *NNS) {
 
 bool MatchASTVisitor::TraverseNestedNameSpecifierLoc(
     NestedNameSpecifierLoc NNS) {
+  if (!NNS)
+    return true;
+
   match(NNS);
+
   // We only match the nested name specifier here (as opposed to traversing it)
   // because the traversal is already done in the parallel "Loc"-hierarchy.
   if (NNS.hasQualifier())

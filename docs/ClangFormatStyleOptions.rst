@@ -150,16 +150,37 @@ the configuration (without a prefix: ``Auto``).
 **AccessModifierOffset** (``int``)
   The extra indent or outdent of access modifiers, e.g. ``public:``.
 
-**AlignAfterOpenBracket** (``bool``)
+**AlignAfterOpenBracket** (``BracketAlignmentStyle``)
   If ``true``, horizontally aligns arguments after an open bracket.
 
   This applies to round brackets (parentheses), angle brackets and square
   brackets. This will result in formattings like
 
-  .. code-block:: c++
+  Possible values:
 
-    someLongFunction(argument1,
-                     argument2);
+  * ``BAS_Align`` (in configuration: ``Align``)
+    Align parameters on the open bracket, e.g.:
+
+    .. code-block:: c++
+
+      someLongFunction(argument1,
+                       argument2);
+  * ``BAS_DontAlign`` (in configuration: ``DontAlign``)
+    Don't align, instead use ``ContinuationIndentWidth``, e.g.:
+
+    .. code-block:: c++
+
+      someLongFunction(argument1,
+          argument2);
+  * ``BAS_AlwaysBreak`` (in configuration: ``AlwaysBreak``)
+    Always break after an open bracket, if the parameters don't fit
+    on a single line, e.g.:
+
+    .. code-block:: c++
+
+      someLongFunction(
+          argument1, argument2);
+
 
 **AlignConsecutiveAssignments** (``bool``)
   If ``true``, aligns consecutive assignments.
@@ -233,7 +254,8 @@ the configuration (without a prefix: ``Auto``).
   single line.
 
 **AlwaysBreakAfterDefinitionReturnType** (``DefinitionReturnTypeBreakingStyle``)
-  The function definition return type breaking style to use.
+  The function definition return type breaking style to use.  This
+  option is deprecated and is retained for backwards compatibility.
 
   Possible values:
 
@@ -243,7 +265,25 @@ the configuration (without a prefix: ``Auto``).
   * ``DRTBS_All`` (in configuration: ``All``)
     Always break after the return type.
   * ``DRTBS_TopLevel`` (in configuration: ``TopLevel``)
-    Always break after the return types of top level functions.
+    Always break after the return types of top-level functions.
+
+
+**AlwaysBreakAfterReturnType** (``ReturnTypeBreakingStyle``)
+  The function declaration return type breaking style to use.
+
+  Possible values:
+
+  * ``RTBS_None`` (in configuration: ``None``)
+    Break after return type automatically.
+    ``PenaltyReturnTypeOnItsOwnLine`` is taken into account.
+  * ``RTBS_All`` (in configuration: ``All``)
+    Always break after the return type.
+  * ``RTBS_TopLevel`` (in configuration: ``TopLevel``)
+    Always break after the return types of top-level functions.
+  * ``RTBS_AllDefinitions`` (in configuration: ``AllDefinitions``)
+    Always break after the return type of function definitions.
+  * ``RTBS_TopLevelDefinitions`` (in configuration: ``TopLevelDefinitions``)
+    Always break after the return type of top-level definitions.
 
 
 **AlwaysBreakBeforeMultilineStrings** (``bool``)
@@ -286,6 +326,9 @@ the configuration (without a prefix: ``Auto``).
   * ``bool BeforeElse`` Wrap before ``else``.
   * ``bool IndentBraces`` Indent the wrapped braces themselves.
 
+
+**BreakAfterJavaFieldAnnotations** (``bool``)
+  Break after each annotation on a field in Java files.
 
 **BreakBeforeBinaryOperators** (``BinaryOperatorStyle``)
   The way to wrap binary operators.

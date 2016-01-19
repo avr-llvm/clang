@@ -833,7 +833,7 @@ protected:
   llvm::DenseMap<Selector, llvm::GlobalVariable*> MethodVarNames;
 
   /// DefinedCategoryNames - list of category names in form Class_Category.
-  llvm::SetVector<std::string> DefinedCategoryNames;
+  llvm::SmallSetVector<std::string, 16> DefinedCategoryNames;
 
   /// MethodVarTypes - uniqued method type signatures. We have to use
   /// a StringMap here because have no other unique reference.
@@ -1947,7 +1947,7 @@ CGObjCCommonMac::EmitMessageSend(CodeGen::CodeGenFunction &CGF,
   llvm::Instruction *CallSite;
   Fn = llvm::ConstantExpr::getBitCast(Fn, MSI.MessengerType);
   RValue rvalue = CGF.EmitCall(MSI.CallInfo, Fn, Return, ActualArgs,
-                               nullptr, &CallSite);
+                               CGCalleeInfo(), &CallSite);
 
   // Mark the call as noreturn if the method is marked noreturn and the
   // receiver cannot be null.
@@ -2081,7 +2081,7 @@ llvm::Constant *CGObjCCommonMac::BuildGCBlockLayout(CodeGenModule &CGM,
 
   llvm::SmallVector<unsigned char, 32> buffer;
   llvm::Constant *C = builder.buildBitmap(*this, buffer);
-  if (CGM.getLangOpts().ObjCGCBitmapPrint) {
+  if (CGM.getLangOpts().ObjCGCBitmapPrint && !buffer.empty()) {
     printf("\n block variable layout for block: ");
     builder.dump(buffer);
   }
@@ -2640,6 +2640,8 @@ llvm::Constant *CGObjCCommonMac::BuildByrefLayout(CodeGen::CodeGenModule &CGM,
   if (const RecordType *record = T->getAs<RecordType>()) {
     BuildRCBlockVarRecordLayout(record, fieldOffset, hasUnion, true /*ByrefLayout */);
     llvm::Constant *Result = getBitmapBlockLayout(true);
+    if (isa<llvm::ConstantInt>(Result))
+      Result = llvm::ConstantExpr::getIntToPtr(Result, CGM.Int8PtrTy);
     return Result;
   }
   llvm::Constant *nullPtr = llvm::Constant::getNullValue(CGM.Int8PtrTy);
@@ -2908,15 +2910,26 @@ llvm::Constant *CGObjCCommonMac::EmitPropertyList(Twine Name,
                                        const ObjCCommonTypesHelper &ObjCTypes) {
   SmallVector<llvm::Constant *, 16> Properties;
   llvm::SmallPtrSet<const IdentifierInfo*, 16> PropertySet;
+
+  auto AddProperty = [&](const ObjCPropertyDecl *PD) {
+    llvm::Constant *Prop[] = {GetPropertyName(PD->getIdentifier()),
+                              GetPropertyTypeString(PD, Container)};
+    Properties.push_back(llvm::ConstantStruct::get(ObjCTypes.PropertyTy, Prop));
+  };
+  if (const ObjCInterfaceDecl *OID = dyn_cast<ObjCInterfaceDecl>(OCD))
+    for (const ObjCCategoryDecl *ClassExt : OID->known_extensions())
+      for (auto *PD : ClassExt->properties()) {
+        PropertySet.insert(PD->getIdentifier());
+        AddProperty(PD);
+      }
   for (const auto *PD : OCD->properties()) {
-    PropertySet.insert(PD->getIdentifier());
-    llvm::Constant *Prop[] = {
-      GetPropertyName(PD->getIdentifier()),
-      GetPropertyTypeString(PD, Container)
-    };
-    Properties.push_back(llvm::ConstantStruct::get(ObjCTypes.PropertyTy,
-                                                   Prop));
+    // Don't emit duplicate metadata for properties that were already in a
+    // class extension.
+    if (!PropertySet.insert(PD->getIdentifier()).second)
+      continue;
+    AddProperty(PD);
   }
+
   if (const ObjCInterfaceDecl *OID = dyn_cast<ObjCInterfaceDecl>(OCD)) {
     for (const auto *P : OID->all_referenced_protocols())
       PushProtocolProperties(PropertySet, Properties, Container, P, ObjCTypes);
@@ -4135,7 +4148,7 @@ void CGObjCMac::EmitTryOrSynchronizedStmt(CodeGen::CodeGenFunction &CGF,
           assert(CGF.HaveInsertPoint() && "DeclStmt destroyed insert point?");
 
           // These types work out because ConvertType(id) == i8*.
-          CGF.Builder.CreateStore(Caught, CGF.GetAddrOfLocalVar(CatchParam));
+          EmitInitOfCatchParam(CGF, Caught, CatchParam);
         }
 
         CGF.EmitStmt(CatchStmt->getCatchBody());
@@ -4182,7 +4195,7 @@ void CGObjCMac::EmitTryOrSynchronizedStmt(CodeGen::CodeGenFunction &CGF,
       llvm::Value *Tmp =
         CGF.Builder.CreateBitCast(Caught,
                                   CGF.ConvertType(CatchParam->getType()));
-      CGF.Builder.CreateStore(Tmp, CGF.GetAddrOfLocalVar(CatchParam));
+      EmitInitOfCatchParam(CGF, Tmp, CatchParam);
 
       CGF.EmitStmt(CatchStmt->getCatchBody());
 
@@ -4489,7 +4502,7 @@ void CGObjCCommonMac::EmitImageInfo() {
 
   // Indicate whether we're compiling this to run on a simulator.
   const llvm::Triple &Triple = CGM.getTarget().getTriple();
-  if (Triple.isiOS() &&
+  if ((Triple.isiOS() || Triple.isWatchOS()) &&
       (Triple.getArch() == llvm::Triple::x86 ||
        Triple.getArch() == llvm::Triple::x86_64))
     Mod.addModuleFlag(llvm::Module::Error, "Objective-C Is Simulated",
@@ -4757,11 +4770,7 @@ llvm::Constant *IvarLayoutBuilder::buildBitmap(CGObjCCommonMac &CGObjC,
     // This isn't a stable sort, but our algorithm should handle it fine.
     llvm::array_pod_sort(IvarsInfo.begin(), IvarsInfo.end());
   } else {
-#ifndef NDEBUG
-    for (unsigned i = 1; i != IvarsInfo.size(); ++i) {
-      assert(IvarsInfo[i - 1].Offset <= IvarsInfo[i].Offset);
-    }
-#endif
+    assert(std::is_sorted(IvarsInfo.begin(), IvarsInfo.end()));
   }
   assert(IvarsInfo.back().Offset < InstanceEnd);
 
@@ -4861,6 +4870,9 @@ llvm::Constant *IvarLayoutBuilder::buildBitmap(CGObjCCommonMac &CGObjC,
     endOfLastScanInWords = endOfScanInWords;
   }
 
+  if (buffer.empty())
+    return llvm::ConstantPointerNull::get(CGM.Int8PtrTy);
+
   // For GC layouts, emit a skip to the end of the allocation so that we
   // have precise information about the entire thing.  This isn't useful
   // or necessary for the ARC-style layout strings.
@@ -4922,9 +4934,9 @@ CGObjCCommonMac::BuildIvarLayout(const ObjCImplementationDecl *OMD,
   // up.
   //
   // ARC layout strings only include the class's ivars.  In non-fragile
-  // runtimes, that means starting at InstanceStart.  In fragile runtimes,
-  // there's no InstanceStart, so it means starting at the end of the
-  // superclass, rounded up to word alignment.
+  // runtimes, that means starting at InstanceStart, rounded up to word
+  // alignment.  In fragile runtimes, there's no InstanceStart, so it means
+  // starting at the offset of the first ivar, rounded up to word alignment.
   //
   // MRC weak layout strings follow the ARC style.
   CharUnits baseOffset;
@@ -4935,13 +4947,14 @@ CGObjCCommonMac::BuildIvarLayout(const ObjCImplementationDecl *OMD,
 
     if (isNonFragileABI()) {
       baseOffset = beginOffset; // InstanceStart
-    } else if (auto superClass = OI->getSuperClass()) {
-      auto startOffset =
-        CGM.getContext().getASTObjCInterfaceLayout(superClass).getSize();
-      baseOffset = startOffset.RoundUpToAlignment(CGM.getPointerAlign());
+    } else if (!ivars.empty()) {
+      baseOffset =
+        CharUnits::fromQuantity(ComputeIvarBaseOffset(CGM, OMD, ivars[0]));
     } else {
       baseOffset = CharUnits::Zero();
     }
+
+    baseOffset = baseOffset.alignTo(CGM.getPointerAlign());
   }
   else {
     CGM.getContext().DeepCollectObjCIvars(OI, true, ivars);
@@ -4965,7 +4978,7 @@ CGObjCCommonMac::BuildIvarLayout(const ObjCImplementationDecl *OMD,
   llvm::SmallVector<unsigned char, 4> buffer;
   llvm::Constant *C = builder.buildBitmap(*this, buffer);
   
-   if (CGM.getLangOpts().ObjCGCBitmapPrint) {
+   if (CGM.getLangOpts().ObjCGCBitmapPrint && !buffer.empty()) {
     printf("\n%s ivar layout for class '%s': ",
            ForStrongLayout ? "strong" : "weak",
            OMD->getClassInterface()->getName().str().c_str());
@@ -5897,7 +5910,8 @@ void CGObjCNonFragileABIMac::GenerateClass(const ObjCImplementationDecl *ID) {
     // Make this entry NULL for any iOS device target, any iOS simulator target,
     // OS X with deployment target 10.9 or later.
     const llvm::Triple &Triple = CGM.getTarget().getTriple();
-    if (Triple.isiOS() || (Triple.isMacOSX() && !Triple.isMacOSXVersionLT(10, 9)))
+    if (Triple.isiOS() || Triple.isWatchOS() ||
+        (Triple.isMacOSX() && !Triple.isMacOSXVersionLT(10, 9)))
       // This entry will be null.
       ObjCEmptyVtableVar = nullptr;
     else
@@ -7219,6 +7233,7 @@ CodeGen::CreateMacObjCRuntime(CodeGen::CodeGenModule &CGM) {
 
   case ObjCRuntime::MacOSX:
   case ObjCRuntime::iOS:
+  case ObjCRuntime::WatchOS:
     return new CGObjCNonFragileABIMac(CGM);
 
   case ObjCRuntime::GNUstep:

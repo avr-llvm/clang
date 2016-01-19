@@ -91,7 +91,8 @@ GeneratePCHAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   auto Buffer = std::make_shared<PCHBuffer>();
   std::vector<std::unique_ptr<ASTConsumer>> Consumers;
   Consumers.push_back(llvm::make_unique<PCHGenerator>(
-      CI.getPreprocessor(), OutputFile, nullptr, Sysroot, Buffer));
+                        CI.getPreprocessor(), OutputFile, nullptr, Sysroot,
+                        Buffer, CI.getFrontendOpts().ModuleFileExtensions));
   Consumers.push_back(CI.getPCHContainerWriter().CreatePCHContainerGenerator(
       CI, InFile, OutputFile, OS, Buffer));
 
@@ -133,10 +134,13 @@ GenerateModuleAction::CreateASTConsumer(CompilerInstance &CI,
 
   auto Buffer = std::make_shared<PCHBuffer>();
   std::vector<std::unique_ptr<ASTConsumer>> Consumers;
+
   Consumers.push_back(llvm::make_unique<PCHGenerator>(
-      CI.getPreprocessor(), OutputFile, Module, Sysroot, Buffer,
-      /*AllowASTWithErrors*/false,
-      /*IncludeTimestamps*/+CI.getFrontendOpts().BuildingImplicitModule));
+                        CI.getPreprocessor(), OutputFile, Module, Sysroot,
+                        Buffer, CI.getFrontendOpts().ModuleFileExtensions,
+                        /*AllowASTWithErrors=*/false,
+                        /*IncludeTimestamps=*/
+                          +CI.getFrontendOpts().BuildingImplicitModule));
   Consumers.push_back(CI.getPCHContainerWriter().CreatePCHContainerGenerator(
       CI, InFile, OutputFile, OS, Buffer));
   return llvm::make_unique<MultiplexConsumer>(std::move(Consumers));
@@ -183,15 +187,17 @@ collectModuleHeaderIncludes(const LangOptions &LangOpts, FileManager &FileMgr,
     return std::error_code();
 
   // Add includes for each of these headers.
-  for (Module::Header &H : Module->Headers[Module::HK_Normal]) {
-    Module->addTopHeader(H.Entry);
-    // Use the path as specified in the module map file. We'll look for this
-    // file relative to the module build directory (the directory containing
-    // the module map file) so this will find the same file that we found
-    // while parsing the module map.
-    if (std::error_code Err = addHeaderInclude(H.NameAsWritten, Includes,
-                                               LangOpts, Module->IsExternC))
-      return Err;
+  for (auto HK : {Module::HK_Normal, Module::HK_Private}) {
+    for (Module::Header &H : Module->Headers[HK]) {
+      Module->addTopHeader(H.Entry);
+      // Use the path as specified in the module map file. We'll look for this
+      // file relative to the module build directory (the directory containing
+      // the module map file) so this will find the same file that we found
+      // while parsing the module map.
+      if (std::error_code Err = addHeaderInclude(H.NameAsWritten, Includes,
+                                                 LangOpts, Module->IsExternC))
+        return Err;
+    }
   }
   // Note that Module->PrivateHeaders will not be a TopHeader.
 
@@ -273,6 +279,17 @@ bool GenerateModuleAction::BeginSourceFileAction(CompilerInstance &CI,
     return false;
   }
   
+  // Set up embedding for any specified files. Do this before we load any
+  // source files, including the primary module map for the compilation.
+  for (const auto &F : CI.getFrontendOpts().ModulesEmbedFiles) {
+    if (const auto *FE = CI.getFileManager().getFile(F, /*openFile*/true))
+      CI.getSourceManager().setFileIsTransient(FE);
+    else
+      CI.getDiagnostics().Report(diag::err_modules_embed_file_not_found) << F;
+  }
+  if (CI.getFrontendOpts().ModulesEmbedAllFiles)
+    CI.getSourceManager().setAllFilesAreTransient(true);
+
   // Parse the module map file.
   HeaderSearch &HS = CI.getPreprocessor().getHeaderSearchInfo();
   if (HS.loadModuleMapFile(ModuleMap, IsSystem))
@@ -286,14 +303,6 @@ bool GenerateModuleAction::BeginSourceFileAction(CompilerInstance &CI,
     // default. Then it would be fairly trivial to just "compile" a module
     // map with a single module (the common case).
     return false;
-  }
-
-  // Set up embedding for any specified files.
-  for (const auto &F : CI.getFrontendOpts().ModulesEmbedFiles) {
-    if (const auto *FE = CI.getFileManager().getFile(F, /*openFile*/true))
-      CI.getSourceManager().embedFileContentsInModule(FE);
-    else
-      CI.getDiagnostics().Report(diag::err_modules_embed_file_not_found) << F;
   }
 
   // If we're being run from the command-line, the module build stack will not
@@ -421,6 +430,7 @@ void VerifyPCHAction::ExecuteAction() {
   const std::string &Sysroot = CI.getHeaderSearchOpts().Sysroot;
   std::unique_ptr<ASTReader> Reader(new ASTReader(
       CI.getPreprocessor(), CI.getASTContext(), CI.getPCHContainerReader(),
+      CI.getFrontendOpts().ModuleFileExtensions,
       Sysroot.empty() ? "" : Sysroot.c_str(),
       /*DisableValidation*/ false,
       /*AllowPCHWithCompilerErrors*/ false,
@@ -564,6 +574,20 @@ namespace {
       }
       return false;
     }
+
+    /// Indicates that a particular module file extension has been read.
+    void readModuleFileExtension(
+           const ModuleFileExtensionMetadata &Metadata) override {
+      Out.indent(2) << "Module file extension '"
+                    << Metadata.BlockName << "' " << Metadata.MajorVersion
+                    << "." << Metadata.MinorVersion;
+      if (!Metadata.UserInfo.empty()) {
+        Out << ": ";
+        Out.write_escaped(Metadata.UserInfo);
+      }
+
+      Out << "\n";
+    }
 #undef DUMP_BOOLEAN
   };
 }
@@ -583,7 +607,8 @@ void DumpModuleInfoAction::ExecuteAction() {
   DumpModuleInfoListener Listener(Out);
   ASTReader::readASTFileControlBlock(
       getCurrentFile(), getCompilerInstance().getFileManager(),
-      getCompilerInstance().getPCHContainerReader(), Listener);
+      getCompilerInstance().getPCHContainerReader(),
+      /*FindModuleFileExtensions=*/true, Listener);
 }
 
 //===----------------------------------------------------------------------===//

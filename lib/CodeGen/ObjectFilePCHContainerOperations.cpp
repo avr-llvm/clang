@@ -59,8 +59,10 @@ class PCHContainerGenerator : public ASTConsumer {
   struct DebugTypeVisitor : public RecursiveASTVisitor<DebugTypeVisitor> {
     clang::CodeGen::CGDebugInfo &DI;
     ASTContext &Ctx;
-    DebugTypeVisitor(clang::CodeGen::CGDebugInfo &DI, ASTContext &Ctx)
-        : DI(DI), Ctx(Ctx) {}
+    bool SkipTagDecls;
+    DebugTypeVisitor(clang::CodeGen::CGDebugInfo &DI, ASTContext &Ctx,
+                     bool SkipTagDecls)
+        : DI(DI), Ctx(Ctx), SkipTagDecls(SkipTagDecls) {}
 
     /// Determine whether this type can be represented in DWARF.
     static bool CanRepresent(const Type *Ty) {
@@ -75,6 +77,12 @@ class PCHContainerGenerator : public ASTConsumer {
     }
 
     bool VisitTypeDecl(TypeDecl *D) {
+      // TagDecls may be deferred until after all decls have been merged and we
+      // know the complete type. Pure forward declarations will be skipped, but
+      // they don't need to be emitted into the module anyway.
+      if (SkipTagDecls && isa<TagDecl>(D))
+          return true;
+
       QualType QualTy = Ctx.getTypeDeclType(D);
       if (!QualTy.isNull() && CanRepresent(QualTy.getTypePtr()))
         DI.getOrCreateStandaloneType(QualTy, D->getLocation());
@@ -159,23 +167,31 @@ public:
   }
 
   bool HandleTopLevelDecl(DeclGroupRef D) override {
-    if (Diags.hasErrorOccurred() ||
-        (CodeGenOpts.getDebugInfo() == CodeGenOptions::NoDebugInfo))
+    if (Diags.hasErrorOccurred())
       return true;
 
     // Collect debug info for all decls in this group.
     for (auto *I : D)
       if (!I->isFromASTFile()) {
-        DebugTypeVisitor DTV(*Builder->getModuleDebugInfo(), *Ctx);
+        DebugTypeVisitor DTV(*Builder->getModuleDebugInfo(), *Ctx, true);
         DTV.TraverseDecl(I);
       }
     return true;
+  }
+
+  void HandleTopLevelDeclInObjCContainer(DeclGroupRef D) override {
+    HandleTopLevelDecl(D);
   }
 
   void HandleTagDeclDefinition(TagDecl *D) override {
     if (Diags.hasErrorOccurred())
       return;
 
+    if (D->isFromASTFile())
+      return;
+
+    DebugTypeVisitor DTV(*Builder->getModuleDebugInfo(), *Ctx, false);
+    DTV.TraverseDecl(D);
     Builder->UpdateCompletedType(D);
   }
 

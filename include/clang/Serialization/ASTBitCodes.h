@@ -241,6 +241,9 @@ namespace clang {
       ///
       /// This block is part of the control block.
       OPTIONS_BLOCK_ID,
+
+      /// \brief A block containing a module file extension.
+      EXTENSION_BLOCK_ID,
     };
 
     /// \brief Record types that occur within the control block.
@@ -308,6 +311,15 @@ namespace clang {
 
       /// \brief Record code for the preprocessor options table.
       PREPROCESSOR_OPTIONS,
+    };
+
+    /// \brief Record code for extension blocks.
+    enum ExtensionBlockRecordTypes {
+      /// Metadata describing this particular extension.
+      EXTENSION_METADATA = 1,
+
+      /// The first record ID allocated to the extensions themselves.
+      FIRST_EXTENSION_RECORD_ID = 4
     };
 
     /// \brief Record types that occur within the input-files block
@@ -895,7 +907,9 @@ namespace clang {
       /// \brief A DecayedType record.
       TYPE_DECAYED               = 41,
       /// \brief An AdjustedType record.
-      TYPE_ADJUSTED              = 42
+      TYPE_ADJUSTED              = 42,
+      /// \brief A PipeType record.
+      TYPE_PIPE                  = 43
     };
 
     /// \brief The type IDs for special types constructed by semantic
@@ -970,13 +984,16 @@ namespace clang {
 
       /// \brief The extern "C" context.
       PREDEF_DECL_EXTERN_C_CONTEXT_ID = 12,
+
+      /// \brief The internal '__make_integer_seq' template.
+      PREDEF_DECL_MAKE_INTEGER_SEQ_ID = 13,
     };
 
     /// \brief The number of declaration IDs that are predefined.
     ///
     /// For more information about predefined declarations, see the
     /// \c PredefinedDeclIDs type and the PREDEF_DECL_*_ID constants.
-    const unsigned int NUM_PREDEF_DECL_IDS = 13;
+    const unsigned int NUM_PREDEF_DECL_IDS = 14;
 
     /// \brief Record code for a list of local redeclarations of a declaration.
     const unsigned int LOCAL_REDECLARATIONS = 50;
@@ -1398,6 +1415,7 @@ namespace clang {
 
       // Microsoft
       EXPR_CXX_PROPERTY_REF_EXPR, // MSPropertyRefExpr
+      EXPR_CXX_PROPERTY_SUBSCRIPT_EXPR, // MSPropertySubscriptExpr
       EXPR_CXX_UUIDOF_EXPR,       // CXXUuidofExpr (of expr).
       EXPR_CXX_UUIDOF_TYPE,       // CXXUuidofExpr (of type).
       STMT_SEH_LEAVE,             // SEHLeaveStmt
@@ -1431,6 +1449,9 @@ namespace clang {
       STMT_OMP_TASKGROUP_DIRECTIVE,
       STMT_OMP_CANCELLATION_POINT_DIRECTIVE,
       STMT_OMP_CANCEL_DIRECTIVE,
+      STMT_OMP_TASKLOOP_DIRECTIVE,
+      STMT_OMP_TASKLOOP_SIMD_DIRECTIVE,
+      STMT_OMP_DISTRIBUTE_DIRECTIVE,
       EXPR_OMP_ARRAY_SECTION,
 
       // ARC
