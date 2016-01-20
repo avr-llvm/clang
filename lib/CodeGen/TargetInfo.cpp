@@ -5946,28 +5946,30 @@ namespace {
 }
 
 void AVRTargetCodeGenInfo::setTargetAttributes(const Decl *D,
-                                                  llvm::GlobalValue *GV,
-                                                  CodeGen::CodeGenModule &M) const {
-    if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D)) {
-        const AVRSignalAttr *attr = FD->getAttr<AVRSignalAttr>();
+                                               llvm::GlobalValue *GV,
+                                               CodeGen::CodeGenModule &M) const {
+  const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(D);
 
-        if (attr) {
-            // Handle 'interrupt' attribute:
-            llvm::Function *F = cast<llvm::Function>(GV);
+  if (FD) {
+    const AVRSignalAttr *attr = FD->getAttr<AVRSignalAttr>();
 
-            // Step 1: Set ISR calling convention.
-            F->setCallingConv(llvm::CallingConv::AVR_SIGNAL);
+    if (attr) {
+      // Handle 'interrupt' attribute:
+      llvm::Function *F = cast<llvm::Function>(GV);
 
-            // Step 2: Add attributes goodness.
-            F->addFnAttr(llvm::Attribute::NoInline);
+      // Step 1: Set ISR calling convention.
+      F->setCallingConv(llvm::CallingConv::AVR_SIGNAL);
 
-            // TODO : need to create alias?
+      // Step 2: Add attributes goodness.
+      F->addFnAttr(llvm::Attribute::NoInline);
 
-            // Step 3: Emit ISR vector alias.
-            // llvm::GlobalAlias::create(llvm::Function::ExternalLinkage,
-            // "__isr_" + F->getName(), F);
-        }
+      // TODO : need to create alias?
+
+      // Step 3: Emit ISR vector alias.
+      // llvm::GlobalAlias::create(llvm::Function::ExternalLinkage,
+      // "__isr_" + F->getName(), F);
     }
+  }
 }
 
 //===----------------------------------------------------------------------===//
