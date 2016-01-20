@@ -856,6 +856,7 @@ enum AttributeDeclKind {
   ExpectedObjectiveCInterfaceOrProtocol,
   ExpectedKernelFunction,
   ExpectedFunctionWithProtoType,
+  ExpectedVariableFieldOrTypedef,
   ExpectedVarGlobalVarOrTypedef
 };
 
