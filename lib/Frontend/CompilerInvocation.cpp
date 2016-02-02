@@ -1528,6 +1528,9 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   if (Args.hasArg(OPT_fcuda_target_overloads))
     Opts.CUDATargetOverloads = 1;
 
+  if (Args.hasArg(OPT_fcuda_allow_variadic_functions))
+    Opts.CUDAAllowVariadicFunctions = 1;
+
   if (Opts.ObjC1) {
     if (Arg *arg = Args.getLastArg(OPT_fobjc_runtime_EQ)) {
       StringRef value = arg->getValue();
@@ -1673,7 +1676,7 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.SjLjExceptions = Args.hasArg(OPT_fsjlj_exceptions);
   Opts.TraditionalCPP = Args.hasArg(OPT_traditional_cpp);
 
-  Opts.RTTI = !Args.hasArg(OPT_fno_rtti);
+  Opts.RTTI = Opts.CPlusPlus && !Args.hasArg(OPT_fno_rtti);
   Opts.RTTIData = Opts.RTTI && !Args.hasArg(OPT_fno_rtti_data);
   Opts.Blocks = Args.hasArg(OPT_fblocks);
   Opts.BlocksRuntimeOptional = Args.hasArg(OPT_fblocks_runtime_optional);

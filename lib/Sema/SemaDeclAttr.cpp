@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Sema/SemaInternal.h"
+#include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/CXXInheritance.h"
 #include "clang/AST/DeclCXX.h"
@@ -1556,6 +1557,9 @@ static void handleAliasAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   if (S.Context.getTargetInfo().getTriple().isOSDarwin()) {
     S.Diag(Attr.getLoc(), diag::err_alias_not_supported_on_darwin);
     return;
+  }
+  if (S.Context.getTargetInfo().getTriple().isNVPTX()) {
+    S.Diag(Attr.getLoc(), diag::err_alias_not_supported_on_nvptx);
   }
 
   // Aliases should be on declarations, not definitions.
@@ -4435,8 +4439,10 @@ static void handleMSInheritanceAttr(Sema &S, Decl *D, const AttributeList &Attr)
       D, Attr.getRange(), /*BestCase=*/true,
       Attr.getAttributeSpellingListIndex(),
       (MSInheritanceAttr::Spelling)Attr.getSemanticSpelling());
-  if (IA)
+  if (IA) {
     D->addAttr(IA);
+    S.Consumer.AssignInheritanceModel(cast<CXXRecordDecl>(D));
+  }
 }
 
 static void handleDeclspecThreadAttr(Sema &S, Decl *D,

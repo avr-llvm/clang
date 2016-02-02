@@ -2028,6 +2028,16 @@ TEST(Matcher, MatchesVirtualMethod) {
   EXPECT_TRUE(notMatches("class X { int f(); };", cxxMethodDecl(isVirtual())));
 }
 
+TEST(Matcher, MatchesVirtualAsWrittenMethod) {
+  EXPECT_TRUE(matches("class A { virtual int f(); };"
+                      "class B : public A { int f(); };",
+                      cxxMethodDecl(isVirtualAsWritten(), hasName("::A::f"))));
+  EXPECT_TRUE(
+      notMatches("class A { virtual int f(); };"
+                 "class B : public A { int f(); };",
+                 cxxMethodDecl(isVirtualAsWritten(), hasName("::B::f"))));
+}
+
 TEST(Matcher, MatchesPureMethod) {
   EXPECT_TRUE(matches("class X { virtual int f() = 0; };",
                       cxxMethodDecl(isPure(), hasName("::X::f"))));
@@ -2047,6 +2057,21 @@ TEST(Matcher, MatchesCopyAssignmentOperator) {
                       cxxMethodDecl(isCopyAssignmentOperator())));
   EXPECT_TRUE(notMatches("class X { X &operator=(X &&); };",
                       cxxMethodDecl(isCopyAssignmentOperator())));
+}
+
+TEST(Matcher, MatchesMoveAssignmentOperator) {
+  EXPECT_TRUE(notMatches("class X { X &operator=(X); };",
+                         cxxMethodDecl(isMoveAssignmentOperator())));
+  EXPECT_TRUE(matches("class X { X &operator=(X &&); };",
+                      cxxMethodDecl(isMoveAssignmentOperator())));
+  EXPECT_TRUE(matches("class X { X &operator=(const X &&); };",
+                      cxxMethodDecl(isMoveAssignmentOperator())));
+  EXPECT_TRUE(matches("class X { X &operator=(volatile X &&); };",
+                      cxxMethodDecl(isMoveAssignmentOperator())));
+  EXPECT_TRUE(matches("class X { X &operator=(const volatile X &&); };",
+                      cxxMethodDecl(isMoveAssignmentOperator())));
+  EXPECT_TRUE(notMatches("class X { X &operator=(X &); };",
+                         cxxMethodDecl(isMoveAssignmentOperator())));
 }
 
 TEST(Matcher, MatchesConstMethod) {
@@ -2973,6 +2998,10 @@ TEST(HasBody, FindsBodyOfForWhileDoLoops) {
               doStmt(hasBody(compoundStmt()))));
   EXPECT_TRUE(matches("void f() { int p[2]; for (auto x : p) {} }",
               cxxForRangeStmt(hasBody(compoundStmt()))));
+  EXPECT_TRUE(matches("void f() {}", functionDecl(hasBody(compoundStmt()))));
+  EXPECT_TRUE(notMatches("void f();", functionDecl(hasBody(compoundStmt()))));
+  EXPECT_TRUE(matches("void f(); void f() {}",
+                         functionDecl(hasBody(compoundStmt()))));
 }
 
 TEST(HasAnySubstatement, MatchesForTopLevelCompoundStatement) {
@@ -3667,6 +3696,14 @@ TEST(ExceptionHandling, SimpleCases) {
                          varDecl(isExceptionVariable())));
 }
 
+TEST(ParenExpression, SimpleCases) {
+  EXPECT_TRUE(matches("int i = (3);", parenExpr()));
+  EXPECT_TRUE(matches("int i = (3 + 7);", parenExpr()));
+  EXPECT_TRUE(notMatches("int i = 3;", parenExpr()));
+  EXPECT_TRUE(notMatches("int foo() { return 1; }; int a = foo();",
+                         parenExpr()));
+}
+
 TEST(HasConditionVariableStatement, DoesNotMatchCondition) {
   EXPECT_TRUE(notMatches(
       "void x() { if(true) {} }",
@@ -4193,6 +4230,14 @@ TEST(HasAncestor, MatchesAllAncestors) {
           allOf(
               hasAncestor(cxxRecordDecl(isTemplateInstantiation())),
               hasAncestor(cxxRecordDecl(unless(isTemplateInstantiation())))))));
+}
+
+TEST(HasAncestor, ImplicitArrayCopyCtorDeclRefExpr) {
+  EXPECT_TRUE(matches("struct MyClass {\n"
+                      "  int c[1];\n"
+                      "  static MyClass Create() { return MyClass(); }\n"
+                      "};",
+                      declRefExpr(to(decl(hasAncestor(decl()))))));
 }
 
 TEST(HasParent, MatchesAllParents) {

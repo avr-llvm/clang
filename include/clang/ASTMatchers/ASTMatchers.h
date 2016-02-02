@@ -1048,6 +1048,17 @@ const internal::VariadicDynCastAllOfMatcher<
   Decl,
   UnresolvedUsingTypenameDecl> unresolvedUsingTypenameDecl;
 
+/// \brief Matches parentheses used in expressions.
+///
+/// Example matches (foo() + 1)
+/// \code
+///   int foo() { return 1; }
+///   int a = (foo() + 1);
+/// \endcode
+const internal::VariadicDynCastAllOfMatcher<
+  Stmt,
+  ParenExpr> parenExpr;
+
 /// \brief Matches constructor call expressions (including implicit ones).
 ///
 /// Example matches string(ptr, n) and ptr within arguments of f
@@ -3178,8 +3189,8 @@ AST_MATCHER_P(ArraySubscriptExpr, hasBase,
   return false;
 }
 
-/// \brief Matches a 'for', 'while', or 'do while' statement that has
-/// a given body.
+/// \brief Matches a 'for', 'while', 'do while' statement or a function
+/// definition that has a given body.
 ///
 /// Given
 /// \code
@@ -3192,9 +3203,10 @@ AST_MATCHER_P(ArraySubscriptExpr, hasBase,
 AST_POLYMORPHIC_MATCHER_P(hasBody,
                           AST_POLYMORPHIC_SUPPORTED_TYPES(DoStmt, ForStmt,
                                                           WhileStmt,
-                                                          CXXForRangeStmt),
+                                                          CXXForRangeStmt,
+                                                          FunctionDecl),
                           internal::Matcher<Stmt>, InnerMatcher) {
-  const Stmt *const Statement = Node.getBody();
+  const Stmt *const Statement = internal::GetBodyMatcher<NodeType>::get(Node);
   return (Statement != nullptr &&
           InnerMatcher.matches(*Statement, Finder, Builder));
 }
@@ -3479,6 +3491,24 @@ AST_MATCHER(CXXMethodDecl, isVirtual) {
   return Node.isVirtual();
 }
 
+/// \brief Matches if the given method declaration has an explicit "virtual".
+///
+/// Given
+/// \code
+///   class A {
+///    public:
+///     virtual void x();
+///   };
+///   class B : public A {
+///    public:
+///     void x();
+///   };
+/// \endcode
+///   matches A::x but not B::x
+AST_MATCHER(CXXMethodDecl, isVirtualAsWritten) {
+  return Node.isVirtualAsWritten();
+}
+
 /// \brief Matches if the given method or class declaration is final.
 ///
 /// Given:
@@ -3544,6 +3574,23 @@ AST_MATCHER(CXXMethodDecl, isConst) {
 /// the second one.
 AST_MATCHER(CXXMethodDecl, isCopyAssignmentOperator) {
   return Node.isCopyAssignmentOperator();
+}
+
+/// \brief Matches if the given method declaration declares a move assignment
+/// operator.
+///
+/// Given
+/// \code
+/// struct A {
+///   A &operator=(const A &);
+///   A &operator=(A &&);
+/// };
+/// \endcode
+///
+/// cxxMethodDecl(isMoveAssignmentOperator()) matches the second method but not
+/// the first one.
+AST_MATCHER(CXXMethodDecl, isMoveAssignmentOperator) {
+  return Node.isMoveAssignmentOperator();
 }
 
 /// \brief Matches if the given method declaration overrides another method.

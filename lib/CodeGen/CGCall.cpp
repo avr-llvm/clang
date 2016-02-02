@@ -3121,13 +3121,16 @@ CodeGenFunction::EmitCallOrInvoke(llvm::Value *Callee,
                                   ArrayRef<llvm::Value *> Args,
                                   const Twine &Name) {
   llvm::BasicBlock *InvokeDest = getInvokeDest();
+  SmallVector<llvm::OperandBundleDef, 1> BundleList;
+  getBundlesForFunclet(Callee, CurrentFuncletPad, BundleList);
 
   llvm::Instruction *Inst;
   if (!InvokeDest)
-    Inst = Builder.CreateCall(Callee, Args, Name);
+    Inst = Builder.CreateCall(Callee, Args, BundleList, Name);
   else {
     llvm::BasicBlock *ContBB = createBasicBlock("invoke.cont");
-    Inst = Builder.CreateInvoke(Callee, ContBB, InvokeDest, Args, Name);
+    Inst = Builder.CreateInvoke(Callee, ContBB, InvokeDest, Args, BundleList,
+                                Name);
     EmitBlock(ContBB);
   }
 
@@ -3538,6 +3541,11 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
 
   CS.setAttributes(Attrs);
   CS.setCallingConv(static_cast<llvm::CallingConv::ID>(CallingConv));
+
+  // Insert instrumentation or attach profile metadata at indirect call sites
+  if (!CS.getCalledFunction())
+    PGO.valueProfile(Builder, llvm::IPVK_IndirectCallTarget,
+                     CS.getInstruction(), Callee);
 
   // In ObjC ARC mode with no ObjC ARC exception safety, tell the ARC
   // optimizer it can aggressively ignore unwind edges.
