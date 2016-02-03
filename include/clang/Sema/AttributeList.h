@@ -856,8 +856,8 @@ enum AttributeDeclKind {
   ExpectedObjectiveCInterfaceOrProtocol,
   ExpectedKernelFunction,
   ExpectedFunctionWithProtoType,
-  ExpectedVariableFieldOrTypedef,
-  ExpectedVarGlobalVarOrTypedef
+  ExpectedVarGlobalVarOrTypedef,
+  ExpectedVariableEnumFieldOrTypedef
 };
 
 }  // end namespace clang
