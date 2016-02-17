@@ -324,6 +324,7 @@ void EmitAssemblyHelper::CreatePasses(FunctionInfoIndex *FunctionIndex) {
   PMBuilder.DisableUnitAtATime = !CodeGenOpts.UnitAtATime;
   PMBuilder.DisableUnrollLoops = !CodeGenOpts.UnrollLoops;
   PMBuilder.MergeFunctions = CodeGenOpts.MergeFunctions;
+  PMBuilder.PrepareForThinLTO = CodeGenOpts.EmitFunctionSummary;
   PMBuilder.PrepareForLTO = CodeGenOpts.PrepareForLTO;
   PMBuilder.RerollLoops = CodeGenOpts.RerollLoops;
 
@@ -333,7 +334,7 @@ void EmitAssemblyHelper::CreatePasses(FunctionInfoIndex *FunctionIndex) {
   // pipeline and pass down the in-memory function index.
   if (FunctionIndex) {
     PMBuilder.FunctionIndex = FunctionIndex;
-    PMBuilder.populateLTOPassManager(*MPM);
+    PMBuilder.populateThinLTOPassManager(*MPM);
     return;
   }
 
@@ -429,7 +430,7 @@ void EmitAssemblyHelper::CreatePasses(FunctionInfoIndex *FunctionIndex) {
       MPM->add(createStripSymbolsPass(true));
   }
 
-  if (CodeGenOpts.ProfileInstrGenerate) {
+  if (CodeGenOpts.hasProfileClangInstr()) {
     InstrProfOptions Options;
     Options.NoRedZone = CodeGenOpts.DisableRedZone;
     Options.InstrProfileOutput = CodeGenOpts.InstrProfileOutput;
@@ -558,19 +559,7 @@ TargetMachine *EmitAssemblyHelper::CreateTargetMachine(bool MustCreateTM) {
   Options.DataSections = CodeGenOpts.DataSections;
   Options.UniqueSectionNames = CodeGenOpts.UniqueSectionNames;
   Options.EmulatedTLS = CodeGenOpts.EmulatedTLS;
-  switch (CodeGenOpts.getDebuggerTuning()) {
-  case CodeGenOptions::DebuggerKindGDB:
-    Options.DebuggerTuning = llvm::DebuggerKind::GDB;
-    break;
-  case CodeGenOptions::DebuggerKindLLDB:
-    Options.DebuggerTuning = llvm::DebuggerKind::LLDB;
-    break;
-  case CodeGenOptions::DebuggerKindSCE:
-    Options.DebuggerTuning = llvm::DebuggerKind::SCE;
-    break;
-  default:
-    break;
-  }
+  Options.DebuggerTuning = CodeGenOpts.getDebuggerTuning();
 
   Options.MCOptions.MCRelaxAll = CodeGenOpts.RelaxAll;
   Options.MCOptions.MCSaveTempLabels = CodeGenOpts.SaveTempLabels;

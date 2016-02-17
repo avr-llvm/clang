@@ -250,7 +250,7 @@ bool ContinuationIndenter::mustBreak(const LineState &State) {
   // If the return type spans multiple lines, wrap before the function name.
   if ((Current.is(TT_FunctionDeclarationName) ||
        (Current.is(tok::kw_operator) && !Previous.is(tok::coloncolon))) &&
-      State.Stack.back().BreakBeforeParameter)
+      !Previous.is(tok::kw_template) && State.Stack.back().BreakBeforeParameter)
     return true;
 
   if (startsSegmentOfBuilderTypeCall(Current) &&
@@ -402,9 +402,9 @@ void ContinuationIndenter::addTokenOnCurrentLine(LineState &State, bool DryRun,
                (Previous.isNot(tok::lessless) || Previous.OperatorIndex != 0 ||
                 Previous.NextOperator)) ||
               Current.StartsBinaryExpression)) {
-    // Always indent relative to the RHS of the expression unless this is a
-    // simple assignment without binary expression on the RHS. Also indent
-    // relative to unary operators and the colons of constructor initializers.
+    // Indent relative to the RHS of the expression unless this is a simple
+    // assignment without binary expression on the RHS. Also indent relative to
+    // unary operators and the colons of constructor initializers.
     State.Stack.back().LastSpace = State.Column;
   } else if (Previous.is(TT_InheritanceColon)) {
     State.Stack.back().Indent = State.Column;
@@ -531,6 +531,12 @@ unsigned ContinuationIndenter::addTokenOnNewLine(LineState &State,
 
   if (!Current.isTrailingComment())
     State.Stack.back().LastSpace = State.Column;
+  if (Current.is(tok::lessless))
+    // If we are breaking before a "<<", we always want to indent relative to
+    // RHS. This is necessary only for "<<", as we special-case it and don't
+    // always indent relative to the RHS.
+    State.Stack.back().LastSpace += 3; // 3 -> width of "<< ".
+
   State.StartOfLineLevel = Current.NestingLevel;
   State.LowestLevelOnLine = Current.NestingLevel;
 
@@ -705,11 +711,15 @@ unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
   if (Current.is(TT_ArraySubscriptLSquare) &&
       State.Stack.back().StartOfArraySubscripts == 0)
     State.Stack.back().StartOfArraySubscripts = State.Column;
-  if ((Current.is(tok::question) && Style.BreakBeforeTernaryOperators) ||
-      (Current.getPreviousNonComment() && Current.isNot(tok::colon) &&
-       Current.getPreviousNonComment()->is(tok::question) &&
-       !Style.BreakBeforeTernaryOperators))
+  if (Style.BreakBeforeTernaryOperators && Current.is(tok::question))
     State.Stack.back().QuestionColumn = State.Column;
+  if (!Style.BreakBeforeTernaryOperators && Current.isNot(tok::colon)) {
+    const FormatToken *Previous = Current.Previous;
+    while (Previous && Previous->isTrailingComment())
+      Previous = Previous->Previous;
+    if (Previous && Previous->is(tok::question))
+      State.Stack.back().QuestionColumn = State.Column;
+  }
   if (!Current.opensScope() && !Current.closesScope())
     State.LowestLevelOnLine =
         std::min(State.LowestLevelOnLine, Current.NestingLevel);
@@ -859,7 +869,8 @@ void ContinuationIndenter::moveStatePastFakeLParens(LineState &State,
     //       ParameterToInnerFunction));
     if (*I > prec::Unknown)
       NewParenState.LastSpace = std::max(NewParenState.LastSpace, State.Column);
-    if (*I != prec::Conditional && !Current.is(TT_UnaryOperator))
+    if (*I != prec::Conditional && !Current.is(TT_UnaryOperator) &&
+        Style.AlignAfterOpenBracket != FormatStyle::BAS_DontAlign)
       NewParenState.StartOfFunctionCall = State.Column;
 
     // Always indent conditional expressions. Never indent expression where

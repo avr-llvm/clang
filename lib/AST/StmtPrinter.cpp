@@ -16,6 +16,7 @@
 #include "clang/AST/Attr.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
+#include "clang/AST/DeclOpenMP.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
@@ -663,9 +664,16 @@ void OMPClausePrinter::VisitOMPScheduleClause(OMPScheduleClause *Node) {
     OS << ": ";
   }
   OS << getOpenMPSimpleClauseTypeName(OMPC_schedule, Node->getScheduleKind());
-  if (Node->getChunkSize()) {
+  if (auto *E = Node->getChunkSize()) {
     OS << ", ";
-    Node->getChunkSize()->printPretty(OS, nullptr, Policy);
+    if (Node->getPreInitStmt()) {
+      cast<OMPCapturedExprDecl>(
+          cast<DeclRefExpr>(E->IgnoreImpCasts())->getDecl())
+          ->getInit()
+          ->IgnoreImpCasts()
+          ->printPretty(OS, nullptr, Policy);
+    } else
+      E->printPretty(OS, nullptr, Policy);
   }
   OS << ")";
 }
@@ -763,15 +771,16 @@ template<typename T>
 void OMPClausePrinter::VisitOMPClauseList(T *Node, char StartSym) {
   for (typename T::varlist_iterator I = Node->varlist_begin(),
                                     E = Node->varlist_end();
-         I != E; ++I) {
+       I != E; ++I) {
     assert(*I && "Expected non-null Stmt");
+    OS << (I == Node->varlist_begin() ? StartSym : ',');
     if (DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(*I)) {
-      OS << (I == Node->varlist_begin() ? StartSym : ',');
-      cast<NamedDecl>(DRE->getDecl())->printQualifiedName(OS);
-    } else {
-      OS << (I == Node->varlist_begin() ? StartSym : ',');
+      if (auto *CED = dyn_cast<OMPCapturedExprDecl>(DRE->getDecl()))
+        CED->getInit()->IgnoreImpCasts()->printPretty(OS, nullptr, Policy, 0);
+      else
+        DRE->getDecl()->printQualifiedName(OS);
+    } else
       (*I)->printPretty(OS, nullptr, Policy, 0);
-    }
   }
 }
 
@@ -913,9 +922,16 @@ void OMPClausePrinter::VisitOMPMapClause(OMPMapClause *Node) {
 void OMPClausePrinter::VisitOMPDistScheduleClause(OMPDistScheduleClause *Node) {
   OS << "dist_schedule(" << getOpenMPSimpleClauseTypeName(
                            OMPC_dist_schedule, Node->getDistScheduleKind());
-  if (Node->getChunkSize()) {
+  if (auto *E = Node->getChunkSize()) {
     OS << ", ";
-    Node->getChunkSize()->printPretty(OS, nullptr, Policy);
+    if (Node->getPreInitStmt()) {
+      cast<OMPCapturedExprDecl>(
+          cast<DeclRefExpr>(E->IgnoreImpCasts())->getDecl())
+          ->getInit()
+          ->IgnoreImpCasts()
+          ->printPretty(OS, nullptr, Policy);
+    } else
+      E->printPretty(OS, nullptr, Policy);
   }
   OS << ")";
 }
@@ -1089,6 +1105,12 @@ void StmtPrinter::VisitOMPTargetParallelDirective(
   PrintOMPExecutableDirective(Node);
 }
 
+void StmtPrinter::VisitOMPTargetParallelForDirective(
+    OMPTargetParallelForDirective *Node) {
+  Indent() << "#pragma omp target parallel for ";
+  PrintOMPExecutableDirective(Node);
+}
+
 void StmtPrinter::VisitOMPTeamsDirective(OMPTeamsDirective *Node) {
   Indent() << "#pragma omp teams ";
   PrintOMPExecutableDirective(Node);
@@ -1242,6 +1264,12 @@ void StmtPrinter::VisitCharacterLiteral(CharacterLiteral *Node) {
     OS << "'\\v'";
     break;
   default:
+    // A character literal might be sign-extended, which
+    // would result in an invalid \U escape sequence.
+    // FIXME: multicharacter literals such as '\xFF\xFF\xFF\xFF'
+    // are not correctly handled.
+    if ((value & ~0xFFu) == ~0xFFu && Node->getKind() == CharacterLiteral::Ascii)
+      value &= 0xFFu;
     if (value < 256 && isPrintable((unsigned char)value))
       OS << "'" << (char)value << "'";
     else if (value < 256)

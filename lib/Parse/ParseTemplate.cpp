@@ -855,8 +855,12 @@ bool Parser::ParseGreaterThanInTemplateList(SourceLocation &RAngleLoc,
       RemainingToken == tok::greater && PP.IsPreviousCachedToken(PrevTok)) {
     PrevTok.setKind(RemainingToken);
     PrevTok.setLength(1);
-    Token NewToks[] = {PrevTok, Tok};
-    PP.ReplacePreviousCachedToken(NewToks);
+    // Break tok::greatergreater into two tok::greater but only add the second
+    // one in case the client asks to consume the last token.
+    if (ConsumeLastToken)
+      PP.ReplacePreviousCachedToken({PrevTok, Tok});
+    else
+      PP.ReplacePreviousCachedToken({PrevTok});
   }
 
   if (!ConsumeLastToken) {
@@ -1365,7 +1369,7 @@ void Parser::ParseLateTemplatedFuncDef(LateParsedTemplate &LPT) {
   // Append the current token at the end of the new token stream so that it
   // doesn't get lost.
   LPT.Toks.push_back(Tok);
-  PP.EnterTokenStream(LPT.Toks.data(), LPT.Toks.size(), true, false);
+  PP.EnterTokenStream(LPT.Toks, true);
 
   // Consume the previously pushed token.
   ConsumeAnyToken(/*ConsumeCodeCompletionTok=*/true);

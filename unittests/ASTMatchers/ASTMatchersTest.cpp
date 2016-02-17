@@ -1479,6 +1479,14 @@ TEST(IsInteger, ReportsNoFalsePositives) {
                           to(varDecl(hasType(isInteger()))))))));
 }
 
+TEST(IsAnyPointer, MatchesPointers) {
+  EXPECT_TRUE(matches("int* i = nullptr;", varDecl(hasType(isAnyPointer()))));
+}
+
+TEST(IsAnyPointer, ReportsNoFalsePositives) {
+  EXPECT_TRUE(notMatches("int i = 0;", varDecl(hasType(isAnyPointer()))));
+}
+
 TEST(IsAnyCharacter, MatchesCharacters) {
   EXPECT_TRUE(matches("char i = 0;", varDecl(hasType(isAnyCharacter()))));
 }
@@ -2825,6 +2833,52 @@ TEST(Matcher, HasNameSupportsOuterClasses) {
   EXPECT_TRUE(
       notMatches("class A { class B { class C; }; };",
                  recordDecl(hasName("A+B::C"))));
+}
+
+TEST(Matcher, HasNameSupportsInlinedNamespaces) {
+  std::string code = "namespace a { inline namespace b { class C; } }";
+  EXPECT_TRUE(matches(code, recordDecl(hasName("a::b::C"))));
+  EXPECT_TRUE(matches(code, recordDecl(hasName("a::C"))));
+  EXPECT_TRUE(matches(code, recordDecl(hasName("::a::b::C"))));
+  EXPECT_TRUE(matches(code, recordDecl(hasName("::a::C"))));
+}
+
+TEST(Matcher, HasNameSupportsAnonymousNamespaces) {
+  std::string code = "namespace a { namespace { class C; } }";
+  EXPECT_TRUE(
+      matches(code, recordDecl(hasName("a::(anonymous namespace)::C"))));
+  EXPECT_TRUE(matches(code, recordDecl(hasName("a::C"))));
+  EXPECT_TRUE(
+      matches(code, recordDecl(hasName("::a::(anonymous namespace)::C"))));
+  EXPECT_TRUE(matches(code, recordDecl(hasName("::a::C"))));
+}
+
+TEST(Matcher, HasNameSupportsAnonymousOuterClasses) {
+  EXPECT_TRUE(matches("class A { class { class C; } x; };",
+                      recordDecl(hasName("A::(anonymous class)::C"))));
+  EXPECT_TRUE(matches("class A { class { class C; } x; };",
+                      recordDecl(hasName("::A::(anonymous class)::C"))));
+  EXPECT_FALSE(matches("class A { class { class C; } x; };",
+                       recordDecl(hasName("::A::C"))));
+  EXPECT_TRUE(matches("class A { struct { class C; } x; };",
+                      recordDecl(hasName("A::(anonymous struct)::C"))));
+  EXPECT_TRUE(matches("class A { struct { class C; } x; };",
+                      recordDecl(hasName("::A::(anonymous struct)::C"))));
+  EXPECT_FALSE(matches("class A { struct { class C; } x; };",
+                       recordDecl(hasName("::A::C"))));
+}
+
+TEST(Matcher, HasNameSupportsFunctionScope) {
+  std::string code =
+      "namespace a { void F(int a) { struct S { int m; }; int i; } }";
+  EXPECT_TRUE(matches(code, varDecl(hasName("i"))));
+  EXPECT_FALSE(matches(code, varDecl(hasName("F()::i"))));
+
+  EXPECT_TRUE(matches(code, fieldDecl(hasName("m"))));
+  EXPECT_TRUE(matches(code, fieldDecl(hasName("S::m"))));
+  EXPECT_TRUE(matches(code, fieldDecl(hasName("F(int)::S::m"))));
+  EXPECT_TRUE(matches(code, fieldDecl(hasName("a::F(int)::S::m"))));
+  EXPECT_TRUE(matches(code, fieldDecl(hasName("::a::F(int)::S::m"))));
 }
 
 TEST(Matcher, IsDefinition) {
@@ -4287,6 +4341,13 @@ TEST(HasAncestor, NonParmDependentTemplateParmVarDeclRefExpr) {
                       declRefExpr(to(decl(hasAncestor(decl()))))));
 }
 
+TEST(HasAncestor, AddressOfExplicitSpecializationFunction) {
+  EXPECT_TRUE(matches("template <class T> void f();\n"
+                      "template <> void f<int>();\n"
+                      "void (*get_f())() { return f<int>; }\n",
+                      declRefExpr(to(decl(hasAncestor(decl()))))));
+}
+
 TEST(HasParent, MatchesAllParents) {
   EXPECT_TRUE(matches(
       "template <typename T> struct C { static void f() { 42; } };"
@@ -5050,6 +5111,15 @@ TEST(MatchFinder, InterceptsEndOfTranslationUnit) {
   EXPECT_TRUE(VerifyCallback.Called);
 }
 
+TEST(Matcher, matchOverEntireASTContext) {
+  std::unique_ptr<ASTUnit> AST =
+      clang::tooling::buildASTFromCode("struct { int *foo; };");
+  ASSERT_TRUE(AST.get());
+  auto PT = selectFirst<PointerType>(
+      "x", match(pointerType().bind("x"), AST->getASTContext()));
+  EXPECT_NE(nullptr, PT);
+}
+
 TEST(EqualsBoundNodeMatcher, QualType) {
   EXPECT_TRUE(matches(
       "int i = 1;", varDecl(hasType(qualType().bind("type")),
@@ -5276,7 +5346,16 @@ TEST(ObjCMessageExprMatcher, SimpleExprs) {
       objcMessageExpr(matchesSelector("uppercase*"),
                       argumentCountIs(0)
                       )));
-  
+}
+
+TEST(NullPointerConstants, Basic) {
+  EXPECT_TRUE(matches("#define NULL ((void *)0)\n"
+                      "void *v1 = NULL;", expr(nullPointerConstant())));
+  EXPECT_TRUE(matches("void *v2 = nullptr;", expr(nullPointerConstant())));
+  EXPECT_TRUE(matches("void *v3 = __null;", expr(nullPointerConstant())));
+  EXPECT_TRUE(matches("char *cp = (char *)0;", expr(nullPointerConstant())));
+  EXPECT_TRUE(matches("int *ip = 0;", expr(nullPointerConstant())));
+  EXPECT_TRUE(notMatches("int i = 0;", expr(nullPointerConstant())));
 }
 
 } // end namespace ast_matchers

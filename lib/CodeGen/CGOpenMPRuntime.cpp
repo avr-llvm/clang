@@ -100,6 +100,7 @@ public:
         ThreadIDVar(ThreadIDVar) {
     assert(ThreadIDVar != nullptr && "No ThreadID in OpenMP region.");
   }
+
   /// \brief Get a variable or parameter for storing global thread id
   /// inside OpenMP construct.
   const VarDecl *getThreadIDVariable() const override { return ThreadIDVar; }
@@ -130,6 +131,7 @@ public:
         ThreadIDVar(ThreadIDVar) {
     assert(ThreadIDVar != nullptr && "No ThreadID in OpenMP region.");
   }
+
   /// \brief Get a variable or parameter for storing global thread id
   /// inside OpenMP construct.
   const VarDecl *getThreadIDVariable() const override { return ThreadIDVar; }
@@ -162,12 +164,14 @@ public:
       : CGOpenMPRegionInfo(InlinedRegion, CodeGen, Kind, HasCancel),
         OldCSI(OldCSI),
         OuterRegionInfo(dyn_cast_or_null<CGOpenMPRegionInfo>(OldCSI)) {}
+
   // \brief Retrieve the value of the context parameter.
   llvm::Value *getContextValue() const override {
     if (OuterRegionInfo)
       return OuterRegionInfo->getContextValue();
     llvm_unreachable("No context value for inlined OpenMP region");
   }
+
   void setContextValue(llvm::Value *V) override {
     if (OuterRegionInfo) {
       OuterRegionInfo->setContextValue(V);
@@ -175,6 +179,7 @@ public:
     }
     llvm_unreachable("No context value for inlined OpenMP region");
   }
+
   /// \brief Lookup the captured field decl for a variable.
   const FieldDecl *lookup(const VarDecl *VD) const override {
     if (OuterRegionInfo)
@@ -183,11 +188,13 @@ public:
     // captured variables, we can use the original one.
     return nullptr;
   }
+
   FieldDecl *getThisFieldDecl() const override {
     if (OuterRegionInfo)
       return OuterRegionInfo->getThisFieldDecl();
     return nullptr;
   }
+
   /// \brief Get a variable or parameter for storing global thread id
   /// inside OpenMP construct.
   const VarDecl *getThreadIDVariable() const override {
@@ -261,6 +268,7 @@ public:
     CGF.CapturedStmtInfo = new CGOpenMPInlinedRegionInfo(
         CGF.CapturedStmtInfo, CodeGen, Kind, HasCancel);
   }
+
   ~InlinedOpenMPRegionRAII() {
     // Restore original CapturedStmtInfo only if we're done with code emission.
     auto *OldCSI =
@@ -272,18 +280,10 @@ public:
 
 } // anonymous namespace
 
-static LValue emitLoadOfPointerLValue(CodeGenFunction &CGF, Address PtrAddr,
-                                      QualType Ty) {
-  AlignmentSource Source;
-  CharUnits Align = CGF.getNaturalPointeeTypeAlignment(Ty, &Source);
-  return CGF.MakeAddrLValue(Address(CGF.Builder.CreateLoad(PtrAddr), Align),
-                            Ty->getPointeeType(), Source);
-}
-
 LValue CGOpenMPRegionInfo::getThreadIDVariableLValue(CodeGenFunction &CGF) {
-  return emitLoadOfPointerLValue(CGF,
-                                 CGF.GetAddrOfLocalVar(getThreadIDVariable()),
-                                 getThreadIDVariable()->getType());
+  return CGF.EmitLoadOfPointerLValue(
+      CGF.GetAddrOfLocalVar(getThreadIDVariable()),
+      getThreadIDVariable()->getType()->castAs<PointerType>());
 }
 
 void CGOpenMPRegionInfo::EmitBody(CodeGenFunction &CGF, const Stmt * /*S*/) {
@@ -1387,6 +1387,7 @@ public:
     assert(CleanupArgs.size() == N);
     std::copy(CleanupArgs.begin(), CleanupArgs.end(), std::begin(Args));
   }
+
   void Emit(CodeGenFunction &CGF, Flags /*flags*/) override {
     if (!CGF.HaveInsertPoint())
       return;
@@ -1985,11 +1986,11 @@ bool CGOpenMPRuntime::OffloadEntriesInfoManagerTy::empty() const {
 void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::
     initializeTargetRegionEntryInfo(unsigned DeviceID, unsigned FileID,
                                     StringRef ParentName, unsigned LineNum,
-                                    unsigned ColNum, unsigned Order) {
+                                    unsigned Order) {
   assert(CGM.getLangOpts().OpenMPIsDevice && "Initialization of entries is "
                                              "only required for the device "
                                              "code generation.");
-  OffloadEntriesTargetRegion[DeviceID][FileID][ParentName][LineNum][ColNum] =
+  OffloadEntriesTargetRegion[DeviceID][FileID][ParentName][LineNum] =
       OffloadEntryInfoTargetRegion(Order, /*Addr=*/nullptr, /*ID=*/nullptr);
   ++OffloadingEntriesNum;
 }
@@ -1997,30 +1998,27 @@ void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::
 void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::
     registerTargetRegionEntryInfo(unsigned DeviceID, unsigned FileID,
                                   StringRef ParentName, unsigned LineNum,
-                                  unsigned ColNum, llvm::Constant *Addr,
-                                  llvm::Constant *ID) {
+                                  llvm::Constant *Addr, llvm::Constant *ID) {
   // If we are emitting code for a target, the entry is already initialized,
   // only has to be registered.
   if (CGM.getLangOpts().OpenMPIsDevice) {
-    assert(hasTargetRegionEntryInfo(DeviceID, FileID, ParentName, LineNum,
-                                    ColNum) &&
+    assert(hasTargetRegionEntryInfo(DeviceID, FileID, ParentName, LineNum) &&
            "Entry must exist.");
-    auto &Entry = OffloadEntriesTargetRegion[DeviceID][FileID][ParentName]
-                                            [LineNum][ColNum];
+    auto &Entry =
+        OffloadEntriesTargetRegion[DeviceID][FileID][ParentName][LineNum];
     assert(Entry.isValid() && "Entry not initialized!");
     Entry.setAddress(Addr);
     Entry.setID(ID);
     return;
   } else {
     OffloadEntryInfoTargetRegion Entry(OffloadingEntriesNum++, Addr, ID);
-    OffloadEntriesTargetRegion[DeviceID][FileID][ParentName][LineNum][ColNum] =
-        Entry;
+    OffloadEntriesTargetRegion[DeviceID][FileID][ParentName][LineNum] = Entry;
   }
 }
 
 bool CGOpenMPRuntime::OffloadEntriesInfoManagerTy::hasTargetRegionEntryInfo(
-    unsigned DeviceID, unsigned FileID, StringRef ParentName, unsigned LineNum,
-    unsigned ColNum) const {
+    unsigned DeviceID, unsigned FileID, StringRef ParentName,
+    unsigned LineNum) const {
   auto PerDevice = OffloadEntriesTargetRegion.find(DeviceID);
   if (PerDevice == OffloadEntriesTargetRegion.end())
     return false;
@@ -2033,11 +2031,8 @@ bool CGOpenMPRuntime::OffloadEntriesInfoManagerTy::hasTargetRegionEntryInfo(
   auto PerLine = PerParentName->second.find(LineNum);
   if (PerLine == PerParentName->second.end())
     return false;
-  auto PerColumn = PerLine->second.find(ColNum);
-  if (PerColumn == PerLine->second.end())
-    return false;
   // Fail if this entry is already registered.
-  if (PerColumn->second.getAddress() || PerColumn->second.getID())
+  if (PerLine->second.getAddress() || PerLine->second.getID())
     return false;
   return true;
 }
@@ -2049,8 +2044,7 @@ void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::actOnTargetRegionEntriesInfo(
     for (auto &F : D.second)
       for (auto &P : F.second)
         for (auto &L : P.second)
-          for (auto &C : L.second)
-            Action(D.first, F.first, P.first(), L.first, C.first, C.second);
+          Action(D.first, F.first, P.first(), L.first, L.second);
 }
 
 /// \brief Create a Ctor/Dtor-like function whose body is emitted through
@@ -2184,15 +2178,16 @@ CGOpenMPRuntime::createOffloadingBinaryDescriptorRegistration() {
   return RegFn;
 }
 
-void CGOpenMPRuntime::createOffloadEntry(llvm::Constant *Addr, StringRef Name,
-                                         uint64_t Size) {
+void CGOpenMPRuntime::createOffloadEntry(llvm::Constant *ID,
+                                         llvm::Constant *Addr, uint64_t Size) {
+  StringRef Name = Addr->getName();
   auto *TgtOffloadEntryType = cast<llvm::StructType>(
       CGM.getTypes().ConvertTypeForMem(getTgtOffloadEntryQTy()));
   llvm::LLVMContext &C = CGM.getModule().getContext();
   llvm::Module &M = CGM.getModule();
 
   // Make sure the address has the right type.
-  llvm::Constant *AddrPtr = llvm::ConstantExpr::getBitCast(Addr, CGM.VoidPtrTy);
+  llvm::Constant *AddrPtr = llvm::ConstantExpr::getBitCast(ID, CGM.VoidPtrTy);
 
   // Create constant string with the name.
   llvm::Constant *StrPtrInit = llvm::ConstantDataArray::getString(C, Name);
@@ -2217,7 +2212,6 @@ void CGOpenMPRuntime::createOffloadEntry(llvm::Constant *Addr, StringRef Name,
   // We can't have any padding between symbols, so we need to have 1-byte
   // alignment.
   Entry->setAlignment(1);
-  return;
 }
 
 void CGOpenMPRuntime::createOffloadEntriesAndInfoMetadata() {
@@ -2253,7 +2247,6 @@ void CGOpenMPRuntime::createOffloadEntriesAndInfoMetadata() {
   // Create function that emits metadata for each target region entry;
   auto &&TargetRegionMetadataEmitter = [&](
       unsigned DeviceID, unsigned FileID, StringRef ParentName, unsigned Line,
-      unsigned Column,
       OffloadEntriesInfoManagerTy::OffloadEntryInfoTargetRegion &E) {
     llvm::SmallVector<llvm::Metadata *, 32> Ops;
     // Generate metadata for target regions. Each entry of this metadata
@@ -2263,15 +2256,13 @@ void CGOpenMPRuntime::createOffloadEntriesAndInfoMetadata() {
     // - Entry 2 -> File ID of the file where the entry was identified.
     // - Entry 3 -> Mangled name of the function where the entry was identified.
     // - Entry 4 -> Line in the file where the entry was identified.
-    // - Entry 5 -> Column in the file where the entry was identified.
-    // - Entry 6 -> Order the entry was created.
+    // - Entry 5 -> Order the entry was created.
     // The first element of the metadata node is the kind.
     Ops.push_back(getMDInt(E.getKind()));
     Ops.push_back(getMDInt(DeviceID));
     Ops.push_back(getMDInt(FileID));
     Ops.push_back(getMDString(ParentName));
     Ops.push_back(getMDInt(Line));
-    Ops.push_back(getMDInt(Column));
     Ops.push_back(getMDInt(E.getOrder()));
 
     // Save this entry in the right position of the ordered entries array.
@@ -2291,7 +2282,7 @@ void CGOpenMPRuntime::createOffloadEntriesAndInfoMetadata() {
                 E)) {
       assert(CE->getID() && CE->getAddress() &&
              "Entry ID and Addr are invalid!");
-      createOffloadEntry(CE->getID(), CE->getAddress()->getName(), /*Size=*/0);
+      createOffloadEntry(CE->getID(), CE->getAddress(), /*Size=*/0);
     } else
       llvm_unreachable("Unsupported entry kind.");
   }
@@ -2346,7 +2337,7 @@ void CGOpenMPRuntime::loadOffloadInfoMetadata() {
       OffloadEntriesInfoManager.initializeTargetRegionEntryInfo(
           /*DeviceID=*/getMDInt(1), /*FileID=*/getMDInt(2),
           /*ParentName=*/getMDString(3), /*Line=*/getMDInt(4),
-          /*Column=*/getMDInt(5), /*Order=*/getMDInt(6));
+          /*Order=*/getMDInt(5));
       break;
     }
   }
@@ -2567,8 +2558,9 @@ emitProxyTaskFunction(CodeGenModule &CGM, SourceLocation Loc,
   // tt->task_data.shareds);
   auto *GtidParam = CGF.EmitLoadOfScalar(
       CGF.GetAddrOfLocalVar(&GtidArg), /*Volatile=*/false, KmpInt32Ty, Loc);
-  LValue TDBase = emitLoadOfPointerLValue(
-      CGF, CGF.GetAddrOfLocalVar(&TaskTypeArg), KmpTaskTWithPrivatesPtrQTy);
+  LValue TDBase = CGF.EmitLoadOfPointerLValue(
+      CGF.GetAddrOfLocalVar(&TaskTypeArg),
+      KmpTaskTWithPrivatesPtrQTy->castAs<PointerType>());
   auto *KmpTaskTWithPrivatesQTyRD =
       cast<RecordDecl>(KmpTaskTWithPrivatesQTy->getAsTagDecl());
   LValue Base =
@@ -2632,8 +2624,9 @@ static llvm::Value *emitDestructorsFunction(CodeGenModule &CGM,
   CGF.StartFunction(GlobalDecl(), KmpInt32Ty, DestructorFn, DestructorFnInfo,
                     Args);
 
-  LValue Base = emitLoadOfPointerLValue(
-      CGF, CGF.GetAddrOfLocalVar(&TaskTypeArg), KmpTaskTWithPrivatesPtrQTy);
+  LValue Base = CGF.EmitLoadOfPointerLValue(
+      CGF.GetAddrOfLocalVar(&TaskTypeArg),
+      KmpTaskTWithPrivatesPtrQTy->castAs<PointerType>());
   auto *KmpTaskTWithPrivatesQTyRD =
       cast<RecordDecl>(KmpTaskTWithPrivatesQTy->getAsTagDecl());
   auto FI = std::next(KmpTaskTWithPrivatesQTyRD->field_begin());
@@ -2711,16 +2704,17 @@ emitTaskPrivateMappingFunction(CodeGenModule &CGM, SourceLocation Loc,
                     TaskPrivatesMapFnInfo, Args);
 
   // *privi = &.privates.privi;
-  LValue Base = emitLoadOfPointerLValue(
-      CGF, CGF.GetAddrOfLocalVar(&TaskPrivatesArg), TaskPrivatesArg.getType());
+  LValue Base = CGF.EmitLoadOfPointerLValue(
+      CGF.GetAddrOfLocalVar(&TaskPrivatesArg),
+      TaskPrivatesArg.getType()->castAs<PointerType>());
   auto *PrivatesQTyRD = cast<RecordDecl>(PrivatesQTy->getAsTagDecl());
   Counter = 0;
   for (auto *Field : PrivatesQTyRD->fields()) {
     auto FieldLVal = CGF.EmitLValueForField(Base, Field);
     auto *VD = Args[PrivateVarsPos[Privates[Counter].second.Original]];
     auto RefLVal = CGF.MakeAddrLValue(CGF.GetAddrOfLocalVar(VD), VD->getType());
-    auto RefLoadLVal =
-        emitLoadOfPointerLValue(CGF, RefLVal.getAddress(), RefLVal.getType());
+    auto RefLoadLVal = CGF.EmitLoadOfPointerLValue(
+        RefLVal.getAddress(), RefLVal.getType()->castAs<PointerType>());
     CGF.EmitStoreOfScalar(FieldLVal.getPointer(), RefLoadLVal);
     ++Counter;
   }
@@ -3596,7 +3590,7 @@ enum RTCancelKind {
   CancelSections = 3,
   CancelTaskgroup = 4
 };
-}
+} // anonymous namespace
 
 static RTCancelKind getCancellationKind(OpenMPDirectiveKind CancelRegion) {
   RTCancelKind CancelKind = CancelNoreq;
@@ -3691,11 +3685,11 @@ void CGOpenMPRuntime::emitCancelCall(CodeGenFunction &CGF, SourceLocation Loc,
 }
 
 /// \brief Obtain information that uniquely identifies a target entry. This
-/// consists of the file and device IDs as well as line and column numbers
-/// associated with the relevant entry source location.
+/// consists of the file and device IDs as well as line number associated with
+/// the relevant entry source location.
 static void getTargetEntryUniqueInfo(ASTContext &C, SourceLocation Loc,
                                      unsigned &DeviceID, unsigned &FileID,
-                                     unsigned &LineNum, unsigned &ColumnNum) {
+                                     unsigned &LineNum) {
 
   auto &SM = C.getSourceManager();
 
@@ -3715,15 +3709,12 @@ static void getTargetEntryUniqueInfo(ASTContext &C, SourceLocation Loc,
   DeviceID = ID.getDevice();
   FileID = ID.getFile();
   LineNum = PLoc.getLine();
-  ColumnNum = PLoc.getColumn();
-  return;
 }
 
 void CGOpenMPRuntime::emitTargetOutlinedFunction(
     const OMPExecutableDirective &D, StringRef ParentName,
     llvm::Function *&OutlinedFn, llvm::Constant *&OutlinedFnID,
     bool IsOffloadEntry) {
-
   assert(!ParentName.empty() && "Invalid target region parent name!");
 
   const CapturedStmt &CS = *cast<CapturedStmt>(D.getAssociatedStmt());
@@ -3733,29 +3724,25 @@ void CGOpenMPRuntime::emitTargetOutlinedFunction(
     CGF.EmitStmt(CS.getCapturedStmt());
   };
 
-  // Create a unique name for the proxy/entry function that using the source
-  // location information of the current target region. The name will be
-  // something like:
+  // Create a unique name for the entry function using the source location
+  // information of the current target region. The name will be something like:
   //
-  // .omp_offloading.DD_FFFF.PP.lBB.cCC
+  // __omp_offloading_DD_FFFF_PP_lBB
   //
   // where DD_FFFF is an ID unique to the file (device and file IDs), PP is the
-  // mangled name of the function that encloses the target region, BB is the
-  // line number of the target region, and CC is the column number of the target
-  // region.
+  // mangled name of the function that encloses the target region and BB is the
+  // line number of the target region.
 
   unsigned DeviceID;
   unsigned FileID;
   unsigned Line;
-  unsigned Column;
   getTargetEntryUniqueInfo(CGM.getContext(), D.getLocStart(), DeviceID, FileID,
-                           Line, Column);
+                           Line);
   SmallString<64> EntryFnName;
   {
     llvm::raw_svector_ostream OS(EntryFnName);
-    OS << ".omp_offloading" << llvm::format(".%x", DeviceID)
-       << llvm::format(".%x.", FileID) << ParentName << ".l" << Line << ".c"
-       << Column;
+    OS << "__omp_offloading" << llvm::format("_%x", DeviceID)
+       << llvm::format("_%x_", FileID) << ParentName << "_l" << Line;
   }
 
   CodeGenFunction CGF(CGM, true);
@@ -3791,8 +3778,7 @@ void CGOpenMPRuntime::emitTargetOutlinedFunction(
 
   // Register the information for the entry associated with this target region.
   OffloadEntriesInfoManager.registerTargetRegionEntryInfo(
-      DeviceID, FileID, ParentName, Line, Column, OutlinedFn, OutlinedFnID);
-  return;
+      DeviceID, FileID, ParentName, Line, OutlinedFn, OutlinedFnID);
 }
 
 void CGOpenMPRuntime::emitTargetCall(CodeGenFunction &CGF,
@@ -3980,7 +3966,6 @@ void CGOpenMPRuntime::emitTargetCall(CodeGenFunction &CGF,
       MapTypesArray = MapTypesArrayGbl;
 
       for (unsigned i = 0; i < PointerNumVal; ++i) {
-
         llvm::Value *BPVal = BasePointers[i];
         if (BPVal->getType()->isPointerTy())
           BPVal = CGF.Builder.CreateBitCast(BPVal, CGM.VoidPtrTy);
@@ -4108,7 +4093,6 @@ void CGOpenMPRuntime::emitTargetCall(CodeGenFunction &CGF,
   CGF.EmitBranch(OffloadContBlock);
 
   CGF.EmitBlock(OffloadContBlock, /*IsFinished=*/true);
-  return;
 }
 
 void CGOpenMPRuntime::scanForTargetRegionsFunctions(const Stmt *S,
@@ -4126,14 +4110,13 @@ void CGOpenMPRuntime::scanForTargetRegionsFunctions(const Stmt *S,
     unsigned DeviceID;
     unsigned FileID;
     unsigned Line;
-    unsigned Column;
     getTargetEntryUniqueInfo(CGM.getContext(), E->getLocStart(), DeviceID,
-                             FileID, Line, Column);
+                             FileID, Line);
 
     // Is this a target region that should not be emitted as an entry point? If
     // so just signal we are done with this target region.
-    if (!OffloadEntriesInfoManager.hasTargetRegionEntryInfo(
-            DeviceID, FileID, ParentName, Line, Column))
+    if (!OffloadEntriesInfoManager.hasTargetRegionEntryInfo(DeviceID, FileID,
+                                                            ParentName, Line))
       return;
 
     llvm::Function *Fn;
@@ -4161,8 +4144,6 @@ void CGOpenMPRuntime::scanForTargetRegionsFunctions(const Stmt *S,
   // Keep looking for target regions recursively.
   for (auto *II : S->children())
     scanForTargetRegionsFunctions(II, ParentName);
-
-  return;
 }
 
 bool CGOpenMPRuntime::emitTargetFunctions(GlobalDecl GD) {

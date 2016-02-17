@@ -987,7 +987,7 @@ namespace {
     CodeGenFunction &CGF;
     SanitizerSet OldSanOpts;
   };
-}
+} // end anonymous namespace
  
 namespace {
   class FieldMemcpyizer {
@@ -1072,7 +1072,6 @@ namespace {
     const CXXRecordDecl *ClassDecl;
 
   private:
-
     void emitMemcpyIR(Address DestPtr, Address SrcPtr, CharUnits Size) {
       llvm::PointerType *DPT = DestPtr.getType();
       llvm::Type *DBP =
@@ -1088,13 +1087,12 @@ namespace {
     }
 
     void addInitialField(FieldDecl *F) {
-        FirstField = F;
-        LastField = F;
-        FirstFieldOffset = RecLayout.getFieldOffset(F->getFieldIndex());
-        LastFieldOffset = FirstFieldOffset;
-        LastAddedFieldIndex = F->getFieldIndex();
-        return;
-      }
+      FirstField = F;
+      LastField = F;
+      FirstFieldOffset = RecLayout.getFieldOffset(F->getFieldIndex());
+      LastFieldOffset = FirstFieldOffset;
+      LastAddedFieldIndex = F->getFieldIndex();
+    }
 
     void addNextField(FieldDecl *F) {
       // For the most part, the following invariant will hold:
@@ -1128,7 +1126,6 @@ namespace {
 
   class ConstructorMemcpyizer : public FieldMemcpyizer {
   private:
-
     /// Get source argument for copy constructor. Returns null if not a copy
     /// constructor.
     static const VarDecl *getTrivialCopySource(CodeGenFunction &CGF,
@@ -1233,7 +1230,6 @@ namespace {
 
   class AssignmentMemcpyizer : public FieldMemcpyizer {
   private:
-
     // Returns the memcpyable field copied by the given statement, if one
     // exists. Otherwise returns null.
     FieldDecl *getMemcpyableField(Stmt *S) {
@@ -1307,7 +1303,6 @@ namespace {
     SmallVector<Stmt*, 16> AggregatedStmts;
 
   public:
-
     AssignmentMemcpyizer(CodeGenFunction &CGF, const CXXMethodDecl *AD,
                          FunctionArgList &Args)
       : FieldMemcpyizer(CGF, AD->getParent(), Args[Args.size() - 1]),
@@ -1608,6 +1603,7 @@ void CodeGenFunction::emitImplicitAssignmentOperatorBody(FunctionArgList &Args) 
 
   LexicalScope Scope(*this, RootCS->getSourceRange());
 
+  incrementProfileCounter(RootCS);
   AssignmentMemcpyizer AM(*this, AssignOp, Args);
   for (auto *I : RootCS->body())
     AM.emitAssignment(I);
@@ -1629,6 +1625,7 @@ namespace {
 
   struct CallDtorDeleteConditional final : EHScopeStack::Cleanup {
     llvm::Value *ShouldDeleteCondition;
+
   public:
     CallDtorDeleteConditional(llvm::Value *ShouldDeleteCondition)
         : ShouldDeleteCondition(ShouldDeleteCondition) {
@@ -2290,7 +2287,7 @@ namespace {
                                 /*Delegating=*/false, Addr);
     }
   };
-}
+} // end anonymous namespace
 
 void CodeGenFunction::PushDestructorCleanup(const CXXDestructorDecl *D,
                                             Address Addr) {
@@ -2607,10 +2604,22 @@ void CodeGenFunction::EmitVTablePtrCheck(const CXXRecordDecl *RD,
   auto TypeId = CGM.CreateCfiIdForTypeMetadata(MD);
   if (CGM.getCodeGenOpts().SanitizeCfiCrossDso && TypeId) {
     EmitCfiSlowPathCheck(M, BitSetTest, TypeId, CastedVTable, StaticData);
-  } else {
-    EmitCheck(std::make_pair(BitSetTest, M), "cfi_check_fail", StaticData,
-              CastedVTable);
+    return;
   }
+
+  if (CGM.getCodeGenOpts().SanitizeTrap.has(M)) {
+    EmitTrapCheck(BitSetTest);
+    return;
+  }
+
+  llvm::Value *AllVtables = llvm::MetadataAsValue::get(
+      CGM.getLLVMContext(),
+      llvm::MDString::get(CGM.getLLVMContext(), "all-vtables"));
+  llvm::Value *ValidVtable =
+      Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::bitset_test),
+                         {CastedVTable, AllVtables});
+  EmitCheck(std::make_pair(BitSetTest, M), "cfi_check_fail", StaticData,
+            {CastedVTable, ValidVtable});
 }
 
 // FIXME: Ideally Expr::IgnoreParenNoopCasts should do this, but it doesn't do

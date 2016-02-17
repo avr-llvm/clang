@@ -606,6 +606,10 @@ public:
     this->MaxTLSAlign = 256;
     this->UserLabelPrefix = "";
 
+    // On PS4, do not honor explicit bit field alignment,
+    // as in "__attribute__((aligned(2))) int b : 1;".
+    this->UseExplicitBitFieldAlignment = false;
+
     switch (Triple.getArch()) {
     default:
     case llvm::Triple::x86_64:
@@ -3907,7 +3911,10 @@ public:
   MCUX86_32TargetInfo(const llvm::Triple &Triple) : X86_32TargetInfo(Triple) {
     LongDoubleWidth = 64;
     LongDoubleFormat = &llvm::APFloat::IEEEdouble;
+    DataLayoutString =
+        "e-m:e-p:32:32-i64:32-f64:32-f128:32-n8:16:32-a:0:32-S32";
     UserLabelPrefix = "";
+    WIntType = UnsignedInt;
   }
 
   CallingConvCheckResult checkCallingConvention(CallingConv CC) const override {
@@ -3920,6 +3927,10 @@ public:
     X86_32TargetInfo::getTargetDefines(Opts, Builder);
     Builder.defineMacro("__iamcu");
     Builder.defineMacro("__iamcu__");
+  }
+
+  bool allowsLargerPreferedTypeAlignment() const override {
+    return false;
   }
 };
 
@@ -4462,6 +4473,8 @@ class ARMTargetInfo : public TargetInfo {
       return "8A";
     case llvm::ARM::AK_ARMV8_1A:
       return "8_1A";
+    case llvm::ARM::AK_ARMV8_2A:
+      return "8_2A";
     }
   }
 
@@ -5127,7 +5140,6 @@ class WindowsARMTargetInfo : public WindowsTargetInfo<ARMleTargetInfo> {
 public:
   WindowsARMTargetInfo(const llvm::Triple &Triple)
     : WindowsTargetInfo<ARMleTargetInfo>(Triple), Triple(Triple) {
-    TLSSupported = false;
     WCharType = UnsignedShort;
     SizeType = UnsignedInt;
     UserLabelPrefix = "";
@@ -5347,6 +5359,7 @@ public:
                         .Cases("cortex-a53", "cortex-a57", "cortex-a72",
                                "cortex-a35", "exynos-m1", true)
                         .Case("cyclone", true)
+                        .Case("kryo", true)
                         .Default(false);
     return CPUKnown;
   }
@@ -5684,9 +5697,12 @@ class HexagonTargetInfo : public TargetInfo {
 public:
   HexagonTargetInfo(const llvm::Triple &Triple) : TargetInfo(Triple) {
     BigEndian = false;
-    DataLayoutString = "e-m:e-p:32:32:32-"
-                       "i64:64:64-i32:32:32-i16:16:16-i1:8:8-"
-                       "f64:64:64-f32:32:32-v64:64:64-v32:32:32-a:0-n16:32";
+    // Specify the vector alignment explicitly. For v512x1, the calculated
+    // alignment would be 512*alignment(i1), which is 512 bytes, instead of
+    // the required minimum of 64 bytes.
+    DataLayoutString = "e-m:e-p:32:32:32-a:0-n16:32-"
+        "i64:64:64-i32:32:32-i16:16:16-i1:8:8-f32:32:32-f64:64:64-"
+        "v32:32:32-v64:64:64-v512:512:512-v1024:1024:1024-v2048:2048:2048";
     SizeType    = UnsignedInt;
     PtrDiffType = SignedInt;
     IntPtrType  = SignedInt;
@@ -6162,6 +6178,12 @@ public:
     Builder.defineMacro("__s390x__");
     Builder.defineMacro("__zarch__");
     Builder.defineMacro("__LONG_DOUBLE_128__");
+
+    Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1");
+    Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2");
+    Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4");
+    Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8");
+
     if (HasTransactionalExecution)
       Builder.defineMacro("__HTM__");
     if (Opts.ZVector)
@@ -7892,6 +7914,9 @@ public:
   int getEHDataRegisterNumber(unsigned RegNo) const override {
     // R0=ExceptionPointerRegister R1=ExceptionSelectorRegister
     return (RegNo < 2)? RegNo : -1;
+  }
+  bool allowsLargerPreferedTypeAlignment() const override {
+    return false;
   }
 };
 

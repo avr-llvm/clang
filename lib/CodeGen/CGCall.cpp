@@ -569,8 +569,7 @@ CGFunctionInfo *CGFunctionInfo::create(unsigned llvmCC,
                                        CanQualType resultType,
                                        ArrayRef<CanQualType> argTypes,
                                        RequiredArgs required) {
-  void *buffer = operator new(sizeof(CGFunctionInfo) +
-                              sizeof(ArgInfo) * (argTypes.size() + 1));
+  void *buffer = operator new(totalSizeToAlloc<ArgInfo>(argTypes.size() + 1));
   CGFunctionInfo *FI = new(buffer) CGFunctionInfo();
   FI->CallingConvention = llvmCC;
   FI->EffectiveCallingConvention = llvmCC;
@@ -634,7 +633,8 @@ struct RecordExpansion : TypeExpansion {
 
   RecordExpansion(SmallVector<const CXXBaseSpecifier *, 1> &&Bases,
                   SmallVector<const FieldDecl *, 1> &&Fields)
-      : TypeExpansion(TEK_Record), Bases(Bases), Fields(Fields) {}
+      : TypeExpansion(TEK_Record), Bases(std::move(Bases)),
+        Fields(std::move(Fields)) {}
   static bool classof(const TypeExpansion *TE) {
     return TE->Kind == TEK_Record;
   }

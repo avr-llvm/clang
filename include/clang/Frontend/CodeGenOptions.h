@@ -14,9 +14,10 @@
 #ifndef LLVM_CLANG_FRONTEND_CODEGENOPTIONS_H
 #define LLVM_CLANG_FRONTEND_CODEGENOPTIONS_H
 
+#include "clang/Basic/DebugInfoOptions.h"
 #include "clang/Basic/Sanitizers.h"
-#include "clang/Driver/DebugInfoKind.h"
 #include "llvm/Support/Regex.h"
+#include "llvm/Target/TargetOptions.h"
 #include <map>
 #include <memory>
 #include <string>
@@ -59,13 +60,6 @@ public:
     Mixed = 2
   };
 
-  enum DebuggerKind {
-    DebuggerKindDefault,
-    DebuggerKindGDB,
-    DebuggerKindLLDB,
-    DebuggerKindSCE
-  };
-
   enum TLSModel {
     GeneralDynamicTLSModel,
     LocalDynamicTLSModel,
@@ -83,6 +77,12 @@ public:
     SRCK_Default,  // No special option was passed.
     SRCK_OnStack,  // Small structs on the stack (-fpcc-struct-return).
     SRCK_InRegs    // Small structs in registers (-freg-struct-return).
+  };
+
+  enum ProfileInstrKind {
+    ProfileNoInstr,    // No instrumentation.
+    ProfileClangInstr  // Clang instrumentation to generate execution counts
+                       // to use with PGO.
   };
 
   /// The code model to use (-mcmodel).
@@ -217,6 +217,11 @@ public:
 
   const std::vector<std::string> &getNoBuiltinFuncs() const {
     return NoBuiltinFuncs;
+  }
+
+  /// \brief Check if Clang profile instrumenation is on.
+  bool hasProfileClangInstr() const {
+    return getProfileInstr() == ProfileClangInstr;
   }
 };
 
