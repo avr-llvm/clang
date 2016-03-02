@@ -409,7 +409,8 @@ private:
                 (!Contexts.back().ColonIsDictLiteral ||
                  Style.Language != FormatStyle::LK_Cpp)) ||
                Style.Language == FormatStyle::LK_Proto) &&
-              Previous->Tok.getIdentifierInfo())
+              (Previous->Tok.getIdentifierInfo() ||
+               Previous->is(tok::char_constant)))
             Previous->Type = TT_SelectorName;
           if (CurrentToken->is(tok::colon) ||
               Style.Language == FormatStyle::LK_JavaScript)
@@ -504,7 +505,7 @@ private:
         Tok->Type = TT_BitFieldColon;
       } else if (Contexts.size() == 1 &&
                  !Line.First->isOneOf(tok::kw_enum, tok::kw_case)) {
-        if (Tok->Previous->is(tok::r_paren))
+        if (Tok->Previous->isOneOf(tok::r_paren, tok::kw_noexcept))
           Tok->Type = TT_CtorInitializerColon;
         else
           Tok->Type = TT_InheritanceColon;
@@ -786,7 +787,8 @@ private:
            Tok.Next->Next && (Tok.Next->Next->TokenText == "module" ||
                               Tok.Next->Next->TokenText == "provide" ||
                               Tok.Next->Next->TokenText == "require" ||
-                              Tok.Next->Next->TokenText == "setTestOnly") &&
+                              Tok.Next->Next->TokenText == "setTestOnly" ||
+                              Tok.Next->Next->TokenText == "forwardDeclare") &&
            Tok.Next->Next->Next && Tok.Next->Next->Next->is(tok::l_paren);
   }
 
@@ -1751,7 +1753,7 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
     if (Style.Language == FormatStyle::LK_Proto)
       return 1;
     if (Left.is(tok::r_square))
-      return 25;
+      return 200;
     // Slightly prefer formatting local lambda definitions like functions.
     if (Right.is(TT_LambdaLSquare) && Left.is(tok::equal))
       return 35;

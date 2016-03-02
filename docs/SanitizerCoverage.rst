@@ -244,7 +244,7 @@ Coverage counters
 =================
 
 This experimental feature is inspired by
-`AFL <http://lcamtuf.coredump.cx/afl/technical_details.txt>`_'s coverage
+`AFL <http://lcamtuf.coredump.cx/afl/technical_details.txt>`__'s coverage
 instrumentation. With additional compile-time and run-time flags you can get
 more sensitive coverage information.  In addition to boolean values assigned to
 every basic block (edge) the instrumentation will collect imprecise counters.
@@ -290,6 +290,18 @@ An *experimental* feature to support basic block (or edge) tracing.
 With ``-fsanitize-coverage=trace-bb`` the compiler will insert
 ``__sanitizer_cov_trace_basic_block(s32 *id)`` before every function, basic block, or edge
 (depending on the value of ``-fsanitize-coverage=[func,bb,edge]``).
+
+Tracing PCs
+===========
+*Experimental* feature similar to tracing basic blocks, but with a different API.
+With ``-fsanitize-coverage=trace-pc`` the compiler will insert
+``__sanitizer_cov_trace_pc()`` on every edge.
+With an additional ``...=trace-pc,indirect-calls`` flag
+``__sanitizer_cov_trace_pc_indirect(void *callee)`` will be inserted on every indirect call.
+These callbacks are not implemented in the Sanitizer run-time and should be defined
+by the user. So, these flags do not require the other sanitizer to be used.
+This mechanism is used for fuzzing the Linux kernel (https://github.com/google/syzkaller)
+and can be used with `AFL <http://lcamtuf.coredump.cx/afl>`__.
 
 Tracing data flow
 =================

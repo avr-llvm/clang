@@ -205,6 +205,13 @@ TEST_F(FormatTestJS, ContainerLiterals) {
   verifyFormat("f({a}, () => {\n"
                "  g();  //\n"
                "});");
+
+  // Keys can be quoted.
+  verifyFormat("var x = {\n"
+               "  a: a,\n"
+               "  b: b,\n"
+               "  'c': c,\n"
+               "};");
 }
 
 TEST_F(FormatTestJS, MethodsInObjectLiterals) {
@@ -276,6 +283,8 @@ TEST_F(FormatTestJS, GoogModules) {
   verifyFormat("var long = goog.require('this.is.really.absurdly.long');",
                getGoogleJSStyleWithColumns(40));
   verifyFormat("goog.setTestOnly('this.is.really.absurdly.long');",
+               getGoogleJSStyleWithColumns(40));
+  verifyFormat("goog.forwardDeclare('this.is.really.absurdly.long');",
                getGoogleJSStyleWithColumns(40));
 
   // These should be wrapped normally.

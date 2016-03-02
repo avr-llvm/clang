@@ -431,6 +431,7 @@ Parser::ParseRHSOfBinaryExpression(ExprResult LHS, prec::Level MinPrec) {
       }
     }
 
+    ExprResult OrigLHS = LHS;
     if (!LHS.isInvalid()) {
       // Combine the LHS and RHS into the LHS (e.g. build AST).
       if (TernaryMiddle.isInvalid()) {
@@ -445,13 +446,18 @@ Parser::ParseRHSOfBinaryExpression(ExprResult LHS, prec::Level MinPrec) {
 
         LHS = Actions.ActOnBinOp(getCurScope(), OpToken.getLocation(),
                                  OpToken.getKind(), LHS.get(), RHS.get());
-      } else
+      } else {
         LHS = Actions.ActOnConditionalOp(OpToken.getLocation(), ColonLoc,
                                          LHS.get(), TernaryMiddle.get(),
                                          RHS.get());
-    } else
-      // Ensure potential typos in the RHS aren't left undiagnosed.
+      }
+    }
+    // Ensure potential typos aren't left undiagnosed.
+    if (LHS.isInvalid()) {
+      Actions.CorrectDelayedTyposInExpr(OrigLHS);
+      Actions.CorrectDelayedTyposInExpr(TernaryMiddle);
       Actions.CorrectDelayedTyposInExpr(RHS);
+    }
   }
 }
 
@@ -1428,8 +1434,10 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
 
       // Reject array indices starting with a lambda-expression. '[[' is
       // reserved for attributes.
-      if (CheckProhibitedCXX11Attribute())
+      if (CheckProhibitedCXX11Attribute()) {
+        (void)Actions.CorrectDelayedTyposInExpr(LHS);
         return ExprError();
+      }
 
       BalancedDelimiterTracker T(*this, tok::l_square);
       T.consumeOpen();
@@ -1457,6 +1465,7 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
 
       SourceLocation RLoc = Tok.getLocation();
 
+      ExprResult OrigLHS = LHS;
       if (!LHS.isInvalid() && !Idx.isInvalid() && !Length.isInvalid() &&
           Tok.is(tok::r_square)) {
         if (ColonLoc.isValid()) {
@@ -1467,7 +1476,10 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
                                                 Idx.get(), RLoc);
         }
       } else {
-        (void)Actions.CorrectDelayedTyposInExpr(LHS);
+        LHS = ExprError();
+      }
+      if (LHS.isInvalid()) {
+        (void)Actions.CorrectDelayedTyposInExpr(OrigLHS);
         (void)Actions.CorrectDelayedTyposInExpr(Idx);
         (void)Actions.CorrectDelayedTyposInExpr(Length);
         LHS = ExprError();

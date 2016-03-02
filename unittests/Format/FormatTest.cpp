@@ -7,8 +7,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "FormatTestUtils.h"
 #include "clang/Format/Format.h"
+
+#include "../Tooling/RewriterTestContext.h"
+#include "FormatTestUtils.h"
+
+#include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "llvm/Support/Debug.h"
 #include "gtest/gtest.h"
 
@@ -4708,6 +4712,10 @@ TEST_F(FormatTest, BreaksConditionalExpressionsAfterOperator) {
                "            /*bbbbbbbbbbbbbbb=*/bbbbbbbbbbbbbbbbbbbbbbbbb :\n"
                "            ccccccccccccccccccccccccccc;",
                Style);
+  verifyFormat("return aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ?\n"
+               "           aaaaa :\n"
+               "           bbbbbbbbbbbbbbb + cccccccccccccccc;",
+               Style);
 }
 
 TEST_F(FormatTest, DeclarationsOfMultipleVariables) {
@@ -6160,6 +6168,8 @@ TEST_F(FormatTest, FormatsArrays) {
       "llvm::outs() << \"aaaaaaaaaaaa: \"\n"
       "             << (*aaaaaaaiaaaaaaa)[aaaaaaaaaaaaaaaaaaaaaaaaa]\n"
       "                                  [aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa];");
+  verifyFormat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa[aaaaaaaaaaaaaaaaa][a]\n"
+               "    .aaaaaaaaaaaaaaaaaaaaaa();");
 
   verifyGoogleFormat("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa<int>\n"
                      "    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa[aaaaaaaaaaaa];");
@@ -8683,7 +8693,8 @@ TEST_F(FormatTest, ConfigurableSpacesInParentheses) {
   verifyFormat("#define x (( int )-1)", Spaces);
 
   // Run the first set of tests again with:
-  Spaces.SpacesInParentheses = false, Spaces.SpaceInEmptyParentheses = true;
+  Spaces.SpacesInParentheses = false;
+  Spaces.SpaceInEmptyParentheses = true;
   Spaces.SpacesInCStyleCastParentheses = true;
   verifyFormat("call(x, y, z);", Spaces);
   verifyFormat("call( );", Spaces);
@@ -10378,6 +10389,9 @@ TEST_F(FormatTest, BreakConstructorInitializersBeforeComma) {
   verifyFormat("SomeClass::Constructor()\n"
                "    : a(a) {}",
                Style);
+  verifyFormat("SomeClass::Constructor() noexcept\n"
+               "    : a(a) {}",
+               Style);
   verifyFormat("SomeClass::Constructor()\n"
                "    : a(a)\n"
                "    , b(b)\n"
@@ -11162,6 +11176,46 @@ TEST_F(FormatTest, FormatsTableGenCode) {
   FormatStyle Style = getLLVMStyle();
   Style.Language = FormatStyle::LK_TableGen;
   verifyFormat("include \"a.td\"\ninclude \"b.td\"", Style);
+}
+
+class ReplacementTest : public ::testing::Test {
+protected:
+  tooling::Replacement createReplacement(SourceLocation Start, unsigned Length,
+                                         llvm::StringRef ReplacementText) {
+    return tooling::Replacement(Context.Sources, Start, Length,
+                                ReplacementText);
+  }
+
+  RewriterTestContext Context;
+};
+
+TEST_F(ReplacementTest, FormatCodeAfterReplacements) {
+  // Column limit is 20.
+  std::string Code = "Type *a =\n"
+                     "    new Type();\n"
+                     "g(iiiii, 0, jjjjj,\n"
+                     "  0, kkkkk, 0, mm);\n"
+                     "int  bad     = format   ;";
+  std::string Expected = "auto a = new Type();\n"
+                         "g(iiiii, nullptr,\n"
+                         "  jjjjj, nullptr,\n"
+                         "  kkkkk, nullptr,\n"
+                         "  mm);\n"
+                         "int  bad     = format   ;";
+  FileID ID = Context.createInMemoryFile("format.cpp", Code);
+  tooling::Replacements Replaces;
+  Replaces.insert(tooling::Replacement(
+      Context.Sources, Context.getLocation(ID, 1, 1), 6, "auto "));
+  Replaces.insert(tooling::Replacement(
+      Context.Sources, Context.getLocation(ID, 3, 10), 1, "nullptr"));
+  Replaces.insert(tooling::Replacement(
+      Context.Sources, Context.getLocation(ID, 4, 3), 1, "nullptr"));
+  Replaces.insert(tooling::Replacement(
+      Context.Sources, Context.getLocation(ID, 4, 13), 1, "nullptr"));
+
+  format::FormatStyle Style = format::getLLVMStyle();
+  Style.ColumnLimit = 20; // Set column limit to 20 to increase readibility.
+  EXPECT_EQ(Expected, applyAllReplacementsAndFormat(Code, Replaces, Style));
 }
 
 } // end namespace

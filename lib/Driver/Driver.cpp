@@ -50,7 +50,7 @@ Driver::Driver(StringRef ClangExecutable, StringRef DefaultTargetTriple,
                DiagnosticsEngine &Diags,
                IntrusiveRefCntPtr<vfs::FileSystem> VFS)
     : Opts(createDriverOptTable()), Diags(Diags), VFS(VFS), Mode(GCCMode),
-      SaveTemps(SaveTempsNone), LTOMode(LTOK_None),
+      SaveTemps(SaveTempsNone), BitcodeEmbed(EmbedNone), LTOMode(LTOK_None),
       ClangExecutable(ClangExecutable),
       SysRoot(DEFAULT_SYSROOT), UseStdLib(true),
       DefaultTargetTriple(DefaultTargetTriple),
@@ -477,6 +477,19 @@ Compilation *Driver::BuildCompilation(ArrayRef<const char *> ArgList) {
                     .Case("cwd", SaveTempsCwd)
                     .Case("obj", SaveTempsObj)
                     .Default(SaveTempsCwd);
+  }
+
+  // Ignore -fembed-bitcode options with LTO
+  // since the output will be bitcode anyway.
+  if (!Args.hasFlag(options::OPT_flto, options::OPT_fno_lto, false)) {
+    if (Args.hasArg(options::OPT_fembed_bitcode))
+      BitcodeEmbed = EmbedBitcode;
+    else if (Args.hasArg(options::OPT_fembed_bitcode_marker))
+      BitcodeEmbed = EmbedMarker;
+  } else {
+    // claim the bitcode option under LTO so no warning is issued.
+    Args.ClaimAllArgs(options::OPT_fembed_bitcode);
+    Args.ClaimAllArgs(options::OPT_fembed_bitcode_marker);
   }
 
   setLTOMode(Args);
@@ -948,15 +961,15 @@ static unsigned PrintActions1(const Compilation &C, Action *A,
     os << "\"" << IA->getInputArg().getValue() << "\"";
   } else if (BindArchAction *BIA = dyn_cast<BindArchAction>(A)) {
     os << '"' << BIA->getArchName() << '"' << ", {"
-       << PrintActions1(C, *BIA->begin(), Ids) << "}";
+       << PrintActions1(C, *BIA->input_begin(), Ids) << "}";
   } else if (CudaDeviceAction *CDA = dyn_cast<CudaDeviceAction>(A)) {
     os << '"'
        << (CDA->getGpuArchName() ? CDA->getGpuArchName() : "(multiple archs)")
-       << '"' << ", {" << PrintActions1(C, *CDA->begin(), Ids) << "}";
+       << '"' << ", {" << PrintActions1(C, *CDA->input_begin(), Ids) << "}";
   } else {
     const ActionList *AL;
     if (CudaHostAction *CHA = dyn_cast<CudaHostAction>(A)) {
-      os << "{" << PrintActions1(C, *CHA->begin(), Ids) << "}"
+      os << "{" << PrintActions1(C, *CHA->input_begin(), Ids) << "}"
          << ", gpu binaries ";
       AL = &CHA->getDeviceActions();
     } else
@@ -996,7 +1009,7 @@ static bool ContainsCompileOrAssembleAction(const Action *A) {
       isa<AssembleJobAction>(A))
     return true;
 
-  for (const Action *Input : *A)
+  for (const Action *Input : A->inputs())
     if (ContainsCompileOrAssembleAction(Input))
       return true;
 
@@ -1439,6 +1452,66 @@ void Driver::BuildActions(Compilation &C, DerivedArgList &Args,
     }
   }
 
+  // Diagnose unsupported forms of /Yc /Yu. Ignore /Yc/Yu for now if:
+  // * no filename after it
+  // * both /Yc and /Yu passed but with different filenames
+  // * corresponding file not also passed as /FI
+  Arg *YcArg = Args.getLastArg(options::OPT__SLASH_Yc);
+  Arg *YuArg = Args.getLastArg(options::OPT__SLASH_Yu);
+  if (YcArg && YcArg->getValue()[0] == '\0') {
+    Diag(clang::diag::warn_drv_ycyu_no_arg_clang_cl) << YcArg->getSpelling();
+    Args.eraseArg(options::OPT__SLASH_Yc);
+    YcArg = nullptr;
+  }
+  if (YuArg && YuArg->getValue()[0] == '\0') {
+    Diag(clang::diag::warn_drv_ycyu_no_arg_clang_cl) << YuArg->getSpelling();
+    Args.eraseArg(options::OPT__SLASH_Yu);
+    YuArg = nullptr;
+  }
+  if (YcArg && YuArg && strcmp(YcArg->getValue(), YuArg->getValue()) != 0) {
+    Diag(clang::diag::warn_drv_ycyu_different_arg_clang_cl);
+    Args.eraseArg(options::OPT__SLASH_Yc);
+    Args.eraseArg(options::OPT__SLASH_Yu);
+    YcArg = YuArg = nullptr;
+  }
+  if (YcArg || YuArg) {
+    StringRef Val = YcArg ? YcArg->getValue() : YuArg->getValue();
+    bool FoundMatchingInclude = false;
+    for (const Arg *Inc : Args.filtered(options::OPT_include)) {
+      // FIXME: Do case-insensitive matching and consider / and \ as equal.
+      if (Inc->getValue() == Val)
+        FoundMatchingInclude = true;
+    }
+    if (!FoundMatchingInclude) {
+      Diag(clang::diag::warn_drv_ycyu_no_fi_arg_clang_cl)
+          << (YcArg ? YcArg : YuArg)->getSpelling();
+      Args.eraseArg(options::OPT__SLASH_Yc);
+      Args.eraseArg(options::OPT__SLASH_Yu);
+      YcArg = YuArg = nullptr;
+    }
+  }
+  if (YcArg && Inputs.size() > 1) {
+    Diag(clang::diag::warn_drv_yc_multiple_inputs_clang_cl);
+    Args.eraseArg(options::OPT__SLASH_Yc);
+    YcArg = nullptr;
+  }
+  if (Args.hasArg(options::OPT__SLASH_Y_)) {
+    // /Y- disables all pch handling.  Rather than check for it everywhere,
+    // just remove clang-cl pch-related flags here.
+    Args.eraseArg(options::OPT__SLASH_Fp);
+    Args.eraseArg(options::OPT__SLASH_Yc);
+    Args.eraseArg(options::OPT__SLASH_Yu);
+    YcArg = YuArg = nullptr;
+  }
+  // FIXME: For now, only enable pch support if an internal flag is passed too.
+  // Remove this once pch support has stabilitzed.
+  if (!Args.hasArg(options::OPT__SLASH_internal_enable_pch)) {
+    Args.eraseArg(options::OPT__SLASH_Fp);
+    Args.eraseArg(options::OPT__SLASH_Yc);
+    Args.eraseArg(options::OPT__SLASH_Yu);
+    YcArg = YuArg = nullptr;
+  }
+
   // Construct the actions to perform.
   ActionList LinkerInputs;
 
@@ -1449,6 +1522,25 @@ void Driver::BuildActions(Compilation &C, DerivedArgList &Args,
 
     PL.clear();
     types::getCompilationPhases(InputType, PL);
+
+    if (YcArg) {
+      // Add a separate precompile phase for the compile phase.
+      if (FinalPhase >= phases::Compile) {
+        llvm::SmallVector<phases::ID, phases::MaxNumberOfPhases> PCHPL;
+        types::getCompilationPhases(types::TY_CXXHeader, PCHPL);
+        Arg *PchInputArg = MakeInputArg(Args, Opts, YcArg->getValue());
+
+        // Build the pipeline for the pch file.
+        Action *ClangClPch = C.MakeAction<InputAction>(*PchInputArg, InputType);
+        for (phases::ID Phase : PCHPL)
+          ClangClPch = ConstructPhaseAction(C, Args, Phase, ClangClPch);
+        assert(ClangClPch);
+        Actions.push_back(ClangClPch);
+        // The driver currently exits after the first failed command.  This
+        // relies on that behavior, to make sure if the pch generation fails,
+        // the main compilation won't run.
+      }
+    }
 
     // If the first step comes after the final phase we are doing as part of
     // this compilation, warn the user about it.
@@ -1723,7 +1815,8 @@ void Driver::BuildJobs(Compilation &C) const {
 // CudaHostAction, updates CollapsedCHA with the pointer to it so the
 // caller can deal with extra handling such action requires.
 static const Tool *selectToolForJob(Compilation &C, bool SaveTemps,
-                                    const ToolChain *TC, const JobAction *JA,
+                                    bool EmbedBitcode, const ToolChain *TC,
+                                    const JobAction *JA,
                                     const ActionList *&Inputs,
                                     const CudaHostAction *&CollapsedCHA) {
   const Tool *ToolForJob = nullptr;
@@ -1739,20 +1832,30 @@ static const Tool *selectToolForJob(Compilation &C, bool SaveTemps,
       !C.getArgs().hasArg(options::OPT__SLASH_Fa) &&
       isa<AssembleJobAction>(JA) && Inputs->size() == 1 &&
       isa<BackendJobAction>(*Inputs->begin())) {
-    // A BackendJob is always preceded by a CompileJob, and without
-    // -save-temps they will always get combined together, so instead of
-    // checking the backend tool, check if the tool for the CompileJob
-    // has an integrated assembler.
+    // A BackendJob is always preceded by a CompileJob, and without -save-temps
+    // or -fembed-bitcode, they will always get combined together, so instead of
+    // checking the backend tool, check if the tool for the CompileJob has an
+    // integrated assembler. For -fembed-bitcode, CompileJob is still used to
+    // look up tools for BackendJob, but they need to match before we can split
+    // them.
     const ActionList *BackendInputs = &(*Inputs)[0]->getInputs();
     // Compile job may be wrapped in CudaHostAction, extract it if
     // that's the case and update CollapsedCHA if we combine phases.
     CudaHostAction *CHA = dyn_cast<CudaHostAction>(*BackendInputs->begin());
-    JobAction *CompileJA =
-        cast<CompileJobAction>(CHA ? *CHA->begin() : *BackendInputs->begin());
+    JobAction *CompileJA = cast<CompileJobAction>(
+        CHA ? *CHA->input_begin() : *BackendInputs->begin());
     assert(CompileJA && "Backend job is not preceeded by compile job.");
     const Tool *Compiler = TC->SelectTool(*CompileJA);
     if (!Compiler)
       return nullptr;
+    // When using -fembed-bitcode, it is required to have the same tool (clang)
+    // for both CompilerJA and BackendJA. Otherwise, combine two stages.
+    if (EmbedBitcode) {
+      JobAction *InputJA = cast<JobAction>(*Inputs->begin());
+      const Tool *BackendTool = TC->SelectTool(*InputJA);
+      if (BackendTool == Compiler)
+        CompileJA = InputJA;
+    }
     if (Compiler->hasIntegratedAssembler()) {
       Inputs = &CompileJA->getInputs();
       ToolForJob = Compiler;
@@ -1761,8 +1864,8 @@ static const Tool *selectToolForJob(Compilation &C, bool SaveTemps,
   }
 
   // A backend job should always be combined with the preceding compile job
-  // unless OPT_save_temps is enabled and the compiler is capable of emitting
-  // LLVM IR as an intermediate output.
+  // unless OPT_save_temps or OPT_fembed_bitcode is enabled and the compiler is
+  // capable of emitting LLVM IR as an intermediate output.
   if (isa<BackendJobAction>(JA)) {
     // Check if the compiler supports emitting LLVM IR.
     assert(Inputs->size() == 1);
@@ -1770,12 +1873,13 @@ static const Tool *selectToolForJob(Compilation &C, bool SaveTemps,
     // that's the case and update CollapsedCHA if we combine phases.
     CudaHostAction *CHA = dyn_cast<CudaHostAction>(*Inputs->begin());
     JobAction *CompileJA =
-        cast<CompileJobAction>(CHA ? *CHA->begin() : *Inputs->begin());
+        cast<CompileJobAction>(CHA ? *CHA->input_begin() : *Inputs->begin());
     assert(CompileJA && "Backend job is not preceeded by compile job.");
     const Tool *Compiler = TC->SelectTool(*CompileJA);
     if (!Compiler)
       return nullptr;
-    if (!Compiler->canEmitIR() || !SaveTemps) {
+    if (!Compiler->canEmitIR() ||
+        (!SaveTemps && !EmbedBitcode)) {
       Inputs = &CompileJA->getInputs();
       ToolForJob = Compiler;
       CollapsedCHA = CHA;
@@ -1841,7 +1945,7 @@ InputInfo Driver::BuildJobsForActionNoCache(
     }
     // Override current action with a real host compile action and continue
     // processing it.
-    A = *CHA->begin();
+    A = *CHA->input_begin();
   }
 
   if (const InputAction *IA = dyn_cast<InputAction>(A)) {
@@ -1867,7 +1971,7 @@ InputInfo Driver::BuildJobsForActionNoCache(
     else
       TC = &C.getDefaultToolChain();
 
-    return BuildJobsForAction(C, *BAA->begin(), TC, ArchName, AtTopLevel,
+    return BuildJobsForAction(C, *BAA->input_begin(), TC, ArchName, AtTopLevel,
                               MultipleArchs, LinkingOutput, CachedResults);
   }
 
@@ -1875,11 +1979,11 @@ InputInfo Driver::BuildJobsForActionNoCache(
     // Initial processing of CudaDeviceAction carries host params.
     // Call BuildJobsForAction() again, now with correct device parameters.
     InputInfo II = BuildJobsForAction(
-        C, *CDA->begin(), C.getCudaDeviceToolChain(), CDA->getGpuArchName(),
-        CDA->isAtTopLevel(), /*MultipleArchs*/ true, LinkingOutput,
-        CachedResults);
-    // Currently II's Action is *CDA->begin().  Set it to CDA instead, so that
-    // one can retrieve II's GPU arch.
+        C, *CDA->input_begin(), C.getCudaDeviceToolChain(),
+        CDA->getGpuArchName(), CDA->isAtTopLevel(), /*MultipleArchs=*/true,
+        LinkingOutput, CachedResults);
+    // Currently II's Action is *CDA->input_begin().  Set it to CDA instead, so
+    // that one can retrieve II's GPU arch.
     II.setAction(A);
     return II;
   }
@@ -1889,7 +1993,8 @@ InputInfo Driver::BuildJobsForActionNoCache(
   const JobAction *JA = cast<JobAction>(A);
   const CudaHostAction *CollapsedCHA = nullptr;
   const Tool *T =
-      selectToolForJob(C, isSaveTempsEnabled(), TC, JA, Inputs, CollapsedCHA);
+      selectToolForJob(C, isSaveTempsEnabled(), embedBitcodeEnabled(), TC, JA,
+                       Inputs, CollapsedCHA);
   if (!T)
     return InputInfo();
 
@@ -2083,8 +2188,11 @@ const char *Driver::GetNamedOutputPath(Compilation &C, const JobAction &JA,
       Output += "-";
       Output.append(BoundArch);
       NamedOutput = C.getArgs().MakeArgString(Output.c_str());
-    } else
+    } else {
       NamedOutput = getDefaultImageName();
+    }
+  } else if (JA.getType() == types::TY_PCH && IsCLMode()) {
+    NamedOutput = C.getArgs().MakeArgString(GetClPchPath(C, BaseName).c_str());
   } else {
     const char *Suffix = types::getTypeTempSuffix(JA.getType(), IsCLMode());
     assert(Suffix && "All types used for output should have a suffix.");
@@ -2250,6 +2358,25 @@ std::string Driver::GetTemporaryPath(StringRef Prefix,
   return Path.str();
 }
 
+std::string Driver::GetClPchPath(Compilation &C, StringRef BaseName) const {
+  SmallString<128> Output;
+  if (Arg *FpArg = C.getArgs().getLastArg(options::OPT__SLASH_Fp)) {
+    // FIXME: If anybody needs it, implement this obscure rule:
+    // "If you specify a directory without a file name, the default file name
+    // is VCx0.pch., where x is the major version of Visual C++ in use."
+    Output = FpArg->getValue();
+
+    // "If you do not specify an extension as part of the path name, an
+    // extension of .pch is assumed. "
+    if (!llvm::sys::path::has_extension(Output))
+      Output += ".pch";
+  } else {
+    Output = BaseName;
+    llvm::sys::path::replace_extension(Output, ".pch");
+  }
+  return Output.str();
+}
+
 const ToolChain &Driver::getToolChain(const ArgList &Args,
                                       const llvm::Triple &Target) const {
 
@@ -2367,7 +2494,8 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
 
 bool Driver::ShouldUseClangCompiler(const JobAction &JA) const {
   // Say "no" if there is not exactly one input of a type clang understands.
-  if (JA.size() != 1 || !types::isAcceptedByClang((*JA.begin())->getType()))
+  if (JA.size() != 1 ||
+      !types::isAcceptedByClang((*JA.input_begin())->getType()))
     return false;
 
   // And say "no" if this is not a kind of action clang understands.

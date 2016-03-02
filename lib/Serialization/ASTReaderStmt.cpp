@@ -1748,11 +1748,11 @@ public:
   OMPClauseReader(ASTStmtReader *R, ASTContext &C,
                   const ASTReader::RecordData &Record, unsigned &Idx)
     : Reader(R), Context(C), Record(Record), Idx(Idx) { }
-#define OPENMP_CLAUSE(Name, Class)    \
-  void Visit##Class(Class *C);
+#define OPENMP_CLAUSE(Name, Class) void Visit##Class(Class *C);
 #include "clang/Basic/OpenMPKinds.def"
   OMPClause *readClause();
   void VisitOMPClauseWithPreInit(OMPClauseWithPreInit *C);
+  void VisitOMPClauseWithPostUpdate(OMPClauseWithPostUpdate *C);
 };
 }
 
@@ -1897,6 +1897,10 @@ void OMPClauseReader::VisitOMPClauseWithPreInit(OMPClauseWithPreInit *C) {
   C->setPreInitStmt(Reader->Reader.ReadSubStmt());
 }
 
+void OMPClauseReader::VisitOMPClauseWithPostUpdate(OMPClauseWithPostUpdate *C) {
+  C->setPostUpdateExpr(Reader->Reader.ReadSubExpr());
+}
+
 void OMPClauseReader::VisitOMPIfClause(OMPIfClause *C) {
   C->setNameModifier(static_cast<OpenMPDirectiveKind>(Record[Idx++]));
   C->setNameModifierLoc(Reader->ReadSourceLocation(Record, Idx));
@@ -2002,6 +2006,7 @@ void OMPClauseReader::VisitOMPPrivateClause(OMPPrivateClause *C) {
 }
 
 void OMPClauseReader::VisitOMPFirstprivateClause(OMPFirstprivateClause *C) {
+  VisitOMPClauseWithPreInit(C);
   C->setLParenLoc(Reader->ReadSourceLocation(Record, Idx));
   unsigned NumVars = C->varlist_size();
   SmallVector<Expr *, 16> Vars;
@@ -2020,6 +2025,8 @@ void OMPClauseReader::VisitOMPFirstprivateClause(OMPFirstprivateClause *C) {
 }
 
 void OMPClauseReader::VisitOMPLastprivateClause(OMPLastprivateClause *C) {
+  VisitOMPClauseWithPreInit(C);
+  VisitOMPClauseWithPostUpdate(C);
   C->setLParenLoc(Reader->ReadSourceLocation(Record, Idx));
   unsigned NumVars = C->varlist_size();
   SmallVector<Expr *, 16> Vars;
@@ -2056,6 +2063,8 @@ void OMPClauseReader::VisitOMPSharedClause(OMPSharedClause *C) {
 }
 
 void OMPClauseReader::VisitOMPReductionClause(OMPReductionClause *C) {
+  VisitOMPClauseWithPreInit(C);
+  VisitOMPClauseWithPostUpdate(C);
   C->setLParenLoc(Reader->ReadSourceLocation(Record, Idx));
   C->setColonLoc(Reader->ReadSourceLocation(Record, Idx));
   NestedNameSpecifierLoc NNSL =

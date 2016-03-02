@@ -555,7 +555,6 @@ Decl *Sema::ActOnTypeParameter(Scope *S, bool Typename,
                                ParsedType DefaultArg) {
   assert(S->isTemplateParamScope() &&
          "Template type parameter not in template parameter scope!");
-  bool Invalid = false;
 
   SourceLocation Loc = ParamNameLoc;
   if (!ParamName)
@@ -567,8 +566,6 @@ Decl *Sema::ActOnTypeParameter(Scope *S, bool Typename,
                                    KeyLoc, Loc, Depth, Position, ParamName,
                                    Typename, IsParameterPack);
   Param->setAccess(AS_public);
-  if (Invalid)
-    Param->setInvalidDecl();
 
   if (ParamName) {
     maybeDiagnoseTemplateParameterShadow(*this, S, ParamNameLoc, ParamName);
@@ -7461,7 +7458,13 @@ Sema::ActOnExplicitInstantiation(Scope *S,
             getDLLAttr(Specialization)->clone(getASTContext()));
         A->setInherited(true);
         Def->addAttr(A);
+
+        // We reject explicit instantiations in class scope, so there should
+        // never be any delayed exported classes to worry about.
+        assert(DelayedDllExportClasses.empty() &&
+               "delayed exports present at explicit instantiation");
         checkClassLevelDLLAttribute(Def);
+        referenceDLLExportedClassMethods();
 
         // Propagate attribute to base class templates.
         for (auto &B : Def->bases()) {

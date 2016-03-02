@@ -1103,6 +1103,13 @@ bool Darwin::UseSjLjExceptions(const ArgList &Args) const {
   return !Triple.isWatchABI();
 }
 
+bool Darwin::SupportsEmbeddedBitcode() const {
+  assert(TargetInitialized && "Target not initialized!");
+  if (isTargetIPhoneOS() && isIPhoneOSVersionLT(6, 0))
+    return false;
+  return true;
+}
+
 bool MachO::isPICDefault() const { return true; }
 
 bool MachO::isPIEDefault() const { return false; }
@@ -3005,6 +3012,12 @@ Tool *CloudABI::buildLinker() const {
   return new tools::cloudabi::Linker(*this);
 }
 
+SanitizerMask CloudABI::getSupportedSanitizers() const {
+  SanitizerMask Res = ToolChain::getSupportedSanitizers();
+  Res |= SanitizerKind::SafeStack;
+  return Res;
+}
+
 /// OpenBSD - OpenBSD tool chain which can call as(1) and ld(1) directly.
 
 OpenBSD::OpenBSD(const Driver &D, const llvm::Triple &Triple,
@@ -4467,6 +4480,11 @@ Tool *MyriadToolChain::buildLinker() const {
 WebAssembly::WebAssembly(const Driver &D, const llvm::Triple &Triple,
                          const llvm::opt::ArgList &Args)
   : ToolChain(D, Triple, Args) {
+
+  assert(Triple.isArch32Bit() != Triple.isArch64Bit());
+  getFilePaths().push_back(
+      getDriver().SysRoot + "/lib" + (Triple.isArch32Bit() ? "32" : "64"));
+
   // Use LLD by default.
   DefaultLinker = "lld";
 }

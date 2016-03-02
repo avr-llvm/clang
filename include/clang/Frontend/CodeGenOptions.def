@@ -104,7 +104,7 @@ VALUE_CODEGENOPT(OptimizationLevel, 2, 0) ///< The -O[0-3] option specified.
 VALUE_CODEGENOPT(OptimizeSize, 2, 0) ///< If -Os (==1) or -Oz (==2) is specified.
 
 /// \brief Choose profile instrumenation kind or no instrumentation.
-ENUM_CODEGENOPT(ProfileInstr, ProfileInstrKind, 2, ProfileNoInstr)
+ENUM_CODEGENOPT(ProfileInstr, ProfileInstrKind, 2, ProfileNone)
 CODEGENOPT(CoverageMapping , 1, 0) ///< Generate coverage mapping regions to
                                    ///< enable code coverage analysis.
 CODEGENOPT(DumpCoverageMapping , 1, 0) ///< Dump the generated coverage mapping
@@ -134,6 +134,8 @@ CODEGENOPT(SanitizeCoverageTraceCmp, 1, 0) ///< Enable cmp instruction tracing
                                            ///< in sanitizer coverage.
 CODEGENOPT(SanitizeCoverage8bitCounters, 1, 0) ///< Use 8-bit frequency counters
                                                ///< in sanitizer coverage.
+CODEGENOPT(SanitizeCoverageTracePC, 1, 0) ///< Enable PC tracing
+                                          ///< in sanitizer coverage.
 CODEGENOPT(SanitizeStats     , 1, 0) ///< Collect statistics for sanitizers.
 CODEGENOPT(SimplifyLibCalls  , 1, 1) ///< Set when -fbuiltin is enabled.
 CODEGENOPT(SoftFloat         , 1, 0) ///< -soft-float.
@@ -176,6 +178,9 @@ CODEGENOPT(DebugExplicitImport, 1, 0)  ///< Whether or not debug info should
                                        ///< anonymous namespaces
 
 CODEGENOPT(EmitLLVMUseLists, 1, 0) ///< Control whether to serialize use-lists.
+
+CODEGENOPT(WholeProgramVTables, 1, 0) ///< Whether to apply whole-program
+                                      ///  vtable optimization.
 
 /// The user specified number of registers to be used for integral arguments,
 /// or 0 if unspecified.

@@ -685,14 +685,20 @@ are:
   Apple's watchOS operating system.  The minimum deployment target is specified by
   the ``-mwatchos-version-min=*version*`` command-line argument.
 
-A declaration can be used even when deploying back to a platform version prior
-to when the declaration was introduced.  When this happens, the declaration is
-`weakly linked
+A declaration can typically be used even when deploying back to a platform
+version prior to when the declaration was introduced.  When this happens, the
+declaration is `weakly linked
 <https://developer.apple.com/library/mac/#documentation/MacOSX/Conceptual/BPFrameworks/Concepts/WeakLinking.html>`_,
 as if the ``weak_import`` attribute were added to the declaration.  A
 weakly-linked declaration may or may not be present a run-time, and a program
 can determine whether the declaration is present by checking whether the
 address of that declaration is non-NULL.
+
+The flag ``strict`` disallows using API when deploying back to a
+platform version prior to when the declaration was introduced.  An
+attempt to use such API before its introduction causes a hard error.
+Weakly-linking is almost always a better API choice, since it allows
+users to query availability at runtime.
 
 If there are multiple declarations of the same entity, the availability
 attributes must either match on a per-platform basis or later
@@ -1560,6 +1566,46 @@ is equivalent to ``#pragma clang loop unroll(disable)``.  See
 <http://clang.llvm.org/docs/LanguageExtensions.html#extensions-for-loop-hint-optimizations>`_
 for further details including limitations of the unroll hints.
   }];
+}
+
+def OpenCLUnrollHintDocs : Documentation {
+  let Category = DocCatStmt;
+  let Heading = "__attribute__((opencl_unroll_hint))";
+  let Content = [{
+The opencl_unroll_hint attribute qualifier can be used to specify that a loop
+(for, while and do loops) can be unrolled. This attribute qualifier can be
+used to specify full unrolling or partial unrolling by a specified amount.
+This is a compiler hint and the compiler may ignore this directive. See
+`OpenCL v2.0 <https://www.khronos.org/registry/cl/specs/opencl-2.0.pdf>`_
+s6.11.5 for details.
+  }];
+}
+
+def OpenCLAccessDocs : Documentation {
+  let Category = DocCatStmt;
+  let Heading = "__read_only, __write_only, __read_write (read_only, write_only, read_write)";
+  let Content = [{
+The access qualifiers must be used with image object arguments or pipe arguments
+to declare if they are being read or written by a kernel or function.
+
+The read_only/__read_only, write_only/__write_only and read_write/__read_write
+names are reserved for use as access qualifiers and shall not be used otherwise.
+
+.. code-block:: c
+
+  kernel void
+  foo (read_only image2d_t imageA,
+       write_only image2d_t imageB) {
+    ...
+  }
+
+In the above example imageA is a read-only 2D image object, and imageB is a
+write-only 2D image object.
+
+The read_write (or __read_write) qualifier can not be used with pipe.
+
+More details can be found in the OpenCL C language Spec v2.0, Section 6.6.
+    }];
 }
 
 def DocOpenCLAddressSpaces : DocumentationCategory<"OpenCL Address Spaces"> {

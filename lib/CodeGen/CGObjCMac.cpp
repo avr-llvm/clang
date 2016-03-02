@@ -3446,8 +3446,10 @@ CGObjCMac::EmitClassExtension(const ObjCImplementationDecl *ID,
 
   llvm::Constant *Values[3];
   Values[0] = llvm::ConstantInt::get(ObjCTypes.IntTy, Size);
-  Values[1] = nullptr;
-  if (!isClassProperty)
+  if (isClassProperty) {
+    llvm::Type *PtrTy = CGM.Int8PtrTy;
+    Values[1] = llvm::Constant::getNullValue(PtrTy);
+  } else
     Values[1] = BuildWeakIvarLayout(ID, CharUnits::Zero(), InstanceSize,
                                     hasMRCWeakIvars);
   if (isClassProperty)
@@ -5579,6 +5581,7 @@ ObjCNonFragileABITypesHelper::ObjCNonFragileABITypesHelper(CodeGen::CodeGenModul
   //   const struct _protocol_list_t * const protocols;
   //   const struct _prop_list_t * const properties;
   //   const struct _prop_list_t * const class_properties;
+  //   const uint32_t size;
   // }
   CategorynfABITy = llvm::StructType::create("struct._category_t",
                                              Int8PtrTy, ClassnfABIPtrTy,
@@ -5587,6 +5590,7 @@ ObjCNonFragileABITypesHelper::ObjCNonFragileABITypesHelper(CodeGen::CodeGenModul
                                              ProtocolListnfABIPtrTy,
                                              PropertyListPtrTy,
                                              PropertyListPtrTy,
+                                             IntTy,
                                              nullptr);
 
   // New types for nonfragile abi messaging.
@@ -6138,6 +6142,7 @@ llvm::Value *CGObjCNonFragileABIMac::GenerateProtocolRef(CodeGenFunction &CGF,
 ///   const struct _protocol_list_t * const protocols;
 ///   const struct _prop_list_t * const properties;
 ///   const struct _prop_list_t * const class_properties;
+///   const uint32_t size;
 /// }
 ///
 void CGObjCNonFragileABIMac::GenerateCategory(const ObjCCategoryImplDecl *OCD) {
@@ -6152,7 +6157,7 @@ void CGObjCNonFragileABIMac::GenerateCategory(const ObjCCategoryImplDecl *OCD) {
   llvm::SmallString<64> ExtClassName(getClassSymbolPrefix());
   ExtClassName += Interface->getObjCRuntimeNameAsString();
 
-  llvm::Constant *Values[7];
+  llvm::Constant *Values[8];
   Values[0] = GetClassName(OCD->getIdentifier()->getName());
   // meta-class entry symbol
   llvm::GlobalVariable *ClassGV =
@@ -6209,6 +6214,9 @@ void CGObjCNonFragileABIMac::GenerateCategory(const ObjCCategoryImplDecl *OCD) {
     Values[5] = llvm::Constant::getNullValue(ObjCTypes.PropertyListPtrTy);
     Values[6] = llvm::Constant::getNullValue(ObjCTypes.PropertyListPtrTy);
   }
+
+  unsigned Size = CGM.getDataLayout().getTypeAllocSize(ObjCTypes.CategorynfABITy);
+  Values[7] = llvm::ConstantInt::get(ObjCTypes.IntTy, Size);
 
   llvm::Constant *Init =
     llvm::ConstantStruct::get(ObjCTypes.CategorynfABITy,

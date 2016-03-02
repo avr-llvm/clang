@@ -264,6 +264,16 @@ def act_on_decl(declaration, comment, allowed_types):
       add_matcher('*', name, 'Matcher<*>', comment)
       return
 
+    # Parse Variadic functions.
+    m = re.match(
+        r"""^.*llvm::VariadicFunction\s*<\s*([^,]+),\s*([^,]+),\s*[^>]+>\s*
+              ([a-zA-Z]*)\s*=\s*{.*};$""",
+        declaration, flags=re.X)
+    if m:
+      result, arg, name = m.groups()[:3]
+      add_matcher(result, name, '%s, ..., %s' % (arg, arg), comment)
+      return
+
     # Parse Variadic operator matchers.
     m = re.match(
         r"""^.*VariadicOperatorMatcherFunc\s*<\s*([^,]+),\s*([^\s>]+)\s*>\s*
@@ -363,11 +373,11 @@ traversal_matcher_table = sort_table('TRAVERSAL', traversal_matchers)
 
 reference = open('../LibASTMatchersReference.html').read()
 reference = re.sub(r'<!-- START_DECL_MATCHERS.*END_DECL_MATCHERS -->',
-                   '%s', reference, flags=re.S) % node_matcher_table
+                   node_matcher_table, reference, flags=re.S)
 reference = re.sub(r'<!-- START_NARROWING_MATCHERS.*END_NARROWING_MATCHERS -->',
-                   '%s', reference, flags=re.S) % narrowing_matcher_table
+                   narrowing_matcher_table, reference, flags=re.S)
 reference = re.sub(r'<!-- START_TRAVERSAL_MATCHERS.*END_TRAVERSAL_MATCHERS -->',
-                   '%s', reference, flags=re.S) % traversal_matcher_table
+                   traversal_matcher_table, reference, flags=re.S)
 
 with open('../LibASTMatchersReference.html', 'wb') as output:
   output.write(reference)

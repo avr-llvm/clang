@@ -239,8 +239,14 @@ void ASTTypeWriter::VisitFunctionProtoType(const FunctionProtoType *T) {
   for (unsigned I = 0, N = T->getNumParams(); I != N; ++I)
     Writer.AddTypeRef(T->getParamType(I), Record);
 
+  if (T->hasExtParameterInfos()) {
+    for (unsigned I = 0, N = T->getNumParams(); I != N; ++I)
+      Record.push_back(T->getExtParameterInfo(I).getOpaqueValue());
+  }
+
   if (T->isVariadic() || T->hasTrailingReturn() || T->getTypeQuals() ||
-      T->getRefQualifier() || T->getExceptionSpecType() != EST_None)
+      T->getRefQualifier() || T->getExceptionSpecType() != EST_None ||
+      T->hasExtParameterInfos())
     AbbrevToUse = 0;
 
   Code = TYPE_FUNCTION_PROTO;
@@ -5547,6 +5553,7 @@ void ASTWriter::AddCXXDefinitionData(const CXXRecordDecl *D, RecordDataImpl &Rec
   Record.push_back(Data.HasOnlyCMembers);
   Record.push_back(Data.HasInClassInitializer);
   Record.push_back(Data.HasUninitializedReferenceMember);
+  Record.push_back(Data.HasUninitializedFields);
   Record.push_back(Data.NeedOverloadResolutionForMoveConstructor);
   Record.push_back(Data.NeedOverloadResolutionForMoveAssignment);
   Record.push_back(Data.NeedOverloadResolutionForDestructor);
@@ -5557,6 +5564,7 @@ void ASTWriter::AddCXXDefinitionData(const CXXRecordDecl *D, RecordDataImpl &Rec
   Record.push_back(Data.DeclaredNonTrivialSpecialMembers);
   Record.push_back(Data.HasIrrelevantDestructor);
   Record.push_back(Data.HasConstexprNonCopyMoveConstructor);
+  Record.push_back(Data.HasDefaultedDefaultConstructor);
   Record.push_back(Data.DefaultedDefaultConstructorIsConstexpr);
   Record.push_back(Data.HasConstexprDefaultConstructor);
   Record.push_back(Data.HasNonLiteralTypeFieldsOrBases);

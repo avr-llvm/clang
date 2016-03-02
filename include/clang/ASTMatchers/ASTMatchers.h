@@ -1844,10 +1844,25 @@ inline internal::Matcher<Stmt> sizeOfExpr(
 /// \code
 ///   namespace a { namespace b { class X; } }
 /// \endcode
-inline internal::Matcher<NamedDecl> hasName(std::string Name) {
-  return internal::Matcher<NamedDecl>(
-      new internal::HasNameMatcher(std::move(Name)));
+inline internal::Matcher<NamedDecl> hasName(const std::string &Name) {
+  std::vector<std::string> Names;
+  Names.push_back(Name);
+  return internal::Matcher<NamedDecl>(new internal::HasNameMatcher(Names));
 }
+
+/// \brief Matches NamedDecl nodes that have any of the specified names.
+///
+/// This matcher is only provided as a performance optimization of hasName.
+/// \code
+///     hasAnyName(a, b, c)
+/// \endcode
+///  is equivalent to, but faster than
+/// \code
+///     anyOf(hasName(a), hasName(b), hasName(c))
+/// \endcode
+const llvm::VariadicFunction<internal::Matcher<NamedDecl>, StringRef,
+                             internal::hasAnyNameFunc>
+    hasAnyName = {};
 
 /// \brief Matches NamedDecl nodes whose fully qualified names contain
 /// a substring matched by the given RegExp.
@@ -3960,6 +3975,19 @@ AST_TYPE_MATCHER(ArrayType, arrayType);
 /// complexType()
 ///   matches "_Complex float f"
 AST_TYPE_MATCHER(ComplexType, complexType);
+
+/// \brief Matches any real floating-point type (float, double, long double).
+///
+/// Given
+/// \code
+///   int i;
+///   float f;
+/// \endcode
+/// realFloatingPointType()
+///   matches "float f" but not "int i"
+AST_MATCHER(Type, realFloatingPointType) {
+  return Node.isRealFloatingType();
+}
 
 /// \brief Matches arrays and C99 complex types that have a specific element
 /// type.

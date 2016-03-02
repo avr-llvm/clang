@@ -2175,6 +2175,18 @@ QualType Sema::BuildArrayType(QualType T, ArrayType::ArraySizeModifier ASM,
     Diag(Loc, diag::warn_vla_used);
   }
 
+  // OpenCL v2.0 s6.12.5 - Arrays of blocks are not supported.
+  // OpenCL v2.0 s6.16.13.1 - Arrays of pipe type are not supported.
+  // OpenCL v2.0 s6.9.b - Arrays of image/sampler type are not supported.
+  if (getLangOpts().OpenCL) {
+    const QualType ArrType = Context.getBaseElementType(T);
+    if (ArrType->isBlockPointerType() || ArrType->isPipeType() ||
+        ArrType->isSamplerT() || ArrType->isImageType()) {
+      Diag(Loc, diag::err_opencl_invalid_type_array) << ArrType;
+      return QualType();
+    }
+  }
+
   return T;
 }
 
@@ -3970,9 +3982,9 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
         SmallVector<QualType, 16> ParamTys;
         ParamTys.reserve(FTI.NumParams);
 
-        SmallVector<bool, 16> ConsumedParameters;
-        ConsumedParameters.reserve(FTI.NumParams);
-        bool HasAnyConsumedParameters = false;
+        SmallVector<FunctionProtoType::ExtParameterInfo, 16>
+          ExtParameterInfos(FTI.NumParams);
+        bool HasAnyInterestingExtParameterInfos = false;
 
         for (unsigned i = 0, e = FTI.NumParams; i != e; ++i) {
           ParmVarDecl *Param = cast<ParmVarDecl>(FTI.Params[i].Param);
@@ -4030,17 +4042,16 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
             }
           }
 
-          if (LangOpts.ObjCAutoRefCount) {
-            bool Consumed = Param->hasAttr<NSConsumedAttr>();
-            ConsumedParameters.push_back(Consumed);
-            HasAnyConsumedParameters |= Consumed;
+          if (LangOpts.ObjCAutoRefCount && Param->hasAttr<NSConsumedAttr>()) {
+            ExtParameterInfos[i] = ExtParameterInfos[i].withIsConsumed(true);
+            HasAnyInterestingExtParameterInfos = true;
           }
 
           ParamTys.push_back(ParamTy);
         }
 
-        if (HasAnyConsumedParameters)
-          EPI.ConsumedParameters = ConsumedParameters.data();
+        if (HasAnyInterestingExtParameterInfos)
+          EPI.ExtParameterInfos = ExtParameterInfos.data();
 
         SmallVector<QualType, 4> Exceptions;
         SmallVector<ParsedType, 2> DynamicExceptions;
@@ -5938,18 +5949,28 @@ static bool handleFunctionTypeAttr(TypeProcessingState &state,
     }
   }
 
-  // Diagnose use of callee-cleanup calling convention on variadic functions.
+  // Diagnose use of variadic functions with calling conventions that
+  // don't support them (e.g. because they're callee-cleanup).
+  // We delay warning about this on unprototyped function declarations
+  // until after redeclaration checking, just in case we pick up a
+  // prototype that way.  And apparently we also "delay" warning about
+  // unprototyped function types in general, despite not necessarily having
+  // much ability to diagnose it later.
   if (!supportsVariadicCall(CC)) {
     const FunctionProtoType *FnP = dyn_cast<FunctionProtoType>(fn);
     if (FnP && FnP->isVariadic()) {
       unsigned DiagID = diag::err_cconv_varargs;
+
       // stdcall and fastcall are ignored with a warning for GCC and MS
       // compatibility.
-      if (CC == CC_X86StdCall || CC == CC_X86FastCall)
+      bool IsInvalid = true;
+      if (CC == CC_X86StdCall || CC == CC_X86FastCall) {
         DiagID = diag::warn_cconv_varargs;
+        IsInvalid = false;
+      }
 
       S.Diag(attr.getLoc(), DiagID) << FunctionType::getNameForCallConv(CC);
-      attr.setInvalid();
+      if (IsInvalid) attr.setInvalid();
       return true;
     }
   }
@@ -6225,6 +6246,17 @@ static void HandleNeonVectorTypeAttr(QualType& CurType,
   CurType = S.Context.getVectorType(CurType, numElts, VecKind);
 }
 
+/// Handle OpenCL Access Qualifier Attribute.
+static void HandleOpenCLAccessAttr(QualType &CurType, const AttributeList &Attr,
+                                   Sema &S) {
+  // OpenCL v2.0 s6.6 - Access qualifier can used only for image and pipe type.
+  if (!(CurType->isImageType() || CurType->isPipeType())) {
+    S.Diag(Attr.getLoc(), diag::err_opencl_invalid_access_qualifier);
+    Attr.setInvalid();
+    return;
+  }
+}
+
 static void processTypeAttrs(TypeProcessingState &state, QualType &type,
                              TypeAttrLocation TAL, AttributeList *attrs) {
   // Scan through and apply attributes to this type where it makes sense.  Some
@@ -6320,9 +6352,8 @@ static void processTypeAttrs(TypeProcessingState &state, QualType &type,
                                VectorType::NeonPolyVector);
       attr.setUsedAsTypeAttr();
       break;
-    case AttributeList::AT_OpenCLImageAccess:
-      // FIXME: there should be some type checking happening here, I would
-      // imagine, but the original handler's checking was entirely superfluous.
+    case AttributeList::AT_OpenCLAccess:
+      HandleOpenCLAccessAttr(type, attr, state.getSema());
       attr.setUsedAsTypeAttr();
       break;
 

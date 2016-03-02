@@ -542,6 +542,8 @@ public:
 
   bool UseSjLjExceptions(const llvm::opt::ArgList &Args) const override;
 
+  bool SupportsEmbeddedBitcode() const override;
+
   SanitizerMask getSupportedSanitizers() const override;
 };
 
@@ -616,6 +618,8 @@ public:
                            llvm::opt::ArgStringList &CmdArgs) const override;
 
   bool isPIEDefault() const override { return false; }
+
+  SanitizerMask getSupportedSanitizers() const override;
 
 protected:
   Tool *buildLinker() const override;
