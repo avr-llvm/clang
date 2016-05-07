@@ -839,10 +839,16 @@ bool RecursiveASTVisitor<Derived>::TraverseConstructorInitializer(
   if (Init->isWritten() || getDerived().shouldVisitImplicitCode())
     TRY_TO(TraverseStmt(Init->getInit()));
 
-  if (Init->getNumArrayIndices() && getDerived().shouldVisitImplicitCode())
-    for (VarDecl *VD : Init->getArrayIndexes()) {
+  if (getDerived().shouldVisitImplicitCode())
+    // The braces for this one-line loop are required for MSVC2013.  It
+    // refuses to compile
+    //     for (int i : int_vec)
+    //       do {} while(false);
+    // without braces on the for loop.
+    for (VarDecl *VD : Init->getArrayIndices()) {
       TRY_TO(TraverseDecl(VD));
     }
+
   return true;
 }
 
@@ -1359,6 +1365,10 @@ DEF_TRAVERSE_DECL(
      // D->getAnonymousNamespace().
     })
 
+DEF_TRAVERSE_DECL(PragmaCommentDecl, {})
+
+DEF_TRAVERSE_DECL(PragmaDetectMismatchDecl, {})
+
 DEF_TRAVERSE_DECL(ExternCContextDecl, {})
 
 DEF_TRAVERSE_DECL(NamespaceAliasDecl, {
@@ -1461,6 +1471,14 @@ DEF_TRAVERSE_DECL(OMPThreadPrivateDecl, {
   for (auto *I : D->varlists()) {
     TRY_TO(TraverseStmt(I));
   }
+})
+
+DEF_TRAVERSE_DECL(OMPDeclareReductionDecl, {
+  TRY_TO(TraverseStmt(D->getCombiner()));
+  if (auto *Initializer = D->getInitializer())
+    TRY_TO(TraverseStmt(Initializer));
+  TRY_TO(TraverseType(D->getType()));
+  return true;
 })
 
 DEF_TRAVERSE_DECL(OMPCapturedExprDecl, { TRY_TO(TraverseVarHelper(D)); })
@@ -2505,6 +2523,7 @@ bool RecursiveASTVisitor<Derived>::TraverseOMPClause(OMPClause *C) {
     break;
 #include "clang/Basic/OpenMPKinds.def"
   case OMPC_threadprivate:
+  case OMPC_uniform:
   case OMPC_unknown:
     break;
   }
@@ -2521,6 +2540,7 @@ bool RecursiveASTVisitor<Derived>::VisitOMPClauseWithPreInit(
 template <typename Derived>
 bool RecursiveASTVisitor<Derived>::VisitOMPClauseWithPostUpdate(
     OMPClauseWithPostUpdate *Node) {
+  TRY_TO(VisitOMPClauseWithPreInit(Node));
   TRY_TO(TraverseStmt(Node->getPostUpdateExpr()));
   return true;
 }
@@ -2679,7 +2699,6 @@ template <typename Derived>
 bool RecursiveASTVisitor<Derived>::VisitOMPLastprivateClause(
     OMPLastprivateClause *C) {
   TRY_TO(VisitOMPClauseList(C));
-  TRY_TO(VisitOMPClauseWithPreInit(C));
   TRY_TO(VisitOMPClauseWithPostUpdate(C));
   for (auto *E : C->private_copies()) {
     TRY_TO(TraverseStmt(E));
@@ -2707,6 +2726,7 @@ bool RecursiveASTVisitor<Derived>::VisitOMPLinearClause(OMPLinearClause *C) {
   TRY_TO(TraverseStmt(C->getStep()));
   TRY_TO(TraverseStmt(C->getCalcStep()));
   TRY_TO(VisitOMPClauseList(C));
+  TRY_TO(VisitOMPClauseWithPostUpdate(C));
   for (auto *E : C->privates()) {
     TRY_TO(TraverseStmt(E));
   }
@@ -2766,7 +2786,6 @@ RecursiveASTVisitor<Derived>::VisitOMPReductionClause(OMPReductionClause *C) {
   TRY_TO(TraverseNestedNameSpecifierLoc(C->getQualifierLoc()));
   TRY_TO(TraverseDeclarationNameInfo(C->getNameInfo()));
   TRY_TO(VisitOMPClauseList(C));
-  TRY_TO(VisitOMPClauseWithPreInit(C));
   TRY_TO(VisitOMPClauseWithPostUpdate(C));
   for (auto *E : C->privates()) {
     TRY_TO(TraverseStmt(E));

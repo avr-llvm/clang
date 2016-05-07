@@ -280,6 +280,10 @@ static inline unsigned getIDNS(Sema::LookupNameKind NameKind,
     IDNS = Decl::IDNS_ObjCProtocol;
     break;
 
+  case Sema::LookupOMPReductionName:
+    IDNS = Decl::IDNS_OMPReduction;
+    break;
+
   case Sema::LookupAnyName:
     IDNS = Decl::IDNS_Ordinary | Decl::IDNS_Tag | Decl::IDNS_Member
       | Decl::IDNS_Using | Decl::IDNS_Namespace | Decl::IDNS_ObjCProtocol
@@ -1478,6 +1482,35 @@ bool Sema::hasVisibleDefaultArgument(const NamedDecl *D,
                                      Modules);
 }
 
+bool Sema::hasVisibleMemberSpecialization(
+    const NamedDecl *D, llvm::SmallVectorImpl<Module *> *Modules) {
+  assert(isa<CXXRecordDecl>(D->getDeclContext()) &&
+         "not a member specialization");
+  for (auto *Redecl : D->redecls()) {
+    // If the specialization is declared at namespace scope, then it's a member
+    // specialization declaration. If it's lexically inside the class
+    // definition then it was instantiated.
+    //
+    // FIXME: This is a hack. There should be a better way to determine this.
+    // FIXME: What about MS-style explicit specializations declared within a
+    //        class definition?
+    if (Redecl->getLexicalDeclContext()->isFileContext()) {
+      auto *NonConstR = const_cast<NamedDecl*>(cast<NamedDecl>(Redecl));
+
+      if (isVisible(NonConstR))
+        return true;
+
+      if (Modules) {
+        Modules->push_back(getOwningModule(NonConstR));
+        const auto &Merged = Context.getModulesWithMergedDefinition(NonConstR);
+        Modules->insert(Modules->end(), Merged.begin(), Merged.end());
+      }
+    }
+  }
+
+  return false;
+}
+
 /// \brief Determine whether a declaration is visible to name lookup.
 ///
 /// This routine determines whether the declaration D is visible in the current
@@ -1582,16 +1615,34 @@ static NamedDecl *findAcceptableDecl(Sema &SemaRef, NamedDecl *D) {
     if (RD == D)
       continue;
 
-    if (auto ND = dyn_cast<NamedDecl>(RD)) {
-      // FIXME: This is wrong in the case where the previous declaration is not
-      // visible in the same scope as D. This needs to be done much more
-      // carefully.
-      if (LookupResult::isVisible(SemaRef, ND))
-        return ND;
-    }
+    auto ND = cast<NamedDecl>(RD);
+    // FIXME: This is wrong in the case where the previous declaration is not
+    // visible in the same scope as D. This needs to be done much more
+    // carefully.
+    if (LookupResult::isVisible(SemaRef, ND))
+      return ND;
   }
 
   return nullptr;
+}
+
+bool Sema::hasVisibleDeclarationSlow(const NamedDecl *D,
+                                     llvm::SmallVectorImpl<Module *> *Modules) {
+  assert(!isVisible(D) && "not in slow case");
+
+  for (auto *Redecl : D->redecls()) {
+    auto *NonConstR = const_cast<NamedDecl*>(cast<NamedDecl>(Redecl));
+    if (isVisible(NonConstR))
+      return true;
+
+    if (Modules) {
+      Modules->push_back(getOwningModule(NonConstR));
+      const auto &Merged = Context.getModulesWithMergedDefinition(NonConstR);
+      Modules->insert(Modules->end(), Merged.begin(), Merged.end());
+    }
+  }
+
+  return false;
 }
 
 NamedDecl *LookupResult::getAcceptableDeclSlow(NamedDecl *D) const {
@@ -2013,6 +2064,10 @@ bool Sema::LookupQualifiedName(LookupResult &R, DeclContext *LookupCtx,
 
     case LookupAnyName:
       BaseCallback = &LookupAnyMember;
+      break;
+
+    case LookupOMPReductionName:
+      BaseCallback = &CXXRecordDecl::FindOMPReductionMember;
       break;
 
     case LookupUsingDeclName:
@@ -2438,7 +2493,7 @@ addAssociatedClassesAndNamespaces(AssociatedLookup &Result,
   // FIXME: That's not correct, we may have added this class only because it
   // was the enclosing class of another class, and in that case we won't have
   // added its base classes yet.
-  if (!Result.Classes.insert(Class).second)
+  if (!Result.Classes.insert(Class))
     return;
 
   // -- If T is a template-id, its associated namespaces and classes are
@@ -2488,7 +2543,7 @@ addAssociatedClassesAndNamespaces(AssociatedLookup &Result,
       if (!BaseType)
         continue;
       CXXRecordDecl *BaseDecl = cast<CXXRecordDecl>(BaseType->getDecl());
-      if (Result.Classes.insert(BaseDecl).second) {
+      if (Result.Classes.insert(BaseDecl)) {
         // Find the associated namespace for this base class.
         DeclContext *BaseCtx = BaseDecl->getDeclContext();
         CollectEnclosingNamespace(Result.Namespaces, BaseCtx);
@@ -4896,7 +4951,7 @@ static NamedDecl *getDefinitionToImport(NamedDecl *D) {
 }
 
 void Sema::diagnoseMissingImport(SourceLocation Loc, NamedDecl *Decl,
-                                 bool NeedDefinition, bool Recover) {
+                                 MissingImportKind MIK, bool Recover) {
   assert(!isVisible(Decl) && "missing import for non-hidden decl?");
 
   // Suggest importing a module providing the definition of this entity, if
@@ -4905,8 +4960,6 @@ void Sema::diagnoseMissingImport(SourceLocation Loc, NamedDecl *Decl,
   if (!Def)
     Def = Decl;
 
-  // FIXME: Add a Fix-It that imports the corresponding module or includes
-  // the header.
   Module *Owner = getOwningModule(Decl);
   assert(Owner && "definition of hidden declaration is not in a module");
 
@@ -4915,10 +4968,18 @@ void Sema::diagnoseMissingImport(SourceLocation Loc, NamedDecl *Decl,
   auto Merged = Context.getModulesWithMergedDefinition(Decl);
   OwningModules.insert(OwningModules.end(), Merged.begin(), Merged.end());
 
-  diagnoseMissingImport(Loc, Decl, Decl->getLocation(), OwningModules,
-                        NeedDefinition ? MissingImportKind::Definition
-                                       : MissingImportKind::Declaration,
+  diagnoseMissingImport(Loc, Decl, Decl->getLocation(), OwningModules, MIK,
                         Recover);
+}
+
+/// \brief Get a "quoted.h" or <angled.h> include path to use in a diagnostic
+/// suggesting the addition of a #include of the specified file.
+static std::string getIncludeStringForHeader(Preprocessor &PP,
+                                             const FileEntry *E) {
+  bool IsSystem;
+  auto Path =
+      PP.getHeaderSearchInfo().suggestPathToFileForDiagnostics(E, &IsSystem);
+  return (IsSystem ? '<' : '"') + Path + (IsSystem ? '>' : '"');
 }
 
 void Sema::diagnoseMissingImport(SourceLocation UseLoc, NamedDecl *Decl,
@@ -4941,7 +5002,18 @@ void Sema::diagnoseMissingImport(SourceLocation UseLoc, NamedDecl *Decl,
 
     Diag(UseLoc, diag::err_module_unimported_use_multiple)
       << (int)MIK << Decl << ModuleList;
+  } else if (const FileEntry *E =
+                 PP.getModuleHeaderToIncludeForDiagnostics(UseLoc, DeclLoc)) {
+    // The right way to make the declaration visible is to include a header;
+    // suggest doing so.
+    //
+    // FIXME: Find a smart place to suggest inserting a #include, and add
+    // a FixItHint there.
+    Diag(UseLoc, diag::err_module_unimported_use_header)
+      << (int)MIK << Decl << Modules[0]->getFullModuleName()
+      << getIncludeStringForHeader(PP, E);
   } else {
+    // FIXME: Add a FixItHint that imports the corresponding module.
     Diag(UseLoc, diag::err_module_unimported_use)
       << (int)MIK << Decl << Modules[0]->getFullModuleName();
   }
@@ -4956,6 +5028,12 @@ void Sema::diagnoseMissingImport(SourceLocation UseLoc, NamedDecl *Decl,
     break;
   case MissingImportKind::DefaultArgument:
     DiagID = diag::note_default_argument_declared_here;
+    break;
+  case MissingImportKind::ExplicitSpecialization:
+    DiagID = diag::note_explicit_specialization_declared_here;
+    break;
+  case MissingImportKind::PartialSpecialization:
+    DiagID = diag::note_partial_specialization_declared_here;
     break;
   }
   Diag(DeclLoc, DiagID);
@@ -4992,7 +5070,7 @@ void Sema::diagnoseTypo(const TypoCorrection &Correction,
     assert(Decl && "import required but no declaration to import");
 
     diagnoseMissingImport(Correction.getCorrectionRange().getBegin(), Decl,
-                          /*NeedDefinition*/ false, ErrorRecovery);
+                          MissingImportKind::Declaration, ErrorRecovery);
     return;
   }
 

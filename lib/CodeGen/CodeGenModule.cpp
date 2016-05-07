@@ -87,19 +87,8 @@ CodeGenModule::CodeGenModule(ASTContext &C, const HeaderSearchOptions &HSO,
     : Context(C), LangOpts(C.getLangOpts()), HeaderSearchOpts(HSO),
       PreprocessorOpts(PPO), CodeGenOpts(CGO), TheModule(M), Diags(diags),
       Target(C.getTargetInfo()), ABI(createCXXABI(*this)),
-      VMContext(M.getContext()), TBAA(nullptr), TheTargetCodeGenInfo(nullptr),
-      Types(*this), VTables(*this), ObjCRuntime(nullptr),
-      OpenCLRuntime(nullptr), OpenMPRuntime(nullptr), CUDARuntime(nullptr),
-      DebugInfo(nullptr), ObjCData(nullptr),
-      NoObjCARCExceptionsMetadata(nullptr), PGOReader(nullptr),
-      CFConstantStringClassRef(nullptr), ConstantStringClassRef(nullptr),
-      NSConstantStringType(nullptr), NSConcreteGlobalBlock(nullptr),
-      NSConcreteStackBlock(nullptr), BlockObjectAssign(nullptr),
-      BlockObjectDispose(nullptr), BlockDescriptorType(nullptr),
-      GenericBlockLiteralType(nullptr), LifetimeStartFn(nullptr),
-      LifetimeEndFn(nullptr), SanitizerMD(new SanitizerMetadata(*this)),
-      WholeProgramVTablesBlacklist(CGO.WholeProgramVTablesBlacklistFiles,
-                                   C.getSourceManager()) {
+      VMContext(M.getContext()), Types(*this), VTables(*this),
+      SanitizerMD(new SanitizerMetadata(*this)) {
 
   // Initialize the type cache.
   llvm::LLVMContext &LLVMContext = M.getContext();
@@ -135,27 +124,27 @@ CodeGenModule::CodeGenModule(ASTContext &C, const HeaderSearchOptions &HSO,
   // Enable TBAA unless it's suppressed. ThreadSanitizer needs TBAA even at O0.
   if (LangOpts.Sanitize.has(SanitizerKind::Thread) ||
       (!CodeGenOpts.RelaxedAliasing && CodeGenOpts.OptimizationLevel > 0))
-    TBAA = new CodeGenTBAA(Context, VMContext, CodeGenOpts, getLangOpts(),
-                           getCXXABI().getMangleContext());
+    TBAA.reset(new CodeGenTBAA(Context, VMContext, CodeGenOpts, getLangOpts(),
+                               getCXXABI().getMangleContext()));
 
   // If debug info or coverage generation is enabled, create the CGDebugInfo
   // object.
   if (CodeGenOpts.getDebugInfo() != codegenoptions::NoDebugInfo ||
       CodeGenOpts.EmitGcovArcs || CodeGenOpts.EmitGcovNotes)
-    DebugInfo = new CGDebugInfo(*this);
+    DebugInfo.reset(new CGDebugInfo(*this));
 
   Block.GlobalUniqueCount = 0;
 
   if (C.getLangOpts().ObjC1)
-    ObjCData = new ObjCEntrypoints();
+    ObjCData.reset(new ObjCEntrypoints());
 
-  if (!CodeGenOpts.InstrProfileInput.empty()) {
-    auto ReaderOrErr =
-        llvm::IndexedInstrProfReader::create(CodeGenOpts.InstrProfileInput);
+  if (CodeGenOpts.hasProfileClangUse()) {
+    auto ReaderOrErr = llvm::IndexedInstrProfReader::create(
+        CodeGenOpts.ProfileInstrumentUsePath);
     if (std::error_code EC = ReaderOrErr.getError()) {
       unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
                                               "Could not read profile %0: %1");
-      getDiags().Report(DiagID) << CodeGenOpts.InstrProfileInput
+      getDiags().Report(DiagID) << CodeGenOpts.ProfileInstrumentUsePath
                                 << EC.message();
     } else
       PGOReader = std::move(ReaderOrErr.get());
@@ -167,16 +156,7 @@ CodeGenModule::CodeGenModule(ASTContext &C, const HeaderSearchOptions &HSO,
     CoverageMapping.reset(new CoverageMappingModuleGen(*this, *CoverageInfo));
 }
 
-CodeGenModule::~CodeGenModule() {
-  delete ObjCRuntime;
-  delete OpenCLRuntime;
-  delete OpenMPRuntime;
-  delete CUDARuntime;
-  delete TheTargetCodeGenInfo;
-  delete TBAA;
-  delete DebugInfo;
-  delete ObjCData;
-}
+CodeGenModule::~CodeGenModule() {}
 
 void CodeGenModule::createObjCRuntime() {
   // This is just isGNUFamily(), but we want to force implementors of
@@ -185,21 +165,21 @@ void CodeGenModule::createObjCRuntime() {
   case ObjCRuntime::GNUstep:
   case ObjCRuntime::GCC:
   case ObjCRuntime::ObjFW:
-    ObjCRuntime = CreateGNUObjCRuntime(*this);
+    ObjCRuntime.reset(CreateGNUObjCRuntime(*this));
     return;
 
   case ObjCRuntime::FragileMacOSX:
   case ObjCRuntime::MacOSX:
   case ObjCRuntime::iOS:
   case ObjCRuntime::WatchOS:
-    ObjCRuntime = CreateMacObjCRuntime(*this);
+    ObjCRuntime.reset(CreateMacObjCRuntime(*this));
     return;
   }
   llvm_unreachable("bad runtime kind");
 }
 
 void CodeGenModule::createOpenCLRuntime() {
-  OpenCLRuntime = new CGOpenCLRuntime(*this);
+  OpenCLRuntime.reset(new CGOpenCLRuntime(*this));
 }
 
 void CodeGenModule::createOpenMPRuntime() {
@@ -211,16 +191,16 @@ void CodeGenModule::createOpenMPRuntime() {
   case llvm::Triple::nvptx64:
     assert(getLangOpts().OpenMPIsDevice &&
            "OpenMP NVPTX is only prepared to deal with device code.");
-    OpenMPRuntime = new CGOpenMPRuntimeNVPTX(*this);
+    OpenMPRuntime.reset(new CGOpenMPRuntimeNVPTX(*this));
     break;
   default:
-    OpenMPRuntime = new CGOpenMPRuntime(*this);
+    OpenMPRuntime.reset(new CGOpenMPRuntime(*this));
     break;
   }
 }
 
 void CodeGenModule::createCUDARuntime() {
-  CUDARuntime = CreateNVCUDARuntime(*this);
+  CUDARuntime.reset(CreateNVCUDARuntime(*this));
 }
 
 void CodeGenModule::addReplacement(StringRef Name, llvm::Constant *C) {
@@ -274,20 +254,21 @@ void CodeGenModule::applyGlobalValReplacements() {
 
 // This is only used in aliases that we created and we know they have a
 // linear structure.
-static const llvm::GlobalObject *getAliasedGlobal(const llvm::GlobalAlias &GA) {
-  llvm::SmallPtrSet<const llvm::GlobalAlias*, 4> Visited;
-  const llvm::Constant *C = &GA;
+static const llvm::GlobalObject *getAliasedGlobal(
+    const llvm::GlobalIndirectSymbol &GIS) {
+  llvm::SmallPtrSet<const llvm::GlobalIndirectSymbol*, 4> Visited;
+  const llvm::Constant *C = &GIS;
   for (;;) {
     C = C->stripPointerCasts();
     if (auto *GO = dyn_cast<llvm::GlobalObject>(C))
       return GO;
     // stripPointerCasts will not walk over weak aliases.
-    auto *GA2 = dyn_cast<llvm::GlobalAlias>(C);
-    if (!GA2)
+    auto *GIS2 = dyn_cast<llvm::GlobalIndirectSymbol>(C);
+    if (!GIS2)
       return nullptr;
-    if (!Visited.insert(GA2).second)
+    if (!Visited.insert(GIS2).second)
       return nullptr;
-    C = GA2->getAliasee();
+    C = GIS2->getIndirectSymbol();
   }
 }
 
@@ -299,20 +280,35 @@ void CodeGenModule::checkAliases() {
   DiagnosticsEngine &Diags = getDiags();
   for (const GlobalDecl &GD : Aliases) {
     const auto *D = cast<ValueDecl>(GD.getDecl());
-    const AliasAttr *AA = D->getAttr<AliasAttr>();
+    SourceLocation Location;
+    bool IsIFunc = D->hasAttr<IFuncAttr>();
+    if (const Attr *A = D->getDefiningAttr())
+      Location = A->getLocation();
+    else
+      llvm_unreachable("Not an alias or ifunc?");
     StringRef MangledName = getMangledName(GD);
     llvm::GlobalValue *Entry = GetGlobalValue(MangledName);
-    auto *Alias = cast<llvm::GlobalAlias>(Entry);
+    auto *Alias  = cast<llvm::GlobalIndirectSymbol>(Entry);
     const llvm::GlobalValue *GV = getAliasedGlobal(*Alias);
     if (!GV) {
       Error = true;
-      Diags.Report(AA->getLocation(), diag::err_cyclic_alias);
+      Diags.Report(Location, diag::err_cyclic_alias) << IsIFunc;
     } else if (GV->isDeclaration()) {
       Error = true;
-      Diags.Report(AA->getLocation(), diag::err_alias_to_undefined);
+      Diags.Report(Location, diag::err_alias_to_undefined)
+          << IsIFunc << IsIFunc;
+    } else if (IsIFunc) {
+      // Check resolver function type.
+      llvm::FunctionType *FTy = dyn_cast<llvm::FunctionType>(
+          GV->getType()->getPointerElementType());
+      assert(FTy);
+      if (!FTy->getReturnType()->isPointerTy())
+        Diags.Report(Location, diag::err_ifunc_resolver_return);
+      if (FTy->getNumParams())
+        Diags.Report(Location, diag::err_ifunc_resolver_params);
     }
 
-    llvm::Constant *Aliasee = Alias->getAliasee();
+    llvm::Constant *Aliasee = Alias->getIndirectSymbol();
     llvm::GlobalValue *AliaseeGV;
     if (auto CE = dyn_cast<llvm::ConstantExpr>(Aliasee))
       AliaseeGV = cast<llvm::GlobalValue>(CE->getOperand(0));
@@ -323,7 +319,7 @@ void CodeGenModule::checkAliases() {
       StringRef AliasSection = SA->getName();
       if (AliasSection != AliaseeGV->getSection())
         Diags.Report(SA->getLocation(), diag::warn_alias_with_section)
-            << AliasSection;
+            << AliasSection << IsIFunc << IsIFunc;
     }
 
     // We have to handle alias to weak aliases in here. LLVM itself disallows
@@ -331,13 +327,13 @@ void CodeGenModule::checkAliases() {
     // compatibility with gcc we implement it by just pointing the alias
     // to its aliasee's aliasee. We also warn, since the user is probably
     // expecting the link to be weak.
-    if (auto GA = dyn_cast<llvm::GlobalAlias>(AliaseeGV)) {
-      if (GA->mayBeOverridden()) {
-        Diags.Report(AA->getLocation(), diag::warn_alias_to_weak_alias)
-            << GV->getName() << GA->getName();
+    if (auto GA = dyn_cast<llvm::GlobalIndirectSymbol>(AliaseeGV)) {
+      if (GA->isInterposable()) {
+        Diags.Report(Location, diag::warn_alias_to_weak_alias)
+            << GV->getName() << GA->getName() << IsIFunc;
         Aliasee = llvm::ConstantExpr::getPointerBitCastOrAddrSpaceCast(
-            GA->getAliasee(), Alias->getType());
-        Alias->setAliasee(Aliasee);
+            GA->getIndirectSymbol(), Alias->getType());
+        Alias->setIndirectSymbol(Aliasee);
       }
     }
   }
@@ -347,7 +343,7 @@ void CodeGenModule::checkAliases() {
   for (const GlobalDecl &GD : Aliases) {
     StringRef MangledName = getMangledName(GD);
     llvm::GlobalValue *Entry = GetGlobalValue(MangledName);
-    auto *Alias = cast<llvm::GlobalAlias>(Entry);
+    auto *Alias = dyn_cast<llvm::GlobalIndirectSymbol>(Entry);
     Alias->replaceAllUsesWith(llvm::UndefValue::get(Alias->getType()));
     Alias->eraseFromParent();
   }
@@ -396,6 +392,7 @@ void CodeGenModule::Release() {
       AddGlobalCtor(OpenMPRegistrationFunction, 0);
   if (PGOReader) {
     getModule().setMaximumFunctionCount(PGOReader->getMaximumFunctionCount());
+    getModule().setProfileSummary(PGOReader->getSummary().getMD(VMContext));
     if (PGOStats.hasDiagnostics())
       PGOStats.reportDiagnostics(getDiags(), getCodeGenOpts().MainFileName);
   }
@@ -471,16 +468,22 @@ void CodeGenModule::Release() {
     getModule().addModuleFlag(llvm::Module::Override, "Cross-DSO CFI", 1);
   }
 
-  if (uint32_t PLevel = Context.getLangOpts().PICLevel) {
-    llvm::PICLevel::Level PL = llvm::PICLevel::Default;
-    switch (PLevel) {
-    case 0: break;
-    case 1: PL = llvm::PICLevel::Small; break;
-    case 2: PL = llvm::PICLevel::Large; break;
-    default: llvm_unreachable("Invalid PIC Level");
-    }
+  if (LangOpts.CUDAIsDevice && getTarget().getTriple().isNVPTX()) {
+    // Indicate whether __nvvm_reflect should be configured to flush denormal
+    // floating point values to 0.  (This corresponds to its "__CUDA_FTZ"
+    // property.)
+    getModule().addModuleFlag(llvm::Module::Override, "nvvm-reflect-ftz",
+                              LangOpts.CUDADeviceFlushDenormalsToZero ? 1 : 0);
+  }
 
-    getModule().setPICLevel(PL);
+  if (uint32_t PLevel = Context.getLangOpts().PICLevel) {
+    assert(PLevel < 3 && "Invalid PIC Level");
+    getModule().setPICLevel(static_cast<llvm::PICLevel::Level>(PLevel));
+  }
+
+  if (uint32_t PLevel = Context.getLangOpts().PIELevel) {
+    assert(PLevel < 3 && "Invalid PIE Level");
+    getModule().setPIELevel(static_cast<llvm::PIELevel::Level>(PLevel));
   }
 
   SimplifyPersonality();
@@ -906,12 +909,6 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
     F->removeFnAttr(llvm::Attribute::InlineHint);
   }
 
-  if (isa<CXXConstructorDecl>(D) || isa<CXXDestructorDecl>(D))
-    F->setUnnamedAddr(true);
-  else if (const auto *MD = dyn_cast<CXXMethodDecl>(D))
-    if (MD->isVirtual())
-      F->setUnnamedAddr(true);
-
   unsigned alignment = D->getMaxAlignment() / Context.getCharWidth();
   if (alignment)
     F->setAlignment(alignment);
@@ -1073,11 +1070,27 @@ void CodeGenModule::SetFunctionAttributes(GlobalDecl GD, llvm::Function *F,
   if (const SectionAttr *SA = FD->getAttr<SectionAttr>())
     F->setSection(SA->getName());
 
-  // A replaceable global allocation function does not act like a builtin by
-  // default, only if it is invoked by a new-expression or delete-expression.
-  if (FD->isReplaceableGlobalAllocationFunction())
+  if (FD->isReplaceableGlobalAllocationFunction()) {
+    // A replaceable global allocation function does not act like a builtin by
+    // default, only if it is invoked by a new-expression or delete-expression.
     F->addAttribute(llvm::AttributeSet::FunctionIndex,
                     llvm::Attribute::NoBuiltin);
+
+    // A sane operator new returns a non-aliasing pointer.
+    // FIXME: Also add NonNull attribute to the return value
+    // for the non-nothrow forms?
+    auto Kind = FD->getDeclName().getCXXOverloadedOperator();
+    if (getCodeGenOpts().AssumeSaneOperatorNew &&
+        (Kind == OO_New || Kind == OO_Array_New))
+      F->addAttribute(llvm::AttributeSet::ReturnIndex,
+                      llvm::Attribute::NoAlias);
+  }
+
+  if (isa<CXXConstructorDecl>(FD) || isa<CXXDestructorDecl>(FD))
+    F->setUnnamedAddr(true);
+  else if (const auto *MD = dyn_cast<CXXMethodDecl>(FD))
+    if (MD->isVirtual())
+      F->setUnnamedAddr(true);
 
   CreateFunctionBitSetEntry(FD, F);
 }
@@ -1453,12 +1466,12 @@ ConstantAddress CodeGenModule::GetAddrOfUuidDescriptor(
     const CXXUuidofExpr* E) {
   // Sema has verified that IIDSource has a __declspec(uuid()), and that its
   // well-formed.
-  StringRef Uuid = E->getUuidAsStringRef(Context);
+  StringRef Uuid = E->getUuidStr();
   std::string Name = "_GUID_" + Uuid.lower();
   std::replace(Name.begin(), Name.end(), '-', '_');
 
-  // Contains a 32-bit field.
-  CharUnits Alignment = CharUnits::fromQuantity(4);
+  // The UUID descriptor should be pointer aligned.
+  CharUnits Alignment = CharUnits::fromQuantity(PointerAlignInBytes);
 
   // Look for an existing global.
   if (llvm::GlobalVariable *GV = getModule().getNamedGlobal(Name))
@@ -1519,6 +1532,10 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
   if (Global->hasAttr<AliasAttr>())
     return EmitAliasDefinition(GD);
 
+  // IFunc like an alias whose value is resolved at runtime by calling resolver.
+  if (Global->hasAttr<IFuncAttr>())
+    return emitIFuncDefinition(GD);
+
   // If this is CUDA, be selective about which declarations we emit.
   if (LangOpts.CUDA) {
     if (LangOpts.CUDAIsDevice) {
@@ -1528,18 +1545,32 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
           !Global->hasAttr<CUDASharedAttr>())
         return;
     } else {
-      if (!Global->hasAttr<CUDAHostAttr>() && (
-            Global->hasAttr<CUDADeviceAttr>() ||
-            Global->hasAttr<CUDAConstantAttr>() ||
-            Global->hasAttr<CUDASharedAttr>()))
+      // We need to emit host-side 'shadows' for all global
+      // device-side variables because the CUDA runtime needs their
+      // size and host-side address in order to provide access to
+      // their device-side incarnations.
+
+      // So device-only functions are the only things we skip.
+      if (isa<FunctionDecl>(Global) && !Global->hasAttr<CUDAHostAttr>() &&
+          Global->hasAttr<CUDADeviceAttr>())
         return;
+
+      assert((isa<FunctionDecl>(Global) || isa<VarDecl>(Global)) &&
+             "Expected Variable or Function");
     }
   }
 
-  // If this is OpenMP device, check if it is legal to emit this global
-  // normally.
-  if (OpenMPRuntime && OpenMPRuntime->emitTargetGlobal(GD))
-    return;
+  if (LangOpts.OpenMP) {
+    // If this is OpenMP device, check if it is legal to emit this global
+    // normally.
+    if (OpenMPRuntime && OpenMPRuntime->emitTargetGlobal(GD))
+      return;
+    if (auto *DRD = dyn_cast<OMPDeclareReductionDecl>(Global)) {
+      if (MustBeEmitted(Global))
+        EmitOMPDeclareReduction(DRD);
+      return;
+    }
+  }
 
   // Ignore declarations, they will be emitted on their first use.
   if (const auto *FD = dyn_cast<FunctionDecl>(Global)) {
@@ -1561,8 +1592,15 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
   } else {
     const auto *VD = cast<VarDecl>(Global);
     assert(VD->isFileVarDecl() && "Cannot emit local var decl as global.");
-
-    if (VD->isThisDeclarationADefinition() != VarDecl::Definition &&
+    // We need to emit device-side global CUDA variables even if a
+    // variable does not have a definition -- we still need to define
+    // host-side shadow for it.
+    bool MustEmitForCuda = LangOpts.CUDA && !LangOpts.CUDAIsDevice &&
+                           !VD->hasDefinition() &&
+                           (VD->hasAttr<CUDAConstantAttr>() ||
+                            VD->hasAttr<CUDADeviceAttr>());
+    if (!MustEmitForCuda &&
+        VD->isThisDeclarationADefinition() != VarDecl::Definition &&
         !Context.isMSStaticDataMemberInlineDefinition(VD))
       return;
   }
@@ -2444,6 +2482,10 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
   if (D->hasAttr<AnnotateAttr>())
     AddGlobalAnnotations(D, GV);
 
+  // Set the llvm linkage type as appropriate.
+  llvm::GlobalValue::LinkageTypes Linkage =
+      getLLVMLinkageVarDefinition(D, GV->isConstant());
+
   // CUDA B.2.1 "The __device__ qualifier declares a variable that resides on
   // the device. [...]"
   // CUDA B.2.2 "The __constant__ qualifier, optionally used together with
@@ -2451,9 +2493,34 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
   // Is accessible from all the threads within the grid and from the host
   // through the runtime library (cudaGetSymbolAddress() / cudaGetSymbolSize()
   // / cudaMemcpyToSymbol() / cudaMemcpyFromSymbol())."
-  if (GV && LangOpts.CUDA && LangOpts.CUDAIsDevice &&
-      (D->hasAttr<CUDAConstantAttr>() || D->hasAttr<CUDADeviceAttr>())) {
-    GV->setExternallyInitialized(true);
+  if (GV && LangOpts.CUDA) {
+    if (LangOpts.CUDAIsDevice) {
+      if (D->hasAttr<CUDADeviceAttr>() || D->hasAttr<CUDAConstantAttr>())
+        GV->setExternallyInitialized(true);
+    } else {
+      // Host-side shadows of external declarations of device-side
+      // global variables become internal definitions. These have to
+      // be internal in order to prevent name conflicts with global
+      // host variables with the same name in a different TUs.
+      if (D->hasAttr<CUDADeviceAttr>() || D->hasAttr<CUDAConstantAttr>()) {
+        Linkage = llvm::GlobalValue::InternalLinkage;
+
+        // Shadow variables and their properties must be registered
+        // with CUDA runtime.
+        unsigned Flags = 0;
+        if (!D->hasDefinition())
+          Flags |= CGCUDARuntime::ExternDeviceVar;
+        if (D->hasAttr<CUDAConstantAttr>())
+          Flags |= CGCUDARuntime::ConstantDeviceVar;
+        getCUDARuntime().registerDeviceVar(*GV, Flags);
+      } else if (D->hasAttr<CUDASharedAttr>())
+        // __shared__ variables are odd. Shadows do get created, but
+        // they are not registered with the CUDA runtime, so they
+        // can't really be used to access their device-side
+        // counterparts. It's not clear yet whether it's nvcc's bug or
+        // a feature, but we've got to do the same for compatibility.
+        Linkage = llvm::GlobalValue::InternalLinkage;
+    }
   }
   GV->setInitializer(Init);
 
@@ -2470,9 +2537,6 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
 
   GV->setAlignment(getContext().getDeclAlign(D).getQuantity());
 
-  // Set the llvm linkage type as appropriate.
-  llvm::GlobalValue::LinkageTypes Linkage =
-      getLLVMLinkageVarDefinition(D, GV->isConstant());
 
   // On Darwin, if the normal linkage of a C++ thread_local variable is
   // LinkOnce or Weak, we keep the normal linkage to prevent multiple
@@ -2835,7 +2899,7 @@ void CodeGenModule::EmitAliasDefinition(GlobalDecl GD) {
   StringRef MangledName = getMangledName(GD);
 
   if (AA->getAliasee() == MangledName) {
-    Diags.Report(AA->getLocation(), diag::err_cyclic_alias);
+    Diags.Report(AA->getLocation(), diag::err_cyclic_alias) << 0;
     return;
   }
 
@@ -2866,7 +2930,7 @@ void CodeGenModule::EmitAliasDefinition(GlobalDecl GD) {
 
   if (Entry) {
     if (GA->getAliasee() == Entry) {
-      Diags.Report(AA->getLocation(), diag::err_cyclic_alias);
+      Diags.Report(AA->getLocation(), diag::err_cyclic_alias) << 0;
       return;
     }
 
@@ -2901,6 +2965,65 @@ void CodeGenModule::EmitAliasDefinition(GlobalDecl GD) {
       setTLSMode(GA, *VD);
 
   setAliasAttributes(D, GA);
+}
+
+void CodeGenModule::emitIFuncDefinition(GlobalDecl GD) {
+  const auto *D = cast<ValueDecl>(GD.getDecl());
+  const IFuncAttr *IFA = D->getAttr<IFuncAttr>();
+  assert(IFA && "Not an ifunc?");
+
+  StringRef MangledName = getMangledName(GD);
+
+  if (IFA->getResolver() == MangledName) {
+    Diags.Report(IFA->getLocation(), diag::err_cyclic_alias) << 1;
+    return;
+  }
+
+  // Report an error if some definition overrides ifunc.
+  llvm::GlobalValue *Entry = GetGlobalValue(MangledName);
+  if (Entry && !Entry->isDeclaration()) {
+    GlobalDecl OtherGD;
+    if (lookupRepresentativeDecl(MangledName, OtherGD) &&
+        DiagnosedConflictingDefinitions.insert(GD).second) {
+      Diags.Report(D->getLocation(), diag::err_duplicate_mangled_name);
+      Diags.Report(OtherGD.getDecl()->getLocation(),
+                   diag::note_previous_definition);
+    }
+    return;
+  }
+
+  Aliases.push_back(GD);
+
+  llvm::Type *DeclTy = getTypes().ConvertTypeForMem(D->getType());
+  llvm::Constant *Resolver =
+      GetOrCreateLLVMFunction(IFA->getResolver(), DeclTy, GD,
+                              /*ForVTable=*/false);
+  llvm::GlobalIFunc *GIF =
+      llvm::GlobalIFunc::create(DeclTy, 0, llvm::Function::ExternalLinkage,
+                                "", Resolver, &getModule());
+  if (Entry) {
+    if (GIF->getResolver() == Entry) {
+      Diags.Report(IFA->getLocation(), diag::err_cyclic_alias) << 1;
+      return;
+    }
+    assert(Entry->isDeclaration());
+
+    // If there is a declaration in the module, then we had an extern followed
+    // by the ifunc, as in:
+    //   extern int test();
+    //   ...
+    //   int test() __attribute__((ifunc("resolver")));
+    //
+    // Remove it and replace uses of it with the ifunc.
+    GIF->takeName(Entry);
+
+    Entry->replaceAllUsesWith(llvm::ConstantExpr::getBitCast(GIF,
+                                                          Entry->getType()));
+    Entry->eraseFromParent();
+  } else
+    GIF->setName(MangledName);
+
+  SetCommonAttributes(D, GIF);
 }
 
 llvm::Function *CodeGenModule::getIntrinsic(unsigned IID,
@@ -3689,6 +3812,31 @@ void CodeGenModule::EmitTopLevelDecl(Decl *D) {
     ObjCRuntime->RegisterAlias(cast<ObjCCompatibleAliasDecl>(D));
     break;
 
+  case Decl::PragmaComment: {
+    const auto *PCD = cast<PragmaCommentDecl>(D);
+    switch (PCD->getCommentKind()) {
+    case PCK_Unknown:
+      llvm_unreachable("unexpected pragma comment kind");
+    case PCK_Linker:
+      AppendLinkerOptions(PCD->getArg());
+      break;
+    case PCK_Lib:
+      AddDependentLib(PCD->getArg());
+      break;
+    case PCK_Compiler:
+    case PCK_ExeStr:
+    case PCK_User:
+      break; // We ignore all of these.
+    }
+    break;
+  }
+
+  case Decl::PragmaDetectMismatch: {
+    const auto *PDMD = cast<PragmaDetectMismatchDecl>(D);
+    AddDetectMismatch(PDMD->getName(), PDMD->getValue());
+    break;
+  }
+
   case Decl::LinkageSpec:
     EmitLinkageSpec(cast<LinkageSpecDecl>(D));
     break;
@@ -3730,6 +3878,10 @@ void CodeGenModule::EmitTopLevelDecl(Decl *D) {
       DebugInfo->completeTemplateDefinition(*Spec);
     break;
   }
+
+  case Decl::OMPDeclareReduction:
+    EmitOMPDeclareReduction(cast<OMPDeclareReductionDecl>(D));
+    break;
 
   default:
     // Make sure we handled everything we should, every other kind is a

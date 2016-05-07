@@ -29,6 +29,7 @@
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/Module.h"
 #include "clang/Basic/OpenMPKinds.h"
+#include "clang/Basic/PragmaKinds.h"
 #include "clang/Basic/Specifiers.h"
 #include "clang/Basic/TemplateKinds.h"
 #include "clang/Basic/TypeTraits.h"
@@ -144,6 +145,8 @@ namespace clang {
   class ObjCPropertyDecl;
   class ObjCProtocolDecl;
   class OMPThreadPrivateDecl;
+  class OMPDeclareReductionDecl;
+  class OMPDeclareSimdDecl;
   class OMPClause;
   struct OverloadCandidate;
   class OverloadCandidateSet;
@@ -314,49 +317,27 @@ public:
   /// This is used as part of a hack to omit that class from ADL results.
   DeclarationName VAListTagName;
 
-  /// PackContext - Manages the stack for \#pragma pack. An alignment
-  /// of 0 indicates default alignment.
-  void *PackContext; // Really a "PragmaPackStack*"
-
   bool MSStructPragmaOn; // True when \#pragma ms_struct on
 
   /// \brief Controls member pointer representation format under the MS ABI.
   LangOptions::PragmaMSPointersToMembersKind
       MSPointerToMemberRepresentationMethod;
 
-  enum PragmaVtorDispKind {
-    PVDK_Push,          ///< #pragma vtordisp(push, mode)
-    PVDK_Set,           ///< #pragma vtordisp(mode)
-    PVDK_Pop,           ///< #pragma vtordisp(pop)
-    PVDK_Reset          ///< #pragma vtordisp()
-  };
-
-  enum PragmaMsStackAction {
-    PSK_Reset,    // #pragma ()
-    PSK_Set,      // #pragma ("name")
-    PSK_Push,     // #pragma (push[, id])
-    PSK_Push_Set, // #pragma (push[, id], "name")
-    PSK_Pop,      // #pragma (pop[, id])
-    PSK_Pop_Set,  // #pragma (pop[, id], "name")
-  };
-
-  /// \brief Whether to insert vtordisps prior to virtual bases in the Microsoft
-  /// C++ ABI.  Possible values are 0, 1, and 2, which mean:
-  ///
-  /// 0: Suppress all vtordisps
-  /// 1: Insert vtordisps in the presence of vbase overrides and non-trivial
-  ///    structors
-  /// 2: Always insert vtordisps to support RTTI on partially constructed
-  ///    objects
-  ///
-  /// The stack always has at least one element in it.
-  SmallVector<MSVtorDispAttr::Mode, 2> VtorDispModeStack;
-
   /// Stack of active SEH __finally scopes.  Can be empty.
   SmallVector<Scope*, 2> CurrentSEHFinally;
 
   /// \brief Source location for newly created implicit MSInheritanceAttrs
   SourceLocation ImplicitMSInheritanceAttrLoc;
+
+  enum PragmaMsStackAction {
+    PSK_Reset     = 0x0,                // #pragma ()
+    PSK_Set       = 0x1,                // #pragma (value)
+    PSK_Push      = 0x2,                // #pragma (push[, id])
+    PSK_Pop       = 0x4,                // #pragma (pop[, id])
+    PSK_Show      = 0x8,                // #pragma (show) -- only for "pack"!
+    PSK_Push_Set  = PSK_Push | PSK_Set, // #pragma (push[, id], value)
+    PSK_Pop_Set   = PSK_Pop | PSK_Set,  // #pragma (pop[, id], value)
+  };
 
   template<typename ValueType>
   struct PragmaStack {
@@ -374,18 +355,70 @@ public:
              PragmaMsStackAction Action,
              llvm::StringRef StackSlotLabel,
              ValueType Value);
-    explicit PragmaStack(const ValueType &Value)
-      : CurrentValue(Value) {}
+
+    // MSVC seems to add artificial slots to #pragma stacks on entering a C++
+    // method body to restore the stacks on exit, so it works like this:
+    //
+    //   struct S {
+    //     #pragma <name>(push, InternalPragmaSlot, <current_pragma_value>)
+    //     void Method {}
+    //     #pragma <name>(pop, InternalPragmaSlot)
+    //   };
+    //
+    // It works even with #pragma vtordisp, although MSVC doesn't support
+    //   #pragma vtordisp(push [, id], n)
+    // syntax.
+    //
+    // Push / pop a named sentinel slot.
+    void SentinelAction(PragmaMsStackAction Action, StringRef Label) {
+      assert((Action == PSK_Push || Action == PSK_Pop) &&
+             "Can only push / pop #pragma stack sentinels!");
+      Act(CurrentPragmaLocation, Action, Label, CurrentValue);
+    }
+
+    // Constructors.
+    explicit PragmaStack(const ValueType &Default)
+        : DefaultValue(Default), CurrentValue(Default) {}
+
     SmallVector<Slot, 2> Stack;
+    ValueType DefaultValue; // Value used for PSK_Reset action.
     ValueType CurrentValue;
     SourceLocation CurrentPragmaLocation;
   };
   // FIXME: We should serialize / deserialize these if they occur in a PCH (but
   // we shouldn't do so if they're in a module).
+
+  /// \brief Whether to insert vtordisps prior to virtual bases in the Microsoft
+  /// C++ ABI.  Possible values are 0, 1, and 2, which mean:
+  ///
+  /// 0: Suppress all vtordisps
+  /// 1: Insert vtordisps in the presence of vbase overrides and non-trivial
+  ///    structors
+  /// 2: Always insert vtordisps to support RTTI on partially constructed
+  ///    objects
+  PragmaStack<MSVtorDispAttr::Mode> VtorDispStack;
+  // #pragma pack.
+  // Sentinel to represent when the stack is set to mac68k alignment.
+  static const unsigned kMac68kAlignmentSentinel = ~0U;
+  PragmaStack<unsigned> PackStack;
+  // Segment #pragmas.
   PragmaStack<StringLiteral *> DataSegStack;
   PragmaStack<StringLiteral *> BSSSegStack;
   PragmaStack<StringLiteral *> ConstSegStack;
   PragmaStack<StringLiteral *> CodeSegStack;
+
+  // RAII object to push / pop sentinel slots for all MS #pragma stacks.
+  // Actions should be performed only if we enter / exit a C++ method body.
+  class PragmaStackSentinelRAII {
+  public:
+    PragmaStackSentinelRAII(Sema &S, StringRef SlotLabel, bool ShouldAct);
+    ~PragmaStackSentinelRAII();
+
+  private:
+    Sema &S;
+    StringRef SlotLabel;
+    bool ShouldAct;
+  };
 
   /// A mapping that describes the nullability we've seen in each header file.
   FileNullabilityMap NullabilityMap;
@@ -939,7 +972,7 @@ public:
 
   /// UndefinedInternals - all the used, undefined objects which require a
   /// definition in this translation unit.
-  llvm::DenseMap<NamedDecl *, SourceLocation> UndefinedButUsed;
+  llvm::MapVector<NamedDecl *, SourceLocation> UndefinedButUsed;
 
   /// Obtain a sorted list of functions that are undefined but ODR-used.
   void getUndefinedButUsed(
@@ -984,6 +1017,7 @@ public:
   llvm::SmallSet<SpecialMemberDecl, 4> SpecialMembersBeingDeclared;
 
   void ReadMethodPool(Selector Sel);
+  void updateOutOfDateSelector(Selector Sel);
 
   /// Private Helper predicate to check for 'self'.
   bool isSelfExpr(Expr *RExpr);
@@ -1006,24 +1040,6 @@ public:
   private:
     Sema& S;
     bool OldFPContractState : 1;
-  };
-
-  /// Records and restores the vtordisp state on entry/exit of C++ method body.
-  class VtorDispStackRAII {
-  public:
-    VtorDispStackRAII(Sema &S, bool ShouldSaveAndRestore)
-      : S(S), ShouldSaveAndRestore(ShouldSaveAndRestore), OldVtorDispStack() {
-      if (ShouldSaveAndRestore)
-        OldVtorDispStack = S.VtorDispModeStack;
-    }
-    ~VtorDispStackRAII() {
-      if (ShouldSaveAndRestore)
-        S.VtorDispModeStack = OldVtorDispStack;
-    }
-  private:
-    Sema &S;
-    bool ShouldSaveAndRestore;
-    SmallVector<MSVtorDispAttr::Mode, 2> OldVtorDispStack;
   };
 
   void addImplicitTypedef(StringRef Name, QualType T);
@@ -1388,6 +1404,16 @@ public:
   bool isVisible(const NamedDecl *D) {
     return !D->isHidden() || isVisibleSlow(D);
   }
+
+  /// Determine whether any declaration of an entity is visible.
+  bool
+  hasVisibleDeclaration(const NamedDecl *D,
+                        llvm::SmallVectorImpl<Module *> *Modules = nullptr) {
+    return isVisible(D) || hasVisibleDeclarationSlow(D, Modules);
+  }
+  bool hasVisibleDeclarationSlow(const NamedDecl *D,
+                                 llvm::SmallVectorImpl<Module *> *Modules);
+
   bool hasVisibleMergedDefinition(NamedDecl *Def);
 
   /// Determine if \p D has a visible definition. If not, suggest a declaration
@@ -1403,6 +1429,11 @@ public:
   bool
   hasVisibleDefaultArgument(const NamedDecl *D,
                             llvm::SmallVectorImpl<Module *> *Modules = nullptr);
+
+  /// Determine if there is a visible declaration of \p D that is a member
+  /// specialization declaration (as opposed to an instantiated declaration).
+  bool hasVisibleMemberSpecialization(
+      const NamedDecl *D, llvm::SmallVectorImpl<Module *> *Modules = nullptr);
 
   /// Determine if \p A and \p B are equivalent internal linkage declarations
   /// from different modules, and thus an ambiguity error can be downgraded to
@@ -1650,6 +1681,17 @@ public:
   void DiagnoseFunctionSpecifiers(const DeclSpec &DS);
   void CheckShadow(Scope *S, VarDecl *D, const LookupResult& R);
   void CheckShadow(Scope *S, VarDecl *D);
+
+  /// Warn if 'E', which is an expression that is about to be modified, refers
+  /// to a shadowing declaration.
+  void CheckShadowingDeclModification(Expr *E, SourceLocation Loc);
+
+private:
+  /// Map of current shadowing declarations to shadowed declarations. Warn if
+  /// it looks like the user is trying to modify the shadowing declaration.
+  llvm::DenseMap<const NamedDecl *, const NamedDecl *> ShadowingDecls;
+
+public:
   void CheckCastAlign(Expr *Op, QualType T, SourceRange TRange);
   void handleTagNumbering(const TagDecl *Tag, Scope *TagScope);
   void setTagNameForLinkagePurposes(TagDecl *TagFromDeclSpec,
@@ -1771,7 +1813,7 @@ public:
   Decl *ActOnFinishFunctionBody(Decl *Decl, Stmt *Body);
   Decl *ActOnFinishFunctionBody(Decl *Decl, Stmt *Body, bool IsInstantiation);
   Decl *ActOnSkippedFunctionBody(Decl *Decl);
-  void ActOnFinishInlineMethodDef(CXXMethodDecl *D);
+  void ActOnFinishInlineFunctionDef(FunctionDecl *D);
 
   /// ActOnFinishDelayedAttribute - Invoked when we have finished parsing an
   /// attribute for which parsing is delayed.
@@ -1837,16 +1879,29 @@ public:
   enum class MissingImportKind {
     Declaration,
     Definition,
-    DefaultArgument
+    DefaultArgument,
+    ExplicitSpecialization,
+    PartialSpecialization
   };
 
   /// \brief Diagnose that the specified declaration needs to be visible but
   /// isn't, and suggest a module import that would resolve the problem.
   void diagnoseMissingImport(SourceLocation Loc, NamedDecl *Decl,
-                             bool NeedDefinition, bool Recover = true);
+                             MissingImportKind MIK, bool Recover = true);
   void diagnoseMissingImport(SourceLocation Loc, NamedDecl *Decl,
                              SourceLocation DeclLoc, ArrayRef<Module *> Modules,
                              MissingImportKind MIK, bool Recover);
+
+  /// \brief We've found a use of a templated declaration that would trigger an
+  /// implicit instantiation. Check that any relevant explicit specializations
+  /// and partial specializations are visible, and diagnose if not.
+  void checkSpecializationVisibility(SourceLocation Loc, NamedDecl *Spec);
+
+  /// \brief We've found a use of a template specialization that would select a
+  /// partial specialization. Check that the partial specialization is visible,
+  /// and diagnose if not.
+  void checkPartialSpecializationVisibility(SourceLocation Loc,
+                                            NamedDecl *Spec);
 
   /// \brief Retrieve a suitable printing policy.
   PrintingPolicy getPrintingPolicy() const {
@@ -2103,12 +2158,13 @@ public:
   /// Attribute merging methods. Return true if a new attribute was added.
   AvailabilityAttr *mergeAvailabilityAttr(NamedDecl *D, SourceRange Range,
                                           IdentifierInfo *Platform,
+                                          bool Implicit,
                                           VersionTuple Introduced,
                                           VersionTuple Deprecated,
                                           VersionTuple Obsoleted,
                                           bool IsUnavailable,
                                           StringRef Message,
-                                          bool IsStrict,
+                                          bool IsStrict, StringRef Replacement,
                                           AvailabilityMergeKind AMK,
                                           unsigned AttrSpellingListIndex);
   TypeVisibilityAttr *mergeTypeVisibilityAttr(Decl *D, SourceRange Range,
@@ -2189,7 +2245,8 @@ public:
                              const LookupResult &OldDecls,
                              NamedDecl *&OldDecl,
                              bool IsForUsingDecl);
-  bool IsOverload(FunctionDecl *New, FunctionDecl *Old, bool IsForUsingDecl);
+  bool IsOverload(FunctionDecl *New, FunctionDecl *Old, bool IsForUsingDecl,
+                  bool ConsiderCudaAttrs = true);
 
   /// \brief Checks availability of the function depending on the current
   /// function context.Inside an unavailable function,unavailability is ignored.
@@ -2383,8 +2440,8 @@ public:
 
   // Members have to be NamespaceDecl* or TranslationUnitDecl*.
   // TODO: make this is a typesafe union.
-  typedef llvm::SmallPtrSet<DeclContext   *, 16> AssociatedNamespaceSet;
-  typedef llvm::SmallPtrSet<CXXRecordDecl *, 16> AssociatedClassSet;
+  typedef llvm::SmallSetVector<DeclContext   *, 16> AssociatedNamespaceSet;
+  typedef llvm::SmallSetVector<CXXRecordDecl *, 16> AssociatedClassSet;
 
   void AddOverloadCandidate(FunctionDecl *Function,
                             DeclAccessPair FoundDecl,
@@ -2503,6 +2560,10 @@ public:
                                      bool Complain,
                                      DeclAccessPair &Found,
                                      bool *pHadMultipleCandidates = nullptr);
+
+  FunctionDecl *
+  resolveAddressOfOnlyViableOverloadCandidate(Expr *E,
+                                              DeclAccessPair &FoundResult);
 
   FunctionDecl *
   ResolveSingleFunctionTemplateSpecialization(OverloadExpr *ovl,
@@ -2670,6 +2731,8 @@ public:
     LookupObjCProtocolName,
     /// Look up implicit 'self' parameter of an objective-c method.
     LookupObjCImplicitSelfParam,
+    /// \brief Look up the name of an OpenMP user-defined reduction operation.
+    LookupOMPReductionName,
     /// \brief Look up any declaration with any name.
     LookupAnyName
   };
@@ -3145,25 +3208,32 @@ private:
 
 public:
   /// \brief - Returns instance or factory methods in global method pool for
-  /// given selector. If no such method or only one method found, function returns
-  /// false; otherwise, it returns true
-  bool CollectMultipleMethodsInGlobalPool(Selector Sel,
-                                          SmallVectorImpl<ObjCMethodDecl*>& Methods,
-                                          bool instance);
+  /// given selector. It checks the desired kind first, if none is found, and
+  /// parameter checkTheOther is set, it then checks the other kind. If no such
+  /// method or only one method is found, function returns false; otherwise, it
+  /// returns true.
+  bool
+  CollectMultipleMethodsInGlobalPool(Selector Sel,
+                                     SmallVectorImpl<ObjCMethodDecl*>& Methods,
+                                     bool InstanceFirst, bool CheckTheOther,
+                                     const ObjCObjectType *TypeBound = nullptr);
     
-  bool AreMultipleMethodsInGlobalPool(Selector Sel, ObjCMethodDecl *BestMethod,
-                                      SourceRange R,
-                                      bool receiverIdOrClass);
+  bool
+  AreMultipleMethodsInGlobalPool(Selector Sel, ObjCMethodDecl *BestMethod,
+                                 SourceRange R, bool receiverIdOrClass,
+                                 SmallVectorImpl<ObjCMethodDecl*>& Methods);
       
-  void DiagnoseMultipleMethodInGlobalPool(SmallVectorImpl<ObjCMethodDecl*> &Methods,
-                                          Selector Sel, SourceRange R,
-                                          bool receiverIdOrClass);
+  void
+  DiagnoseMultipleMethodInGlobalPool(SmallVectorImpl<ObjCMethodDecl*> &Methods,
+                                     Selector Sel, SourceRange R,
+                                     bool receiverIdOrClass);
 
 private:
   /// \brief - Returns a selector which best matches given argument list or
   /// nullptr if none could be found
   ObjCMethodDecl *SelectBestMethod(Selector Sel, MultiExprArg Args,
-                                   bool IsInstance);
+                                   bool IsInstance,
+                                   SmallVectorImpl<ObjCMethodDecl*>& Methods);
     
 
   /// \brief Record the typo correction failure and return an empty correction.
@@ -3368,7 +3438,7 @@ public:
   StmtResult BuildCXXForRangeStmt(SourceLocation ForLoc,
                                   SourceLocation CoawaitLoc,
                                   SourceLocation ColonLoc,
-                                  Stmt *RangeDecl, Stmt *BeginEndDecl,
+                                  Stmt *RangeDecl, Stmt *Begin, Stmt *End,
                                   Expr *Cond, Expr *Inc,
                                   Stmt *LoopVarDecl,
                                   SourceLocation RParenLoc,
@@ -3551,7 +3621,7 @@ public:
   //===--------------------------------------------------------------------===//
   // Expression Parsing Callbacks: SemaExpr.cpp.
 
-  bool CanUseDecl(NamedDecl *D);
+  bool CanUseDecl(NamedDecl *D, bool TreatUnavailableAsInvalid);
   bool DiagnoseUseOfDecl(NamedDecl *D, SourceLocation Loc,
                          const ObjCInterfaceDecl *UnknownObjCClass=nullptr,
                          bool ObjCPropertyAccess=false);
@@ -3585,9 +3655,15 @@ public:
   // for expressions referring to a decl; these exist because odr-use marking
   // needs to be delayed for some constant variables when we build one of the
   // named expressions.
-  void MarkAnyDeclReferenced(SourceLocation Loc, Decl *D, bool OdrUse);
+  //
+  // MightBeOdrUse indicates whether the use could possibly be an odr-use, and
+  // should usually be true. This only needs to be set to false if the lack of
+  // odr-use cannot be determined from the current context (for instance,
+  // because the name denotes a virtual function and was written without an
+  // explicit nested-name-specifier).
+  void MarkAnyDeclReferenced(SourceLocation Loc, Decl *D, bool MightBeOdrUse);
   void MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func,
-                              bool OdrUse = true);
+                              bool MightBeOdrUse = true);
   void MarkVariableReferenced(SourceLocation Loc, VarDecl *Var);
   void MarkDeclRefReferenced(DeclRefExpr *E);
   void MarkMemberReferenced(MemberExpr *E);
@@ -4615,7 +4691,8 @@ public:
   /// \return returns 'true' if failed, 'false' if success.
   bool CheckCXXThisCapture(SourceLocation Loc, bool Explicit = false, 
       bool BuildAndDiagnose = true,
-      const unsigned *const FunctionScopeIndexToStopAt = nullptr);
+      const unsigned *const FunctionScopeIndexToStopAt = nullptr,
+      bool ByCopy = false);
 
   /// \brief Determine whether the given type is the type of *this that is used
   /// outside of the body of a member function for a type that is currently
@@ -4686,8 +4763,7 @@ public:
   void DeclareGlobalNewDelete();
   void DeclareGlobalAllocationFunction(DeclarationName Name, QualType Return,
                                        QualType Param1,
-                                       QualType Param2 = QualType(),
-                                       bool addRestrictAttr = false);
+                                       QualType Param2 = QualType());
 
   bool FindDeallocationFunction(SourceLocation StartLoc, CXXRecordDecl *RD,
                                 DeclarationName Name, FunctionDecl* &Operator,
@@ -4998,7 +5074,8 @@ public:
                                        SourceRange IntroducerRange,
                                        TypeSourceInfo *MethodType,
                                        SourceLocation EndLoc,
-                                       ArrayRef<ParmVarDecl *> Params);
+                                       ArrayRef<ParmVarDecl *> Params, 
+                                       bool IsConstexprSpecified);
 
   /// \brief Endow the lambda scope info with the relevant properties.
   void buildLambdaScope(sema::LambdaScopeInfo *LSI, 
@@ -5601,7 +5678,8 @@ public:
                              SourceLocation TemplateLoc,
                              SourceLocation LAngleLoc,
                              ArrayRef<Decl *> Params,
-                             SourceLocation RAngleLoc);
+                             SourceLocation RAngleLoc,
+                             Expr *RequiresClause);
 
   /// \brief The context in which we are checking a template parameter list.
   enum TemplateParamListContext {
@@ -7147,7 +7225,8 @@ public:
   void InstantiateFunctionDefinition(SourceLocation PointOfInstantiation,
                                      FunctionDecl *Function,
                                      bool Recursive = false,
-                                     bool DefinitionRequired = false);
+                                     bool DefinitionRequired = false,
+                                     bool AtEndOfTU = false);
   VarTemplateSpecializationDecl *BuildVarTemplateInstantiation(
       VarTemplateDecl *VarTemplate, VarDecl *FromVar,
       const TemplateArgumentList &TemplateArgList,
@@ -7171,7 +7250,8 @@ public:
       const MultiLevelTemplateArgumentList &TemplateArgs);
   void InstantiateVariableDefinition(SourceLocation PointOfInstantiation,
                                      VarDecl *Var, bool Recursive = false,
-                                     bool DefinitionRequired = false);
+                                     bool DefinitionRequired = false,
+                                     bool AtEndOfTU = false);
   void InstantiateStaticDataMemberDefinition(
                                      SourceLocation PointOfInstantiation,
                                      VarDecl *Var,
@@ -7299,6 +7379,12 @@ public:
   void FindProtocolDeclaration(bool WarnOnDeclarations, bool ForObjCContainer,
                                ArrayRef<IdentifierLocPair> ProtocolId,
                                SmallVectorImpl<Decl *> &Protocols);
+
+  void DiagnoseTypeArgsAndProtocols(IdentifierInfo *ProtocolId,
+                                    SourceLocation ProtocolLoc,
+                                    IdentifierInfo *TypeArgId,
+                                    SourceLocation TypeArgLoc,
+                                    bool SelectProtocolFirst = false);
 
   /// Given a list of identifiers (and their locations), resolve the
   /// names to either Objective-C protocol qualifiers or type
@@ -7603,41 +7689,17 @@ public:
   void ActOnPragmaOptionsAlign(PragmaOptionsAlignKind Kind,
                                SourceLocation PragmaLoc);
 
-  enum PragmaPackKind {
-    PPK_Default, // #pragma pack([n])
-    PPK_Show,    // #pragma pack(show), only supported by MSVC.
-    PPK_Push,    // #pragma pack(push, [identifier], [n])
-    PPK_Pop      // #pragma pack(pop, [identifier], [n])
-  };
-
-  enum PragmaMSStructKind {
-    PMSST_OFF,  // #pragms ms_struct off
-    PMSST_ON    // #pragms ms_struct on
-  };
-
-  enum PragmaMSCommentKind {
-    PCK_Unknown,
-    PCK_Linker,   // #pragma comment(linker, ...)
-    PCK_Lib,      // #pragma comment(lib, ...)
-    PCK_Compiler, // #pragma comment(compiler, ...)
-    PCK_ExeStr,   // #pragma comment(exestr, ...)
-    PCK_User      // #pragma comment(user, ...)
-  };
-
   /// ActOnPragmaPack - Called on well formed \#pragma pack(...).
-  void ActOnPragmaPack(PragmaPackKind Kind,
-                       IdentifierInfo *Name,
-                       Expr *Alignment,
-                       SourceLocation PragmaLoc,
-                       SourceLocation LParenLoc,
-                       SourceLocation RParenLoc);
+  void ActOnPragmaPack(SourceLocation PragmaLoc, PragmaMsStackAction Action,
+                       StringRef SlotLabel, Expr *Alignment);
 
   /// ActOnPragmaMSStruct - Called on well formed \#pragma ms_struct [on|off].
   void ActOnPragmaMSStruct(PragmaMSStructKind Kind);
 
   /// ActOnPragmaMSComment - Called on well formed
   /// \#pragma comment(kind, "arg").
-  void ActOnPragmaMSComment(PragmaMSCommentKind Kind, StringRef Arg);
+  void ActOnPragmaMSComment(SourceLocation CommentLoc, PragmaMSCommentKind Kind,
+                            StringRef Arg);
 
   /// ActOnPragmaMSPointersToMembers - called on well formed \#pragma
   /// pointers_to_members(representation method[, general purpose
@@ -7647,7 +7709,8 @@ public:
       SourceLocation PragmaLoc);
 
   /// \brief Called on well formed \#pragma vtordisp().
-  void ActOnPragmaMSVtorDisp(PragmaVtorDispKind Kind, SourceLocation PragmaLoc,
+  void ActOnPragmaMSVtorDisp(PragmaMsStackAction Action,
+                             SourceLocation PragmaLoc,
                              MSVtorDispAttr::Mode Value);
 
   enum PragmaSectionKind {
@@ -7683,7 +7746,8 @@ public:
   void ActOnPragmaDump(Scope *S, SourceLocation Loc, IdentifierInfo *II);
 
   /// ActOnPragmaDetectMismatch - Call on well-formed \#pragma detect_mismatch
-  void ActOnPragmaDetectMismatch(StringRef Name, StringRef Value);
+  void ActOnPragmaDetectMismatch(SourceLocation Loc, StringRef Name,
+                                 StringRef Value);
 
   /// ActOnPragmaUnused - Called on well-formed '\#pragma unused'.
   void ActOnPragmaUnused(const Token &Identifier,
@@ -7797,6 +7861,13 @@ public:
   void AddModeAttr(SourceRange AttrRange, Decl *D, IdentifierInfo *Name,
                    unsigned SpellingListIndex, bool InInstantiation = false);
 
+  void AddParameterABIAttr(SourceRange AttrRange, Decl *D,
+                           ParameterABI ABI, unsigned SpellingListIndex);
+
+  void AddNSConsumedAttr(SourceRange AttrRange, Decl *D,
+                         unsigned SpellingListIndex, bool isNSConsumed,
+                         bool isTemplateInstantiation);
+
   //===--------------------------------------------------------------------===//
   // C++ Coroutines TS
   //
@@ -7815,6 +7886,8 @@ public:
   //
 private:
   void *VarDataSharingAttributesStack;
+  /// Set to true inside '#pragma omp declare target' region.
+  bool IsInOpenMPDeclareTargetContext = false;
   /// \brief Initialization of data-sharing attributes stack.
   void InitDataSharingAttributesStack();
   void DestroyDataSharingAttributesStack();
@@ -7879,6 +7952,37 @@ public:
   OMPThreadPrivateDecl *CheckOMPThreadPrivateDecl(
                                      SourceLocation Loc,
                                      ArrayRef<Expr *> VarList);
+  /// \brief Check if the specified type is allowed to be used in 'omp declare
+  /// reduction' construct.
+  QualType ActOnOpenMPDeclareReductionType(SourceLocation TyLoc,
+                                           TypeResult ParsedType);
+  /// \brief Called on start of '#pragma omp declare reduction'.
+  DeclGroupPtrTy ActOnOpenMPDeclareReductionDirectiveStart(
+      Scope *S, DeclContext *DC, DeclarationName Name,
+      ArrayRef<std::pair<QualType, SourceLocation>> ReductionTypes,
+      AccessSpecifier AS, Decl *PrevDeclInScope = nullptr);
+  /// \brief Initialize declare reduction construct initializer.
+  void ActOnOpenMPDeclareReductionCombinerStart(Scope *S, Decl *D);
+  /// \brief Finish current declare reduction construct initializer.
+  void ActOnOpenMPDeclareReductionCombinerEnd(Decl *D, Expr *Combiner);
+  /// \brief Initialize declare reduction construct initializer.
+  void ActOnOpenMPDeclareReductionInitializerStart(Scope *S, Decl *D);
+  /// \brief Finish current declare reduction construct initializer.
+  void ActOnOpenMPDeclareReductionInitializerEnd(Decl *D, Expr *Initializer);
+  /// \brief Called at the end of '#pragma omp declare reduction'.
+  DeclGroupPtrTy ActOnOpenMPDeclareReductionDirectiveEnd(
+      Scope *S, DeclGroupPtrTy DeclReductions, bool IsValid);
+
+  /// Called on the start of target region i.e. '#pragma omp declare target'.
+  bool ActOnStartOpenMPDeclareTargetDirective(SourceLocation Loc);
+  /// Called at the end of target region i.e. '#pragme omp end declare target'.
+  void ActOnFinishOpenMPDeclareTargetDirective();
+  /// Check declaration inside target region.
+  void checkDeclIsAllowedInOpenMPTarget(Expr *E, Decl *D);
+  /// Return true inside OpenMP target region.
+  bool isInOpenMPDeclareTargetContext() const {
+    return IsInOpenMPDeclareTargetContext;
+  }
 
   /// \brief Initialization of captured region for OpenMP region.
   void ActOnOpenMPRegionStart(OpenMPDirectiveKind DKind, Scope *CurScope);
@@ -8056,6 +8160,22 @@ public:
       SourceLocation EndLoc,
       llvm::DenseMap<ValueDecl *, Expr *> &VarsWithImplicitDSA);
 
+  /// Checks correctness of linear modifiers.
+  bool CheckOpenMPLinearModifier(OpenMPLinearClauseKind LinKind,
+                                 SourceLocation LinLoc);
+  /// Checks that the specified declaration matches requirements for the linear
+  /// decls.
+  bool CheckOpenMPLinearDecl(ValueDecl *D, SourceLocation ELoc,
+                             OpenMPLinearClauseKind LinKind, QualType Type);
+
+  /// \brief Called on well-formed '\#pragma omp declare simd' after parsing of
+  /// the associated method/function.
+  DeclGroupPtrTy ActOnOpenMPDeclareSimdDirective(
+      DeclGroupPtrTy DG, OMPDeclareSimdDeclAttr::BranchStateTy BS,
+      Expr *Simdlen, ArrayRef<Expr *> Uniforms, ArrayRef<Expr *> Aligneds,
+      ArrayRef<Expr *> Alignments, ArrayRef<Expr *> Linears,
+      ArrayRef<unsigned> LinModifiers, ArrayRef<Expr *> Steps, SourceRange SR);
+
   OMPClause *ActOnOpenMPSingleExprClause(OpenMPClauseKind Kind,
                                          Expr *Expr,
                                          SourceLocation StartLoc,
@@ -8206,12 +8326,12 @@ public:
                                      SourceLocation LParenLoc,
                                      SourceLocation EndLoc);
   /// \brief Called on well-formed 'reduction' clause.
-  OMPClause *
-  ActOnOpenMPReductionClause(ArrayRef<Expr *> VarList, SourceLocation StartLoc,
-                             SourceLocation LParenLoc, SourceLocation ColonLoc,
-                             SourceLocation EndLoc,
-                             CXXScopeSpec &ReductionIdScopeSpec,
-                             const DeclarationNameInfo &ReductionId);
+  OMPClause *ActOnOpenMPReductionClause(
+      ArrayRef<Expr *> VarList, SourceLocation StartLoc,
+      SourceLocation LParenLoc, SourceLocation ColonLoc, SourceLocation EndLoc,
+      CXXScopeSpec &ReductionIdScopeSpec,
+      const DeclarationNameInfo &ReductionId,
+      ArrayRef<Expr *> UnresolvedReductions = llvm::None);
   /// \brief Called on well-formed 'linear' clause.
   OMPClause *
   ActOnOpenMPLinearClause(ArrayRef<Expr *> VarList, Expr *Step,
@@ -8861,7 +8981,16 @@ public:
   CUDAFunctionPreference IdentifyCUDAPreference(const FunctionDecl *Caller,
                                                 const FunctionDecl *Callee);
 
-  bool CheckCUDATarget(const FunctionDecl *Caller, const FunctionDecl *Callee);
+  /// Determines whether Caller may invoke Callee, based on their CUDA
+  /// host/device attributes.  Returns true if the call is not allowed.
+  bool CheckCUDATarget(const FunctionDecl *Caller, const FunctionDecl *Callee) {
+    return IdentifyCUDAPreference(Caller, Callee) == CFP_Never;
+  }
+
+  /// May add implicit CUDAHostAttr and CUDADeviceAttr attributes to FD,
+  /// depending on FD and the current compilation settings.
+  void maybeAddCUDAHostDeviceAttrs(Scope *S, FunctionDecl *FD,
+                                   const LookupResult &Previous);
 
   /// Finds a function in \p Matches with highest calling priority
   /// from \p Caller context and erases all functions with lower

@@ -20,6 +20,7 @@
 #include "clang/AST/Type.h"
 #include "clang/Basic/AttrKinds.h"
 #include "clang/Basic/LLVM.h"
+#include "clang/Basic/OpenMPKinds.h"
 #include "clang/Basic/Sanitizers.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/VersionTuple.h"
@@ -118,6 +119,19 @@ public:
   bool duplicatesAllowed() const { return DuplicatesAllowed; }
 };
 
+class StmtAttr : public Attr {
+protected:
+  StmtAttr(attr::Kind AK, SourceRange R, unsigned SpellingListIndex,
+                  bool IsLateParsed, bool DuplicatesAllowed)
+      : Attr(AK, R, SpellingListIndex, IsLateParsed, DuplicatesAllowed) {}
+
+public:
+  static bool classof(const Attr *A) {
+    return A->getKind() >= attr::FirstStmtAttr &&
+           A->getKind() <= attr::LastStmtAttr;
+  }
+};
+
 class InheritableAttr : public Attr {
 protected:
   InheritableAttr(attr::Kind AK, SourceRange R, unsigned SpellingListIndex,
@@ -147,6 +161,36 @@ public:
     return A->getKind() >= attr::FirstInheritableParamAttr &&
            A->getKind() <= attr::LastInheritableParamAttr;
   }
+};
+
+/// A parameter attribute which changes the argument-passing ABI rule
+/// for the parameter.
+class ParameterABIAttr : public InheritableParamAttr {
+protected:
+  ParameterABIAttr(attr::Kind AK, SourceRange R,
+                   unsigned SpellingListIndex, bool IsLateParsed,
+                   bool DuplicatesAllowed)
+    : InheritableParamAttr(AK, R, SpellingListIndex, IsLateParsed,
+                           DuplicatesAllowed) {}
+
+public:
+  ParameterABI getABI() const {
+    switch (getKind()) {
+    case attr::SwiftContext:
+      return ParameterABI::SwiftContext;
+    case attr::SwiftErrorResult:
+      return ParameterABI::SwiftErrorResult;
+    case attr::SwiftIndirectResult:
+      return ParameterABI::SwiftIndirectResult;
+    default:
+      llvm_unreachable("bad parameter ABI attribute kind");
+    }
+  }
+
+  static bool classof(const Attr *A) {
+    return A->getKind() >= attr::FirstParameterABIAttr &&
+           A->getKind() <= attr::LastParameterABIAttr;
+   }
 };
 
 #include "clang/AST/Attrs.inc"

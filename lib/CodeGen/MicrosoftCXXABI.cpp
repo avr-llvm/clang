@@ -1494,16 +1494,16 @@ void MicrosoftCXXABI::EmitDestructorCall(CodeGenFunction &CGF,
                                                     This, false);
   }
 
-  CGF.EmitCXXStructorCall(DD, Callee, ReturnValueSlot(), This.getPointer(),
-                          /*ImplicitParam=*/nullptr,
-                          /*ImplicitParamTy=*/QualType(), nullptr,
-                          getFromDtorType(Type));
+  CGF.EmitCXXDestructorCall(DD, Callee, This.getPointer(),
+                            /*ImplicitParam=*/nullptr,
+                            /*ImplicitParamTy=*/QualType(), nullptr,
+                            getFromDtorType(Type));
 }
 
 void MicrosoftCXXABI::emitVTableBitSetEntries(VPtrInfo *Info,
                                               const CXXRecordDecl *RD,
                                               llvm::GlobalVariable *VTable) {
-  if (!CGM.NeedVTableBitSets())
+  if (!CGM.getCodeGenOpts().PrepareForLTO)
     return;
 
   llvm::NamedMDNode *BitsetsMD =
@@ -1519,15 +1519,13 @@ void MicrosoftCXXABI::emitVTableBitSetEntries(VPtrInfo *Info,
           : CharUnits::Zero();
 
   if (Info->PathToBaseWithVPtr.empty()) {
-    if (!CGM.IsBitSetBlacklistedRecord(RD))
-      CGM.CreateVTableBitSetEntry(BitsetsMD, VTable, AddressPoint, RD);
+    CGM.CreateVTableBitSetEntry(BitsetsMD, VTable, AddressPoint, RD);
     return;
   }
 
   // Add a bitset entry for the least derived base belonging to this vftable.
-  if (!CGM.IsBitSetBlacklistedRecord(Info->PathToBaseWithVPtr.back()))
-    CGM.CreateVTableBitSetEntry(BitsetsMD, VTable, AddressPoint,
-                                Info->PathToBaseWithVPtr.back());
+  CGM.CreateVTableBitSetEntry(BitsetsMD, VTable, AddressPoint,
+                              Info->PathToBaseWithVPtr.back());
 
   // Add a bitset entry for each derived class that is laid out at the same
   // offset as the least derived base.
@@ -1545,12 +1543,11 @@ void MicrosoftCXXABI::emitVTableBitSetEntries(VPtrInfo *Info,
       Offset = VBI->second.VBaseOffset;
     if (!Offset.isZero())
       return;
-    if (!CGM.IsBitSetBlacklistedRecord(DerivedRD))
-      CGM.CreateVTableBitSetEntry(BitsetsMD, VTable, AddressPoint, DerivedRD);
+    CGM.CreateVTableBitSetEntry(BitsetsMD, VTable, AddressPoint, DerivedRD);
   }
 
   // Finally do the same for the most derived class.
-  if (Info->FullOffsetInMDC.isZero() && !CGM.IsBitSetBlacklistedRecord(RD))
+  if (Info->FullOffsetInMDC.isZero())
     CGM.CreateVTableBitSetEntry(BitsetsMD, VTable, AddressPoint, RD);
 }
 
@@ -1819,7 +1816,7 @@ llvm::Value *MicrosoftCXXABI::getVirtualFunctionPointer(CodeGenFunction &CGF,
 
   MicrosoftVTableContext::MethodVFTableLocation ML =
       CGM.getMicrosoftVTableContext().getMethodVFTableLocation(GD);
-  if (CGM.NeedVTableBitSets())
+  if (CGM.getCodeGenOpts().PrepareForLTO)
     CGF.EmitBitSetCodeForVCall(getClassAtVTableLocation(getContext(), GD, ML),
                                VTable, Loc);
 
@@ -1849,10 +1846,9 @@ llvm::Value *MicrosoftCXXABI::EmitVirtualDestructorCall(
       DtorType == Dtor_Deleting);
 
   This = adjustThisArgumentForVirtualFunctionCall(CGF, GD, This, true);
-  RValue RV = CGF.EmitCXXStructorCall(Dtor, Callee, ReturnValueSlot(),
-                                      This.getPointer(),
-                                      ImplicitParam, Context.IntTy, CE,
-                                      StructorType::Deleting);
+  RValue RV =
+      CGF.EmitCXXDestructorCall(Dtor, Callee, This.getPointer(), ImplicitParam,
+                                Context.IntTy, CE, StructorType::Deleting);
   return RV.getScalarVal();
 }
 
@@ -2424,7 +2420,7 @@ void MicrosoftCXXABI::EmitGuardedInit(CodeGenFunction &CGF, const VarDecl &D,
     // }
 
     // Test our bit from the guard variable.
-    llvm::ConstantInt *Bit = llvm::ConstantInt::get(GuardTy, 1U << GuardNum);
+    llvm::ConstantInt *Bit = llvm::ConstantInt::get(GuardTy, 1ULL << GuardNum);
     llvm::LoadInst *LI = Builder.CreateLoad(GuardAddr);
     llvm::Value *IsInitialized =
         Builder.CreateICmpNE(Builder.CreateAnd(LI, Bit), Zero);

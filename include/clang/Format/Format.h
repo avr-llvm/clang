@@ -26,6 +26,10 @@ class Lexer;
 class SourceManager;
 class DiagnosticConsumer;
 
+namespace vfs {
+class FileSystem;
+}
+
 namespace format {
 
 enum class ParseError { Success = 0, Error, Unsuitable };
@@ -401,6 +405,19 @@ struct FormatStyle {
   /// \endcode
   std::vector<IncludeCategory> IncludeCategories;
 
+  /// \brief Specify a regular expression of suffixes that are allowed in the
+  /// file-to-main-include mapping.
+  ///
+  /// When guessing whether a #include is the "main" include (to assign
+  /// category 0, see above), use this regex of allowed suffixes to the header
+  /// stem. A partial match is done, so that:
+  /// - "" means "arbitrary suffix"
+  /// - "$" means "no suffix"
+  ///
+  /// For example, if configured to "(_test)?$", then a header a.h would be seen
+  /// as the "main" include in both a.cc and a_test.cc.
+  std::string IncludeIsMainRegex;
+
   /// \brief Indent case labels one level from the switch statement.
   ///
   /// When ``false``, use the same indentation level as for the switch statement.
@@ -586,6 +603,8 @@ struct FormatStyle {
     UT_Never,
     /// Use tabs only for indentation.
     UT_ForIndentation,
+    /// Use tabs only for line continuation and indentation.
+    UT_ForContinuationAndIndentation,
     /// Use tabs whenever we need to fill whitespace that spans at least from
     /// one tab stop to the next one.
     UT_Always
@@ -593,6 +612,20 @@ struct FormatStyle {
 
   /// \brief The way to use tab characters in the resulting file.
   UseTabStyle UseTab;
+
+  /// \brief Quotation styles for JavaScript strings. Does not affect template
+  /// strings.
+  enum JavaScriptQuoteStyle {
+    /// Leave string quotes as they are.
+    JSQS_Leave,
+    /// Always use single quotes.
+    JSQS_Single,
+    /// Always use double quotes.
+    JSQS_Double
+  };
+
+  /// \brief The JavaScriptQuoteStyle to use for JavaScript strings.
+  JavaScriptQuoteStyle JavaScriptQuotes;
 
   bool operator==(const FormatStyle &R) const {
     return AccessModifierOffset == R.AccessModifierOffset &&
@@ -670,7 +703,8 @@ struct FormatStyle {
            SpacesInParentheses == R.SpacesInParentheses &&
            SpacesInSquareBrackets == R.SpacesInSquareBrackets &&
            Standard == R.Standard && TabWidth == R.TabWidth &&
-           UseTab == R.UseTab;
+           UseTab == R.UseTab &&
+           JavaScriptQuotes == R.JavaScriptQuotes;
   }
 };
 
@@ -737,21 +771,11 @@ tooling::Replacements formatReplacements(StringRef Code,
                                          const tooling::Replacements &Replaces,
                                          const FormatStyle &Style);
 
-/// \brief In addition to applying all replacements in \p Replaces to \p Code,
-/// this function also reformats the changed code after applying replacements.
-///
-/// \pre Replacements must be for the same file and conflict-free.
-///
-/// Replacement applications happen independently of the success of
-/// other applications.
-///
-/// \returns the changed code with all replacements applied and formatted, if
-/// successful. An empty string otherwise.
-///
-/// See also "include/clang/Tooling/Core/Replacements.h".
-std::string applyAllReplacementsAndFormat(StringRef Code,
-                                          const tooling::Replacements &Replaces,
-                                          const FormatStyle &Style);
+/// \brief Returns the replacements corresponding to applying \p Replaces and
+/// cleaning up the code after that.
+tooling::Replacements
+cleanupAroundReplacements(StringRef Code, const tooling::Replacements &Replaces,
+                          const FormatStyle &Style);
 
 /// \brief Reformats the given \p Ranges in the file \p ID.
 ///
@@ -777,6 +801,22 @@ tooling::Replacements reformat(const FormatStyle &Style, StringRef Code,
                                ArrayRef<tooling::Range> Ranges,
                                StringRef FileName = "<stdin>",
                                bool *IncompleteFormat = nullptr);
+
+/// \brief Clean up any erroneous/redundant code in the given \p Ranges in the
+/// file \p ID.
+///
+/// Returns the ``Replacements`` that clean up all \p Ranges in the file \p ID.
+tooling::Replacements cleanup(const FormatStyle &Style,
+                              SourceManager &SourceMgr, FileID ID,
+                              ArrayRef<CharSourceRange> Ranges);
+
+/// \brief Clean up any erroneous/redundant code in the given \p Ranges in \p
+/// Code.
+///
+/// Otherwise identical to the cleanup() function using a file ID.
+tooling::Replacements cleanup(const FormatStyle &Style, StringRef Code,
+                              ArrayRef<tooling::Range> Ranges,
+                              StringRef FileName = "<stdin>");
 
 /// \brief Returns the ``LangOpts`` that the formatter expects you to set.
 ///
@@ -804,11 +844,13 @@ extern const char *StyleOptionHelpDescription;
 /// == "file".
 /// \param[in] FallbackStyle The name of a predefined style used to fallback to
 /// in case the style can't be determined from \p StyleName.
+/// \param[in] FS The underlying file system, in which the file resides. By
+/// default, the file system is the real file system.
 ///
 /// \returns FormatStyle as specified by ``StyleName``. If no style could be
 /// determined, the default is LLVM Style (see ``getLLVMStyle()``).
 FormatStyle getStyle(StringRef StyleName, StringRef FileName,
-                     StringRef FallbackStyle);
+                     StringRef FallbackStyle, vfs::FileSystem *FS = nullptr);
 
 } // end namespace format
 } // end namespace clang

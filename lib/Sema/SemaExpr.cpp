@@ -49,7 +49,7 @@ using namespace sema;
 
 /// \brief Determine whether the use of this declaration is valid, without
 /// emitting diagnostics.
-bool Sema::CanUseDecl(NamedDecl *D) {
+bool Sema::CanUseDecl(NamedDecl *D, bool TreatUnavailableAsInvalid) {
   // See if this is an auto-typed variable whose initializer we are parsing.
   if (ParsingInitForAutoVars.count(D))
     return false;
@@ -67,7 +67,7 @@ bool Sema::CanUseDecl(NamedDecl *D) {
   }
 
   // See if this function is unavailable.
-  if (D->getAvailability() == AR_Unavailable &&
+  if (TreatUnavailableAsInvalid && D->getAvailability() == AR_Unavailable &&
       cast<Decl>(CurContext)->getAvailability() != AR_Unavailable)
     return false;
 
@@ -76,10 +76,14 @@ bool Sema::CanUseDecl(NamedDecl *D) {
 
 static void DiagnoseUnusedOfDecl(Sema &S, NamedDecl *D, SourceLocation Loc) {
   // Warn if this is used but marked unused.
-  if (D->hasAttr<UnusedAttr>()) {
-    const Decl *DC = cast_or_null<Decl>(S.getCurObjCLexicalContext());
-    if (DC && !DC->hasAttr<UnusedAttr>())
-      S.Diag(Loc, diag::warn_used_but_marked_unused) << D->getDeclName();
+  if (const auto *A = D->getAttr<UnusedAttr>()) {
+    // [[maybe_unused]] should not diagnose uses, but __attribute__((unused))
+    // should diagnose them.
+    if (A->getSemanticSpelling() != UnusedAttr::CXX11_maybe_unused) {
+      const Decl *DC = cast_or_null<Decl>(S.getCurObjCLexicalContext());
+      if (DC && !DC->hasAttr<UnusedAttr>())
+        S.Diag(Loc, diag::warn_used_but_marked_unused) << D->getDeclName();
+    }
   }
 }
 
@@ -159,19 +163,11 @@ DiagnoseAvailabilityOfDecl(Sema &S, NamedDecl *D, SourceLocation Loc,
       break;
 
     case AR_NotYetIntroduced: {
-      // With strict, the compiler will emit unavailable error.
-      AvailabilityAttr *AA = D->getAttr<AvailabilityAttr>();
-      if (AA && AA->getStrict() &&
-          S.getCurContextAvailability() != AR_NotYetIntroduced)
-        S.EmitAvailabilityWarning(Sema::AD_Unavailable,
-                                  D, Message, Loc, UnknownObjCClass, ObjCPDecl,
-                                  ObjCPropertyAccess);
-
       // Don't do this for enums, they can't be redeclared.
       if (isa<EnumConstantDecl>(D) || isa<EnumDecl>(D))
         break;
  
-      bool Warn = !AA->isInherited();
+      bool Warn = !D->getAttr<AvailabilityAttr>()->isInherited();
       // Objective-C method declarations in categories are not modelled as
       // redeclarations, so manually look for a redeclaration in a category
       // if necessary.
@@ -375,6 +371,19 @@ bool Sema::DiagnoseUseOfDecl(NamedDecl *D, SourceLocation Loc,
     if (getLangOpts().CPlusPlus14 && FD->getReturnType()->isUndeducedType() &&
         DeduceReturnType(FD, Loc))
       return true;
+  }
+
+  // [OpenMP 4.0], 2.15 declare reduction Directive, Restrictions
+  // Only the variables omp_in and omp_out are allowed in the combiner.
+  // Only the variables omp_priv and omp_orig are allowed in the
+  // initializer-clause.
+  auto *DRD = dyn_cast<OMPDeclareReductionDecl>(CurContext);
+  if (LangOpts.OpenMP && DRD && !CurContext->containsDecl(D) &&
+      isa<VarDecl>(D)) {
+    Diag(Loc, diag::err_omp_wrong_var_in_declare_reduction)
+        << getCurFunction()->HasOMPDeclareReductionCombiner;
+    Diag(D->getLocation(), diag::note_entity_declared_at) << D;
+    return true;
   }
   DiagnoseAvailabilityOfDecl(*this, D, Loc, UnknownObjCClass,
                              ObjCPropertyAccess);
@@ -2848,6 +2857,7 @@ ExprResult Sema::BuildDeclarationNameExpr(
     // Unresolved using declarations are dependent.
     case Decl::EnumConstant:
     case Decl::UnresolvedUsingValue:
+    case Decl::OMPDeclareReduction:
       valueKind = VK_RValue;
       break;
 
@@ -4905,6 +4915,9 @@ static bool isPlaceholderToRemoveAsArg(QualType type) {
 
   switch (placeholder->getKind()) {
   // Ignore all the non-placeholder types.
+#define IMAGE_TYPE(ImgType, Id, SingletonId, Access, Suffix) \
+  case BuiltinType::Id:
+#include "clang/Basic/OpenCLImageTypes.def"
 #define PLACEHOLDER_TYPE(ID, SINGLETON_ID)
 #define BUILTIN_TYPE(ID, SINGLETON_ID) case BuiltinType::ID:
 #include "clang/AST/BuiltinTypes.def"
@@ -5034,6 +5047,14 @@ static FunctionDecl *rewriteBuiltinFunctionDecl(Sema *Sema, ASTContext &Context,
   return OverloadDecl;
 }
 
+static bool isNumberOfArgsValidForCall(Sema &S, const FunctionDecl *Callee,
+                                       std::size_t NumArgs) {
+  if (S.TooManyArguments(Callee->getNumParams(), NumArgs,
+                         /*PartialOverloading=*/false))
+    return Callee->isVariadic();
+  return Callee->getMinRequiredArguments() <= NumArgs;
+}
+
 /// ActOnCallExpr - Handle a call to Fn with the specified array of arguments.
 /// This provides the location of the left/right parens and a list of comma
 /// locations.
@@ -5071,8 +5092,6 @@ Sema::ActOnCallExpr(Scope *S, Expr *Fn, SourceLocation LParenLoc,
 
     // Determine whether this is a dependent call inside a C++ template,
     // in which case we won't do any semantic analysis now.
-    // FIXME: Will need to cache the results of name lookup (including ADL) in
-    // Fn.
     bool Dependent = false;
     if (Fn->isTypeDependent())
       Dependent = true;
@@ -5165,7 +5184,14 @@ Sema::ActOnCallExpr(Scope *S, Expr *Fn, SourceLocation LParenLoc,
                                            Fn->getLocStart()))
       return ExprError();
 
-    if (FD->hasAttr<EnableIfAttr>()) {
+    // CheckEnableIf assumes that the we're passing in a sane number of args for
+    // FD, but that doesn't always hold true here. This is because, in some
+    // cases, we'll emit a diag about an ill-formed function call, but then
+    // we'll continue on as if the function call wasn't ill-formed. So, if the
+    // number of args looks incorrect, don't do enable_if checks; we should've
+    // already emitted an error about the bad call.
+    if (FD->hasAttr<EnableIfAttr>() &&
+        isNumberOfArgsValidForCall(*this, FD, ArgExprs.size())) {
       if (const EnableIfAttr *Attr = CheckEnableIf(FD, ArgExprs, true)) {
         Diag(Fn->getLocStart(),
              isa<CXXMethodDecl>(FD) ?
@@ -6167,30 +6193,87 @@ static QualType checkConditionalPointerCompatibility(Sema &S, ExprResult &LHS,
   lhptee = S.Context.getQualifiedType(lhptee.getUnqualifiedType(), lhQual);
   rhptee = S.Context.getQualifiedType(rhptee.getUnqualifiedType(), rhQual);
 
+  // For OpenCL:
+  // 1. If LHS and RHS types match exactly and:
+  //  (a) AS match => use standard C rules, no bitcast or addrspacecast
+  //  (b) AS overlap => generate addrspacecast
+  //  (c) AS don't overlap => give an error
+  // 2. if LHS and RHS types don't match:
+  //  (a) AS match => use standard C rules, generate bitcast
+  //  (b) AS overlap => generate addrspacecast instead of bitcast
+  //  (c) AS don't overlap => give an error
+
+  // For OpenCL, non-null composite type is returned only for cases 1a and 1b.
   QualType CompositeTy = S.Context.mergeTypes(lhptee, rhptee);
 
+  // OpenCL cases 1c, 2a, 2b, and 2c.
   if (CompositeTy.isNull()) {
-    S.Diag(Loc, diag::ext_typecheck_cond_incompatible_pointers)
-      << LHSTy << RHSTy << LHS.get()->getSourceRange()
-      << RHS.get()->getSourceRange();
     // In this situation, we assume void* type. No especially good
     // reason, but this is what gcc does, and we do have to pick
     // to get a consistent AST.
-    QualType incompatTy = S.Context.getPointerType(S.Context.VoidTy);
-    LHS = S.ImpCastExprToType(LHS.get(), incompatTy, CK_BitCast);
-    RHS = S.ImpCastExprToType(RHS.get(), incompatTy, CK_BitCast);
+    QualType incompatTy;
+    if (S.getLangOpts().OpenCL) {
+      // OpenCL v1.1 s6.5 - Conversion between pointers to distinct address
+      // spaces is disallowed.
+      unsigned ResultAddrSpace;
+      if (lhQual.isAddressSpaceSupersetOf(rhQual)) {
+        // Cases 2a and 2b.
+        ResultAddrSpace = lhQual.getAddressSpace();
+      } else if (rhQual.isAddressSpaceSupersetOf(lhQual)) {
+        // Cases 2a and 2b.
+        ResultAddrSpace = rhQual.getAddressSpace();
+      } else {
+        // Cases 1c and 2c.
+        S.Diag(Loc,
+               diag::err_typecheck_op_on_nonoverlapping_address_space_pointers)
+            << LHSTy << RHSTy << 2 << LHS.get()->getSourceRange()
+            << RHS.get()->getSourceRange();
+        return QualType();
+      }
+
+      // Continue handling cases 2a and 2b.
+      incompatTy = S.Context.getPointerType(
+          S.Context.getAddrSpaceQualType(S.Context.VoidTy, ResultAddrSpace));
+      LHS = S.ImpCastExprToType(LHS.get(), incompatTy,
+                                (lhQual.getAddressSpace() != ResultAddrSpace)
+                                    ? CK_AddressSpaceConversion /* 2b */
+                                    : CK_BitCast /* 2a */);
+      RHS = S.ImpCastExprToType(RHS.get(), incompatTy,
+                                (rhQual.getAddressSpace() != ResultAddrSpace)
+                                    ? CK_AddressSpaceConversion /* 2b */
+                                    : CK_BitCast /* 2a */);
+    } else {
+      S.Diag(Loc, diag::ext_typecheck_cond_incompatible_pointers)
+          << LHSTy << RHSTy << LHS.get()->getSourceRange()
+          << RHS.get()->getSourceRange();
+      incompatTy = S.Context.getPointerType(S.Context.VoidTy);
+      LHS = S.ImpCastExprToType(LHS.get(), incompatTy, CK_BitCast);
+      RHS = S.ImpCastExprToType(RHS.get(), incompatTy, CK_BitCast);
+    }
     return incompatTy;
   }
 
   // The pointer types are compatible.
   QualType ResultTy = CompositeTy.withCVRQualifiers(MergedCVRQual);
+  auto LHSCastKind = CK_BitCast, RHSCastKind = CK_BitCast;
   if (IsBlockPointer)
     ResultTy = S.Context.getBlockPointerType(ResultTy);
-  else
+  else {
+    // Cases 1a and 1b for OpenCL.
+    auto ResultAddrSpace = ResultTy.getQualifiers().getAddressSpace();
+    LHSCastKind = lhQual.getAddressSpace() == ResultAddrSpace
+                      ? CK_BitCast /* 1a */
+                      : CK_AddressSpaceConversion /* 1b */;
+    RHSCastKind = rhQual.getAddressSpace() == ResultAddrSpace
+                      ? CK_BitCast /* 1a */
+                      : CK_AddressSpaceConversion /* 1b */;
     ResultTy = S.Context.getPointerType(ResultTy);
+  }
 
-  LHS = S.ImpCastExprToType(LHS.get(), ResultTy, CK_BitCast);
-  RHS = S.ImpCastExprToType(RHS.get(), ResultTy, CK_BitCast);
+  // For case 1a of OpenCL, S.ImpCastExprToType will not insert bitcast
+  // if the target type does not change.
+  LHS = S.ImpCastExprToType(LHS.get(), ResultTy, LHSCastKind);
+  RHS = S.ImpCastExprToType(RHS.get(), ResultTy, RHSCastKind);
   return ResultTy;
 }
 
@@ -7783,14 +7866,16 @@ QualType Sema::CheckVectorOperands(ExprResult &LHS, ExprResult &RHS,
       return RHSType;
   }
 
-  // If we're allowing lax vector conversions, only the total (data) size
-  // needs to be the same.
-  // FIXME: Should we really be allowing this?
-  // FIXME: We really just pick the LHS type arbitrarily?
-  if (isLaxVectorConversion(RHSType, LHSType)) {
-    QualType resultType = LHSType;
-    RHS = ImpCastExprToType(RHS.get(), resultType, CK_BitCast);
-    return resultType;
+  // If we're allowing lax vector conversions, only the total (data) size needs
+  // to be the same. If one of the types is scalar, the result is always the
+  // vector type. Don't allow this if the scalar operand is an lvalue.
+  QualType VecType = LHSVecType ? LHSType : RHSType;
+  QualType ScalarType = LHSVecType ? RHSType : LHSType;
+  ExprResult *ScalarExpr = LHSVecType ? &RHS : &LHS;
+  if (isLaxVectorConversion(ScalarType, VecType) &&
+      !ScalarExpr->get()->isLValue()) {
+    *ScalarExpr = ImpCastExprToType(ScalarExpr->get(), VecType, CK_BitCast);
+    return VecType;
   }
 
   // Okay, the expression is invalid.
@@ -9334,7 +9419,7 @@ QualType Sema::CheckVectorCompareOperands(ExprResult &LHS, ExprResult &RHS,
   }
   
   // Return a signed type for the vector.
-  return GetSignedVectorType(LHSType);
+  return GetSignedVectorType(vType);
 }
 
 QualType Sema::CheckVectorLogicalOperands(ExprResult &LHS, ExprResult &RHS,
@@ -9648,6 +9733,9 @@ static void DiagnoseConstAssignment(Sema &S, const Expr *E,
 /// emit an error and return true.  If so, return false.
 static bool CheckForModifiableLvalue(Expr *E, SourceLocation Loc, Sema &S) {
   assert(!E->hasPlaceholderType(BuiltinType::PseudoObject));
+
+  S.CheckShadowingDeclModification(E, Loc);
+
   SourceLocation OrigLoc = Loc;
   Expr::isModifiableLvalueResult IsLV = E->isModifiableLvalue(S.Context,
                                                               &Loc);
@@ -12760,7 +12848,7 @@ static bool IsPotentiallyEvaluatedContext(Sema &SemaRef) {
 /// \brief Mark a function referenced, and check whether it is odr-used
 /// (C++ [basic.def.odr]p2, C99 6.9p3)
 void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func,
-                                  bool OdrUse) {
+                                  bool MightBeOdrUse) {
   assert(Func && "No function?");
 
   Func->setReferenced();
@@ -12771,39 +12859,53 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func,
   //   set of overloaded functions [...].
   //
   // We (incorrectly) mark overload resolution as an unevaluated context, so we
-  // can just check that here. Skip the rest of this function if we've already
-  // marked the function as used.
-  if (Func->isUsed(/*CheckUsedAttr=*/false) ||
-      !IsPotentiallyEvaluatedContext(*this)) {
-    // C++11 [temp.inst]p3:
-    //   Unless a function template specialization has been explicitly
-    //   instantiated or explicitly specialized, the function template
-    //   specialization is implicitly instantiated when the specialization is
-    //   referenced in a context that requires a function definition to exist.
-    //
-    // We consider constexpr function templates to be referenced in a context
-    // that requires a definition to exist whenever they are referenced.
-    //
-    // FIXME: This instantiates constexpr functions too frequently. If this is
-    // really an unevaluated context (and we're not just in the definition of a
-    // function template or overload resolution or other cases which we
-    // incorrectly consider to be unevaluated contexts), and we're not in a
-    // subexpression which we actually need to evaluate (for instance, a
-    // template argument, array bound or an expression in a braced-init-list),
-    // we are not permitted to instantiate this constexpr function definition.
-    //
-    // FIXME: This also implicitly defines special members too frequently. They
-    // are only supposed to be implicitly defined if they are odr-used, but they
-    // are not odr-used from constant expressions in unevaluated contexts.
-    // However, they cannot be referenced if they are deleted, and they are
-    // deleted whenever the implicit definition of the special member would
-    // fail.
-    if (!Func->isConstexpr() || Func->getBody())
-      return;
-    CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(Func);
-    if (!Func->isImplicitlyInstantiable() && (!MD || MD->isUserProvided()))
-      return;
-  }
+  // can just check that here.
+  bool OdrUse = MightBeOdrUse && IsPotentiallyEvaluatedContext(*this);
+
+  // Determine whether we require a function definition to exist, per
+  // C++11 [temp.inst]p3:
+  //   Unless a function template specialization has been explicitly
+  //   instantiated or explicitly specialized, the function template
+  //   specialization is implicitly instantiated when the specialization is
+  //   referenced in a context that requires a function definition to exist.
+  //
+  // We consider constexpr function templates to be referenced in a context
+  // that requires a definition to exist whenever they are referenced.
+  //
+  // FIXME: This instantiates constexpr functions too frequently. If this is
+  // really an unevaluated context (and we're not just in the definition of a
+  // function template or overload resolution or other cases which we
+  // incorrectly consider to be unevaluated contexts), and we're not in a
+  // subexpression which we actually need to evaluate (for instance, a
+  // template argument, array bound or an expression in a braced-init-list),
+  // we are not permitted to instantiate this constexpr function definition.
+  //
+  // FIXME: This also implicitly defines special members too frequently. They
+  // are only supposed to be implicitly defined if they are odr-used, but they
+  // are not odr-used from constant expressions in unevaluated contexts.
+  // However, they cannot be referenced if they are deleted, and they are
+  // deleted whenever the implicit definition of the special member would
+  // fail (with very few exceptions).
+  CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(Func);
+  bool NeedDefinition =
+      OdrUse || (Func->isConstexpr() && (Func->isImplicitlyInstantiable() ||
+                                         (MD && !MD->isUserProvided())));
+
+  // C++14 [temp.expl.spec]p6:
+  //   If a template [...] is explicitly specialized then that specialization
+  //   shall be declared before the first use of that specialization that would
+  //   cause an implicit instantiation to take place, in every translation unit
+  //   in which such a use occurs
+  if (NeedDefinition &&
+      (Func->getTemplateSpecializationKind() != TSK_Undeclared ||
+       Func->getMemberSpecializationInfo()))
+    checkSpecializationVisibility(Loc, Func);
+
+  // If we don't need to mark the function as used, and we don't need to
+  // try to provide a definition, there's nothing more to do.
+  if ((Func->isUsed(/*CheckUsedAttr=*/false) || !OdrUse) &&
+      (!NeedDefinition || Func->getBody()))
+    return;
 
   // Note that this declaration has been used.
   if (CXXConstructorDecl *Constructor = dyn_cast<CXXConstructorDecl>(Func)) {
@@ -12863,8 +12965,6 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func,
   if (FPT && isUnresolvedExceptionSpec(FPT->getExceptionSpecType()))
     ResolveExceptionSpec(Loc, FPT);
 
-  if (!OdrUse) return;
-
   // Implicit instantiation of function templates and member functions of
   // class templates.
   if (Func->isImplicitlyInstantiable()) {
@@ -12912,9 +13012,11 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func,
     // Walk redefinitions, as some of them may be instantiable.
     for (auto i : Func->redecls()) {
       if (!i->isUsed(false) && i->isImplicitlyInstantiable())
-        MarkFunctionReferenced(Loc, i);
+        MarkFunctionReferenced(Loc, i, OdrUse);
     }
   }
+
+  if (!OdrUse) return;
 
   // Keep track of used but undefined functions.
   if (!Func->isDefined()) {
@@ -12926,17 +13028,7 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func,
       UndefinedButUsed.insert(std::make_pair(Func->getCanonicalDecl(), Loc));
   }
 
-  // Normally the most current decl is marked used while processing the use and
-  // any subsequent decls are marked used by decl merging. This fails with
-  // template instantiation since marking can happen at the end of the file
-  // and, because of the two phase lookup, this function is called with at
-  // decl in the middle of a decl chain. We loop to maintain the invariant
-  // that once a decl is used, all decls after it are also used.
-  for (FunctionDecl *F = Func->getMostRecentDecl();; F = F->getPreviousDecl()) {
-    F->markUsed(Context);
-    if (F == Func)
-      break;
-  }
+  Func->markUsed(Context);
 }
 
 static void
@@ -13239,7 +13331,7 @@ static bool captureInCapturedRegion(CapturedRegionScopeInfo *RSI,
 
 /// \brief Create a field within the lambda class for the variable
 /// being captured.
-static void addAsFieldToClosureType(Sema &S, LambdaScopeInfo *LSI, VarDecl *Var,
+static void addAsFieldToClosureType(Sema &S, LambdaScopeInfo *LSI, 
                                     QualType FieldType, QualType DeclRefType,
                                     SourceLocation Loc,
                                     bool RefersToCapturedVariable) {
@@ -13333,7 +13425,7 @@ static bool captureInLambda(LambdaScopeInfo *LSI,
 
   // Capture this variable in the lambda.
   if (BuildAndDiagnose)
-    addAsFieldToClosureType(S, LSI, Var, CaptureType, DeclRefType, Loc,
+    addAsFieldToClosureType(S, LSI, CaptureType, DeclRefType, Loc,
                             RefersToCapturedVariable);
     
   // Compute the type of a reference to this captured variable.
@@ -13495,8 +13587,9 @@ bool Sema::tryCaptureVariable(
         Diag(ExprLoc, diag::err_lambda_impcap) << Var->getDeclName();
         Diag(Var->getLocation(), diag::note_previous_decl) 
           << Var->getDeclName();
-        Diag(cast<LambdaScopeInfo>(CSI)->Lambda->getLocStart(),
-             diag::note_lambda_decl);
+        if (cast<LambdaScopeInfo>(CSI)->Lambda)
+          Diag(cast<LambdaScopeInfo>(CSI)->Lambda->getLocStart(),
+               diag::note_lambda_decl);
         // FIXME: If we error out because an outer lambda can not implicitly
         // capture a variable that an inner lambda explicitly captures, we
         // should have the inner lambda do the explicit capture - because
@@ -13718,6 +13811,12 @@ static void DoMarkVarDeclReferenced(Sema &SemaRef, SourceLocation Loc,
   assert(!isa<VarTemplatePartialSpecializationDecl>(Var) &&
          "Can't instantiate a partial template specialization.");
 
+  // If this might be a member specialization of a static data member, check
+  // the specialization is visible. We already did the checks for variable
+  // template specializations when we created them.
+  if (TSK != TSK_Undeclared && !isa<VarTemplateSpecializationDecl>(Var))
+    SemaRef.checkSpecializationVisibility(Loc, Var);
+
   // Perform implicit instantiation of static data members, static data member
   // templates of class templates, and variable template specializations. Delay
   // instantiations of variable templates, except for those that could be used
@@ -13761,7 +13860,8 @@ static void DoMarkVarDeclReferenced(Sema &SemaRef, SourceLocation Loc,
     }
   }
 
-  if(!MarkODRUsed) return;
+  if (!MarkODRUsed)
+    return;
 
   // Per C++11 [basic.def.odr], a variable is odr-used "unless it satisfies
   // the requirements for appearing in a constant expression (5.19) and, if
@@ -13789,13 +13889,16 @@ void Sema::MarkVariableReferenced(SourceLocation Loc, VarDecl *Var) {
 }
 
 static void MarkExprReferenced(Sema &SemaRef, SourceLocation Loc,
-                               Decl *D, Expr *E, bool OdrUse) {
+                               Decl *D, Expr *E, bool MightBeOdrUse) {
+  if (SemaRef.isInOpenMPDeclareTargetContext())
+    SemaRef.checkDeclIsAllowedInOpenMPTarget(E, D);
+
   if (VarDecl *Var = dyn_cast<VarDecl>(D)) {
     DoMarkVarDeclReferenced(SemaRef, Loc, Var, E);
     return;
   }
 
-  SemaRef.MarkAnyDeclReferenced(Loc, D, OdrUse);
+  SemaRef.MarkAnyDeclReferenced(Loc, D, MightBeOdrUse);
 
   // If this is a call to a method via a cast, also mark the method in the
   // derived class used in case codegen can devirtualize the call.
@@ -13817,7 +13920,7 @@ static void MarkExprReferenced(Sema &SemaRef, SourceLocation Loc,
   CXXMethodDecl *DM = MD->getCorrespondingMethodInClass(MostDerivedClassDecl);
   if (!DM || DM->isPure())
     return;
-  SemaRef.MarkAnyDeclReferenced(Loc, DM, OdrUse);
+  SemaRef.MarkAnyDeclReferenced(Loc, DM, MightBeOdrUse);
 } 
 
 /// \brief Perform reference-marking and odr-use handling for a DeclRefExpr.
@@ -13840,30 +13943,31 @@ void Sema::MarkMemberReferenced(MemberExpr *E) {
   //   overload resolution when referred to from a potentially-evaluated
   //   expression, is odr-used, unless it is a pure virtual function and its
   //   name is not explicitly qualified.
-  bool OdrUse = true;
+  bool MightBeOdrUse = true;
   if (E->performsVirtualDispatch(getLangOpts())) {
     if (CXXMethodDecl *Method = dyn_cast<CXXMethodDecl>(E->getMemberDecl()))
       if (Method->isPure())
-        OdrUse = false;
+        MightBeOdrUse = false;
   }
   SourceLocation Loc = E->getMemberLoc().isValid() ?
                             E->getMemberLoc() : E->getLocStart();
-  MarkExprReferenced(*this, Loc, E->getMemberDecl(), E, OdrUse);
+  MarkExprReferenced(*this, Loc, E->getMemberDecl(), E, MightBeOdrUse);
 }
 
 /// \brief Perform marking for a reference to an arbitrary declaration.  It
 /// marks the declaration referenced, and performs odr-use checking for
 /// functions and variables. This method should not be used when building a
 /// normal expression which refers to a variable.
-void Sema::MarkAnyDeclReferenced(SourceLocation Loc, Decl *D, bool OdrUse) {
-  if (OdrUse) {
+void Sema::MarkAnyDeclReferenced(SourceLocation Loc, Decl *D,
+                                 bool MightBeOdrUse) {
+  if (MightBeOdrUse) {
     if (auto *VD = dyn_cast<VarDecl>(D)) {
       MarkVariableReferenced(Loc, VD);
       return;
     }
   }
   if (auto *FD = dyn_cast<FunctionDecl>(D)) {
-    MarkFunctionReferenced(Loc, FD, OdrUse);
+    MarkFunctionReferenced(Loc, FD, MightBeOdrUse);
     return;
   }
   D->setReferenced();
@@ -14812,8 +14916,10 @@ ExprResult Sema::CheckPlaceholderExpr(Expr *E) {
     return ExprError();
 
   // Everything else should be impossible.
-#define BUILTIN_TYPE(Id, SingletonId) \
+#define IMAGE_TYPE(ImgType, Id, SingletonId, Access, Suffix) \
   case BuiltinType::Id:
+#include "clang/Basic/OpenCLImageTypes.def"
+#define BUILTIN_TYPE(Id, SingletonId) case BuiltinType::Id:
 #define PLACEHOLDER_TYPE(Id, SingletonId)
 #include "clang/AST/BuiltinTypes.def"
     break;

@@ -32,6 +32,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/Support/Allocator.h"
+#include "llvm/Support/Registry.h"
 #include <memory>
 #include <vector>
 
@@ -1890,6 +1891,19 @@ public:
   /// directly or indirectly.
   Module *getModuleContainingLocation(SourceLocation Loc);
 
+  /// \brief We want to produce a diagnostic at location IncLoc concerning a
+  /// missing module import.
+  ///
+  /// \param IncLoc The location at which the missing import was detected.
+  /// \param MLoc A location within the desired module at which some desired
+  ///        effect occurred (eg, where a desired entity was declared).
+  ///
+  /// \return A file that can be #included to import a module containing MLoc.
+  ///         Null if no such file could be determined or if a #include is not
+  ///         appropriate.
+  const FileEntry *getModuleHeaderToIncludeForDiagnostics(SourceLocation IncLoc,
+                                                          SourceLocation MLoc);
+
 private:
   // Macro handling.
   void HandleDefineDirective(Token &Tok, bool ImmediatelyAfterTopLevelIfndef);
@@ -1937,6 +1951,11 @@ public:
   virtual bool HandleComment(Preprocessor &PP, SourceRange Comment) = 0;
 };
 
+/// \brief Registry of pragma handlers added by plugins
+typedef llvm::Registry<PragmaHandler> PragmaHandlerRegistry;
+
 }  // end namespace clang
+
+extern template class llvm::Registry<clang::PragmaHandler>;
 
 #endif

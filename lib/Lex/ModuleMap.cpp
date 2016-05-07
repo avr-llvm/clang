@@ -94,11 +94,8 @@ ModuleMap::ModuleMap(SourceManager &SourceMgr, DiagnosticsEngine &Diags,
 }
 
 ModuleMap::~ModuleMap() {
-  for (llvm::StringMap<Module *>::iterator I = Modules.begin(), 
-                                        IEnd = Modules.end();
-       I != IEnd; ++I) {
-    delete I->getValue();
-  }
+  for (auto &M : Modules)
+    delete M.getValue();
 }
 
 void ModuleMap::setTarget(const TargetInfo &Target) {
@@ -154,6 +151,7 @@ static bool isBuiltinHeader(StringRef FileName) {
            .Case("limits.h", true)
            .Case("stdalign.h", true)
            .Case("stdarg.h", true)
+           .Case("stdatomic.h", true)
            .Case("stdbool.h", true)
            .Case("stddef.h", true)
            .Case("stdint.h", true)
@@ -211,29 +209,25 @@ ModuleMap::findHeaderInUmbrellaDirs(const FileEntry *File,
 
 static bool violatesPrivateInclude(Module *RequestingModule,
                                    const FileEntry *IncFileEnt,
-                                   ModuleMap::ModuleHeaderRole Role,
-                                   Module *RequestedModule) {
-  bool IsPrivateRole = Role & ModuleMap::PrivateHeader;
+                                   ModuleMap::KnownHeader Header) {
 #ifndef NDEBUG
-  if (IsPrivateRole) {
+  if (Header.getRole() & ModuleMap::PrivateHeader) {
     // Check for consistency between the module header role
     // as obtained from the lookup and as obtained from the module.
     // This check is not cheap, so enable it only for debugging.
     bool IsPrivate = false;
     SmallVectorImpl<Module::Header> *HeaderList[] = {
-        &RequestedModule->Headers[Module::HK_Private],
-        &RequestedModule->Headers[Module::HK_PrivateTextual]};
+        &Header.getModule()->Headers[Module::HK_Private],
+        &Header.getModule()->Headers[Module::HK_PrivateTextual]};
     for (auto *Hs : HeaderList)
       IsPrivate |=
           std::find_if(Hs->begin(), Hs->end(), [&](const Module::Header &H) {
             return H.Entry == IncFileEnt;
           }) != Hs->end();
-    assert((!IsPrivateRole || IsPrivate) && "inconsistent headers and roles");
+    assert(IsPrivate && "inconsistent headers and roles");
   }
 #endif
-  return IsPrivateRole && (!RequestingModule ||
-                           RequestedModule->getTopLevelModule() !=
-                               RequestingModule->getTopLevelModule());
+  return !Header.isAccessibleFrom(RequestingModule);
 }
 
 static Module *getTopLevelOrNull(Module *M) {
@@ -241,6 +235,7 @@ static Module *getTopLevelOrNull(Module *M) {
 }
 
 void ModuleMap::diagnoseHeaderInclusion(Module *RequestingModule,
+                                        bool RequestingModuleIsModuleInterface,
                                         SourceLocation FilenameLoc,
                                         StringRef Filename,
                                         const FileEntry *File) {
@@ -260,8 +255,7 @@ void ModuleMap::diagnoseHeaderInclusion(Module *RequestingModule,
   if (Known != Headers.end()) {
     for (const KnownHeader &Header : Known->second) {
       // Remember private headers for later printing of a diagnostic.
-      if (violatesPrivateInclude(RequestingModule, File, Header.getRole(),
-                                 Header.getModule())) {
+      if (violatesPrivateInclude(RequestingModule, File, Header)) {
         Private = Header.getModule();
         continue;
       }
@@ -303,7 +297,7 @@ void ModuleMap::diagnoseHeaderInclusion(Module *RequestingModule,
   if (LangOpts.ModulesStrictDeclUse) {
     Diags.Report(FilenameLoc, diag::err_undeclared_use_of_module)
         << RequestingModule->getFullModuleName() << Filename;
-  } else if (RequestingModule) {
+  } else if (RequestingModule && RequestingModuleIsModuleInterface) {
     diag::kind DiagID = RequestingModule->getTopLevelModule()->IsFramework ?
         diag::warn_non_modular_include_in_framework_module :
         diag::warn_non_modular_include_in_module;
@@ -812,6 +806,10 @@ void ModuleMap::addHeader(Module *Mod, Module::Header Header,
     HeaderInfo.MarkFileModuleHeader(Header.Entry, Role,
                                     isCompilingModuleHeader);
   }
+
+  // Notify callbacks that we just added a new header.
+  for (const auto &Cb : Callbacks)
+    Cb->moduleMapAddHeader(Header.Entry->getName());
 }
 
 void ModuleMap::excludeHeader(Module *Mod, Module::Header Header) {
@@ -1402,7 +1400,9 @@ void ModuleMapParser::parseModuleDecl() {
   
   // Parse the optional attribute list.
   Attributes Attrs;
-  parseOptionalAttributes(Attrs);
+  if (parseOptionalAttributes(Attrs))
+    return;
+
   
   // Parse the opening brace.
   if (!Tok.is(MMToken::LBrace)) {
@@ -2067,7 +2067,9 @@ void ModuleMapParser::parseConfigMacros() {
 
   // Parse the optional attributes.
   Attributes Attrs;
-  parseOptionalAttributes(Attrs);
+  if (parseOptionalAttributes(Attrs))
+    return;
+
   if (Attrs.IsExhaustive && !ActiveModule->Parent) {
     ActiveModule->ConfigMacrosExhaustive = true;
   }
@@ -2215,7 +2217,8 @@ void ModuleMapParser::parseInferredModuleDecl(bool Framework, bool Explicit) {
 
   // Parse optional attributes.
   Attributes Attrs;
-  parseOptionalAttributes(Attrs);
+  if (parseOptionalAttributes(Attrs))
+    return;
 
   if (ActiveModule) {
     // Note that we have an inferred submodule.

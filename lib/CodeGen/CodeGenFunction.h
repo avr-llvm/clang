@@ -68,7 +68,6 @@ class ObjCMethodDecl;
 class ObjCImplementationDecl;
 class ObjCPropertyImplDecl;
 class TargetInfo;
-class TargetCodeGenInfo;
 class VarDecl;
 class ObjCForCollectionStmt;
 class ObjCAtTryStmt;
@@ -86,6 +85,9 @@ class BlockByrefHelpers;
 class BlockByrefInfo;
 class BlockFlags;
 class BlockFieldFlags;
+class RegionCodeGenTy;
+class TargetCodeGenInfo;
+struct OMPTaskDataTy;
 
 /// The kind of evaluation to perform on values of a particular
 /// type.  Basically, is the code in CGExprScalar, CGExprComplex, or
@@ -638,6 +640,11 @@ public:
     ~OMPPrivateScope() {
       if (PerformCleanup)
         ForceCleanup();
+    }
+
+    /// Checks if the global variable is captured in current function. 
+    bool isGlobalVarCaptured(const VarDecl *VD) const {
+      return !VD->isLocalVarDeclOrParm() && CGF.LocalDeclMap.count(VD) > 0;
     }
 
   private:
@@ -1872,7 +1879,7 @@ public:
                                       const CXXConstructExpr *E);
 
   void EmitCXXAggrConstructorCall(const CXXConstructorDecl *D,
-                                  const ConstantArrayType *ArrayTy,
+                                  const ArrayType *ArrayTy,
                                   Address ArrayPtr,
                                   const CXXConstructExpr *E,
                                   bool ZeroInitialization = false);
@@ -2221,6 +2228,8 @@ public:
   llvm::Function *EmitCapturedStmt(const CapturedStmt &S, CapturedRegionKind K);
   llvm::Function *GenerateCapturedStmtFunction(const CapturedStmt &S);
   Address GenerateCapturedStmtArgument(const CapturedStmt &S);
+  llvm::Function *GenerateOpenMPCapturedStmtFunction(const CapturedStmt &S,
+                                                     QualType ReturnQTy);
   llvm::Function *GenerateOpenMPCapturedStmtFunction(const CapturedStmt &S);
   void GenerateOpenMPCapturedVars(const CapturedStmt &S,
                                   SmallVectorImpl<llvm::Value *> &CapturedVars);
@@ -2307,7 +2316,17 @@ public:
   /// it is the last iteration of the loop code in associated directive, or to
   /// 'i1 false' otherwise. If this item is nullptr, no final check is required.
   void EmitOMPLastprivateClauseFinal(const OMPExecutableDirective &D,
+                                     bool NoFinals,
                                      llvm::Value *IsLastIterCond = nullptr);
+  /// Emit initial code for linear clauses.
+  void EmitOMPLinearClause(const OMPLoopDirective &D,
+                           CodeGenFunction::OMPPrivateScope &PrivateScope);
+  /// Emit final code for linear clauses.
+  /// \param CondGen Optional conditional code for final part of codegen for
+  /// linear clause.
+  void EmitOMPLinearClauseFinal(
+      const OMPLoopDirective &D,
+      const llvm::function_ref<llvm::Value *(CodeGenFunction &)> &CondGen);
   /// \brief Emit initial code for reduction variables. Creates reduction copies
   /// and initializes them with the values according to OpenMP standard.
   ///
@@ -2327,6 +2346,14 @@ public:
   ///
   /// \param D Directive (possibly) with the 'linear' clause.
   void EmitOMPLinearClauseInit(const OMPLoopDirective &D);
+
+  typedef const llvm::function_ref<void(CodeGenFunction & /*CGF*/,
+                                        llvm::Value * /*OutlinedFn*/,
+                                        const OMPTaskDataTy & /*Data*/)>
+      TaskGenTy;
+  void EmitOMPTaskBasedDirective(const OMPExecutableDirective &S,
+                                 const RegionCodeGenTy &BodyGen,
+                                 const TaskGenTy &TaskGen, OMPTaskDataTy &Data);
 
   void EmitOMPParallelDirective(const OMPParallelDirective &S);
   void EmitOMPSimdDirective(const OMPSimdDirective &S);
@@ -2359,10 +2386,19 @@ public:
   void
   EmitOMPCancellationPointDirective(const OMPCancellationPointDirective &S);
   void EmitOMPCancelDirective(const OMPCancelDirective &S);
+  void EmitOMPTaskLoopBasedDirective(const OMPLoopDirective &S);
   void EmitOMPTaskLoopDirective(const OMPTaskLoopDirective &S);
   void EmitOMPTaskLoopSimdDirective(const OMPTaskLoopSimdDirective &S);
   void EmitOMPDistributeDirective(const OMPDistributeDirective &S);
+  void EmitOMPDistributeLoop(const OMPDistributeDirective &S);
 
+  /// Emit outlined function for the target directive.
+  static std::pair<llvm::Function * /*OutlinedFn*/,
+                   llvm::Constant * /*OutlinedFnID*/>
+  EmitOMPTargetDirectiveOutlinedFunction(CodeGenModule &CGM,
+                                         const OMPTargetDirective &S,
+                                         StringRef ParentName,
+                                         bool IsOffloadEntry);
   /// \brief Emit inner loop of the worksharing/simd construct.
   ///
   /// \param S Directive, for which the inner loop must be emitted.
@@ -2380,22 +2416,33 @@ public:
       const llvm::function_ref<void(CodeGenFunction &)> &PostIncGen);
 
   JumpDest getOMPCancelDestination(OpenMPDirectiveKind Kind);
+  /// Emit initial code for loop counters of loop-based directives.
+  void EmitOMPPrivateLoopCounters(const OMPLoopDirective &S,
+                                  OMPPrivateScope &LoopScope);
 
 private:
-
   /// Helpers for the OpenMP loop directives.
   void EmitOMPLoopBody(const OMPLoopDirective &D, JumpDest LoopExit);
   void EmitOMPSimdInit(const OMPLoopDirective &D, bool IsMonotonic = false);
-  void EmitOMPSimdFinal(const OMPLoopDirective &D);
+  void EmitOMPSimdFinal(
+      const OMPLoopDirective &D,
+      const llvm::function_ref<llvm::Value *(CodeGenFunction &)> &CondGen);
   /// \brief Emit code for the worksharing loop-based directive.
   /// \return true, if this construct has any lastprivate clause, false -
   /// otherwise.
   bool EmitOMPWorksharingLoop(const OMPLoopDirective &S);
+  void EmitOMPOuterLoop(bool IsMonotonic, bool DynamicOrOrdered,
+      const OMPLoopDirective &S, OMPPrivateScope &LoopScope, bool Ordered,
+      Address LB, Address UB, Address ST, Address IL, llvm::Value *Chunk);
   void EmitOMPForOuterLoop(OpenMPScheduleClauseKind ScheduleKind,
                            bool IsMonotonic, const OMPLoopDirective &S,
                            OMPPrivateScope &LoopScope, bool Ordered, Address LB,
                            Address UB, Address ST, Address IL,
                            llvm::Value *Chunk);
+  void EmitOMPDistributeOuterLoop(
+      OpenMPDistScheduleClauseKind ScheduleKind,
+      const OMPDistributeDirective &S, OMPPrivateScope &LoopScope,
+      Address LB, Address UB, Address ST, Address IL, llvm::Value *Chunk);
   /// \brief Emit code for sections directive.
   void EmitSections(const OMPExecutableDirective &S);
 
@@ -2464,8 +2511,10 @@ public:
 
   std::pair<RValue, llvm::Value *> EmitAtomicCompareExchange(
       LValue Obj, RValue Expected, RValue Desired, SourceLocation Loc,
-      llvm::AtomicOrdering Success = llvm::SequentiallyConsistent,
-      llvm::AtomicOrdering Failure = llvm::SequentiallyConsistent,
+      llvm::AtomicOrdering Success =
+          llvm::AtomicOrdering::SequentiallyConsistent,
+      llvm::AtomicOrdering Failure =
+          llvm::AtomicOrdering::SequentiallyConsistent,
       bool IsWeak = false, AggValueSlot Slot = AggValueSlot::ignored());
 
   void EmitAtomicUpdate(LValue LVal, llvm::AtomicOrdering AO,
@@ -2698,11 +2747,10 @@ public:
                               ReturnValueSlot ReturnValue, llvm::Value *This,
                               llvm::Value *ImplicitParam,
                               QualType ImplicitParamTy, const CallExpr *E);
-  RValue EmitCXXStructorCall(const CXXMethodDecl *MD, llvm::Value *Callee,
-                             ReturnValueSlot ReturnValue, llvm::Value *This,
-                             llvm::Value *ImplicitParam,
-                             QualType ImplicitParamTy, const CallExpr *E,
-                             StructorType Type);
+  RValue EmitCXXDestructorCall(const CXXDestructorDecl *DD, llvm::Value *Callee,
+                               llvm::Value *This, llvm::Value *ImplicitParam,
+                               QualType ImplicitParamTy, const CallExpr *E,
+                               StructorType Type);
   RValue EmitCXXMemberCallExpr(const CXXMemberCallExpr *E,
                                ReturnValueSlot ReturnValue);
   RValue EmitCXXMemberOrOperatorMemberCallExpr(const CallExpr *CE,
@@ -3092,7 +3140,7 @@ private:
   ///
   /// \param AI - The first function argument of the expansion.
   void ExpandTypeFromArgs(QualType Ty, LValue Dst,
-                          SmallVectorImpl<llvm::Argument *>::iterator &AI);
+                          SmallVectorImpl<llvm::Value *>::iterator &AI);
 
   /// ExpandTypeToArgs - Expand an RValue \arg RV, with the LLVM type for \arg
   /// Ty, into individual arguments on the provided vector \arg IRCallArgs,

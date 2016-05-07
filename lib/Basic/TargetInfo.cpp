@@ -72,8 +72,6 @@ TargetInfo::TargetInfo(const llvm::Triple &T) : TargetOpts(), Triple(T) {
   FloatFormat = &llvm::APFloat::IEEEsingle;
   DoubleFormat = &llvm::APFloat::IEEEdouble;
   LongDoubleFormat = &llvm::APFloat::IEEEdouble;
-  DataLayoutString = nullptr;
-  UserLabelPrefix = "_";
   MCountName = "mcount";
   RegParmMax = 0;
   SSERegParmMax = 0;
@@ -277,6 +275,10 @@ void TargetInfo::adjust(const LangOptions &Opts) {
     UseBitFieldTypeAlignment = false;
   if (Opts.ShortWChar)
     WCharType = UnsignedShort;
+  if (Opts.AlignDouble) {
+    DoubleAlign = LongLongAlign = 64;
+    LongDoubleAlign = 64;
+  }
 
   if (Opts.OpenCL) {
     // OpenCL C requires specific widths for types, irrespective of

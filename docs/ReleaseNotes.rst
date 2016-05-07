@@ -11,8 +11,8 @@ Written by the `LLVM Team <http://llvm.org/>`_
 .. warning::
 
    These are in-progress notes for the upcoming Clang 3.9 release. You may
-   prefer the `Clang 3.7 Release Notes
-   <http://llvm.org/releases/3.7.0/tools/clang/docs/ReleaseNotes.html>`_.
+   prefer the `Clang 3.8 Release Notes
+   <http://llvm.org/releases/3.8.0/tools/clang/docs/ReleaseNotes.html>`_.
 
 Introduction
 ============
@@ -79,6 +79,7 @@ TLS is enabled for Cygwin defaults to -femulated-tls.
 
 C Language Changes in Clang
 ---------------------------
+The -faltivec and -maltivec flags no longer silently include altivec.h on Power platforms.
 
 ...
 
@@ -90,10 +91,60 @@ C11 Feature Support
 C++ Language Changes in Clang
 -----------------------------
 
-- ...
+- Clang now enforces the rule that a *using-declaration* cannot name an enumerator of a
+  scoped enumeration.
 
-C++11 Feature Support
+  .. code-block:: c++
+
+    namespace Foo { enum class E { e }; }
+    namespace Bar {
+      using Foo::E::e; // error
+      constexpr auto e = Foo::E::e; // ok
+    }
+
+- Clang now enforces the rule that an enumerator of an unscoped enumeration declared at
+  class scope can only be named by a *using-declaration* in a derived class.
+
+  .. code-block:: c++
+
+    class Foo { enum E { e }; }
+    using Foo::e; // error
+    static constexpr auto e = Foo::e; // ok
+
+...
+
+C++1z Feature Support
 ^^^^^^^^^^^^^^^^^^^^^
+
+Clang's experimental support for the upcoming C++1z standard can be enabled with ``-std=c++1z``.
+Changes to C++1z features since Clang 3.8:
+
+- The ``[[fallthrough]]``, ``[[nodiscard]]``, and ``[[maybe_unused]]`` attributes are
+  supported in C++11 onwards, and are largely synonymous with Clang's existing attributes
+  ``[[clang::fallthrough]]``, ``[[gnu::warn_unused_result]]``, and ``[[gnu::unused]]``.
+  Use ``-Wimplicit-fallthrough`` to warn on unannotated fallthrough within ``switch``
+  statements.
+
+- In C++1z mode, aggregate initialization can be performed for classes with base classes:
+
+  .. code-block:: c++
+
+    struct A { int n; };
+    struct B : A { int x, y; };
+    B b = { 1, 2, 3 }; // b.n == 1, b.x == 2, b.y == 3
+
+- The range in a range-based ``for`` statement can have different types for its ``begin``
+  and ``end`` iterators. This is permitted as an extension in C++11 onwards.
+
+- Lambda-expressions can explicitly capture ``*this`` (to capture the surrounding object
+  by copy). This is permitted as an extension in C++11 onwards.
+
+- Objects of enumeration type can be direct-list-initialized from a value of the underlying
+  type. ``E{n}`` is equivalent to ``E(n)``, except that it implies a check for a narrowing
+  conversion.
+
+- Unary *fold-expression*\s over an empty pack are now rejected for all operators
+  other than ``&&``, ``||``, and ``,``.
 
 ...
 
@@ -118,6 +169,12 @@ this section should help get you past the largest hurdles of upgrading.
 
 AST Matchers
 ------------
+
+- hasAnyArgument: Matcher no longer ignores parentheses and implicit casts on
+  the argument before applying the inner matcher. The fix was done to allow for
+  greater control by the user. In all existing checkers that use this matcher
+  all instances of code ``hasAnyArgument(<inner matcher>)`` must be changed to
+  ``hasAnyArgument(ignoringParenImpCasts(<inner matcher>))``.
 
 ...
 

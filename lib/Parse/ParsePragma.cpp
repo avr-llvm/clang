@@ -13,6 +13,7 @@
 
 #include "RAIIObjectsForParser.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/Basic/PragmaKinds.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Parse/ParseDiagnostic.h"
@@ -336,11 +337,9 @@ void Parser::HandlePragmaVisibility() {
 
 namespace {
 struct PragmaPackInfo {
-  Sema::PragmaPackKind Kind;
-  IdentifierInfo *Name;
+  Sema::PragmaMsStackAction Action;
+  StringRef SlotLabel;
   Token Alignment;
-  SourceLocation LParenLoc;
-  SourceLocation RParenLoc;
 };
 } // end anonymous namespace
 
@@ -355,15 +354,14 @@ void Parser::HandlePragmaPack() {
     if (Alignment.isInvalid())
       return;
   }
-  Actions.ActOnPragmaPack(Info->Kind, Info->Name, Alignment.get(), PragmaLoc,
-                          Info->LParenLoc, Info->RParenLoc);
+  Actions.ActOnPragmaPack(PragmaLoc, Info->Action, Info->SlotLabel,
+                          Alignment.get());
 }
 
 void Parser::HandlePragmaMSStruct() {
   assert(Tok.is(tok::annot_pragma_msstruct));
-  Sema::PragmaMSStructKind Kind =
-    static_cast<Sema::PragmaMSStructKind>(
-    reinterpret_cast<uintptr_t>(Tok.getAnnotationValue()));
+  PragmaMSStructKind Kind = static_cast<PragmaMSStructKind>(
+      reinterpret_cast<uintptr_t>(Tok.getAnnotationValue()));
   Actions.ActOnPragmaMSStruct(Kind);
   ConsumeToken(); // The annotation token.
 }
@@ -497,11 +495,11 @@ void Parser::HandlePragmaMSPointersToMembers() {
 void Parser::HandlePragmaMSVtorDisp() {
   assert(Tok.is(tok::annot_pragma_ms_vtordisp));
   uintptr_t Value = reinterpret_cast<uintptr_t>(Tok.getAnnotationValue());
-  Sema::PragmaVtorDispKind Kind =
-      static_cast<Sema::PragmaVtorDispKind>((Value >> 16) & 0xFFFF);
+  Sema::PragmaMsStackAction Action =
+      static_cast<Sema::PragmaMsStackAction>((Value >> 16) & 0xFFFF);
   MSVtorDispAttr::Mode Mode = MSVtorDispAttr::Mode(Value & 0xFFFF);
   SourceLocation PragmaLoc = ConsumeToken(); // The annotation token.
-  Actions.ActOnPragmaMSVtorDisp(Kind, PragmaLoc, Mode);
+  Actions.ActOnPragmaMSVtorDisp(Action, PragmaLoc, Mode);
 }
 
 void Parser::HandlePragmaMSPragma() {
@@ -824,8 +822,7 @@ bool Parser::HandlePragmaLoopHint(LoopHint &Hint) {
     StateOption = llvm::StringSwitch<bool>(OptionInfo->getName())
                       .Case("vectorize", true)
                       .Case("interleave", true)
-                      .Case("unroll", true)
-                      .Default(false);
+                      .Default(false) || OptionUnroll;
   }
 
   // Verify loop hint has an argument.
@@ -841,10 +838,14 @@ bool Parser::HandlePragmaLoopHint(LoopHint &Hint) {
     ConsumeToken(); // The annotation token.
     SourceLocation StateLoc = Toks[0].getLocation();
     IdentifierInfo *StateInfo = Toks[0].getIdentifierInfo();
-    if (!StateInfo ||
-        (!StateInfo->isStr("enable") && !StateInfo->isStr("disable") &&
-         ((OptionUnroll && !StateInfo->isStr("full")) ||
-          (!OptionUnroll && !StateInfo->isStr("assume_safety"))))) {
+
+    bool Valid = StateInfo &&
+                 llvm::StringSwitch<bool>(StateInfo->getName())
+                     .Cases("enable", "disable", true)
+                     .Case("full", OptionUnroll)
+                     .Case("assume_safety", !OptionUnroll)
+                     .Default(false);
+    if (!Valid) {
       Diag(Toks[0].getLocation(), diag::err_pragma_invalid_keyword)
           << /*FullKeyword=*/OptionUnroll;
       return false;
@@ -959,11 +960,10 @@ void PragmaPackHandler::HandlePragma(Preprocessor &PP,
     return;
   }
 
-  Sema::PragmaPackKind Kind = Sema::PPK_Default;
-  IdentifierInfo *Name = nullptr;
+  Sema::PragmaMsStackAction Action = Sema::PSK_Reset;
+  StringRef SlotLabel;
   Token Alignment;
   Alignment.startToken();
-  SourceLocation LParenLoc = Tok.getLocation();
   PP.Lex(Tok);
   if (Tok.is(tok::numeric_constant)) {
     Alignment = Tok;
@@ -973,18 +973,18 @@ void PragmaPackHandler::HandlePragma(Preprocessor &PP,
     // In MSVC/gcc, #pragma pack(4) sets the alignment without affecting
     // the push/pop stack.
     // In Apple gcc, #pragma pack(4) is equivalent to #pragma pack(push, 4)
-    if (PP.getLangOpts().ApplePragmaPack)
-      Kind = Sema::PPK_Push;
+    Action =
+        PP.getLangOpts().ApplePragmaPack ? Sema::PSK_Push_Set : Sema::PSK_Set;
   } else if (Tok.is(tok::identifier)) {
     const IdentifierInfo *II = Tok.getIdentifierInfo();
     if (II->isStr("show")) {
-      Kind = Sema::PPK_Show;
+      Action = Sema::PSK_Show;
       PP.Lex(Tok);
     } else {
       if (II->isStr("push")) {
-        Kind = Sema::PPK_Push;
+        Action = Sema::PSK_Push;
       } else if (II->isStr("pop")) {
-        Kind = Sema::PPK_Pop;
+        Action = Sema::PSK_Pop;
       } else {
         PP.Diag(Tok.getLocation(), diag::warn_pragma_invalid_action) << "pack";
         return;
@@ -995,11 +995,12 @@ void PragmaPackHandler::HandlePragma(Preprocessor &PP,
         PP.Lex(Tok);
 
         if (Tok.is(tok::numeric_constant)) {
+          Action = (Sema::PragmaMsStackAction)(Action | Sema::PSK_Set);
           Alignment = Tok;
 
           PP.Lex(Tok);
         } else if (Tok.is(tok::identifier)) {
-          Name = Tok.getIdentifierInfo();
+          SlotLabel = Tok.getIdentifierInfo()->getName();
           PP.Lex(Tok);
 
           if (Tok.is(tok::comma)) {
@@ -1010,6 +1011,7 @@ void PragmaPackHandler::HandlePragma(Preprocessor &PP,
               return;
             }
 
+            Action = (Sema::PragmaMsStackAction)(Action | Sema::PSK_Set);
             Alignment = Tok;
 
             PP.Lex(Tok);
@@ -1024,7 +1026,7 @@ void PragmaPackHandler::HandlePragma(Preprocessor &PP,
     // In MSVC/gcc, #pragma pack() resets the alignment without affecting
     // the push/pop stack.
     // In Apple gcc #pragma pack() is equivalent to #pragma pack(pop).
-    Kind = Sema::PPK_Pop;
+    Action = Sema::PSK_Pop;
   }
 
   if (Tok.isNot(tok::r_paren)) {
@@ -1041,11 +1043,9 @@ void PragmaPackHandler::HandlePragma(Preprocessor &PP,
 
   PragmaPackInfo *Info =
       PP.getPreprocessorAllocator().Allocate<PragmaPackInfo>(1);
-  Info->Kind = Kind;
-  Info->Name = Name;
+  Info->Action = Action;
+  Info->SlotLabel = SlotLabel;
   Info->Alignment = Alignment;
-  Info->LParenLoc = LParenLoc;
-  Info->RParenLoc = RParenLoc;
 
   MutableArrayRef<Token> Toks(PP.getPreprocessorAllocator().Allocate<Token>(1),
                               1);
@@ -1062,8 +1062,8 @@ void PragmaPackHandler::HandlePragma(Preprocessor &PP,
 void PragmaMSStructHandler::HandlePragma(Preprocessor &PP, 
                                          PragmaIntroducerKind Introducer,
                                          Token &MSStructTok) {
-  Sema::PragmaMSStructKind Kind = Sema::PMSST_OFF;
-  
+  PragmaMSStructKind Kind = PMSST_OFF;
+
   Token Tok;
   PP.Lex(Tok);
   if (Tok.isNot(tok::identifier)) {
@@ -1073,7 +1073,7 @@ void PragmaMSStructHandler::HandlePragma(Preprocessor &PP,
   SourceLocation EndLoc = Tok.getLocation();
   const IdentifierInfo *II = Tok.getIdentifierInfo();
   if (II->isStr("on")) {
-    Kind = Sema::PMSST_ON;
+    Kind = PMSST_ON;
     PP.Lex(Tok);
   }
   else if (II->isStr("off") || II->isStr("reset"))
@@ -1603,7 +1603,7 @@ void PragmaMSVtorDisp::HandlePragma(Preprocessor &PP,
   }
   PP.Lex(Tok);
 
-  Sema::PragmaVtorDispKind Kind = Sema::PVDK_Set;
+  Sema::PragmaMsStackAction Action = Sema::PSK_Set;
   const IdentifierInfo *II = Tok.getIdentifierInfo();
   if (II) {
     if (II->isStr("push")) {
@@ -1614,24 +1614,24 @@ void PragmaMSVtorDisp::HandlePragma(Preprocessor &PP,
         return;
       }
       PP.Lex(Tok);
-      Kind = Sema::PVDK_Push;
+      Action = Sema::PSK_Push_Set;
       // not push, could be on/off
     } else if (II->isStr("pop")) {
       // #pragma vtordisp(pop)
       PP.Lex(Tok);
-      Kind = Sema::PVDK_Pop;
+      Action = Sema::PSK_Pop;
     }
     // not push or pop, could be on/off
   } else {
     if (Tok.is(tok::r_paren)) {
       // #pragma vtordisp()
-      Kind = Sema::PVDK_Reset;
+      Action = Sema::PSK_Reset;
     }
   }
 
 
   uint64_t Value = 0;
-  if (Kind == Sema::PVDK_Push || Kind == Sema::PVDK_Set) {
+  if (Action & Sema::PSK_Push || Action & Sema::PSK_Set) {
     const IdentifierInfo *II = Tok.getIdentifierInfo();
     if (II && II->isStr("off")) {
       PP.Lex(Tok);
@@ -1673,7 +1673,7 @@ void PragmaMSVtorDisp::HandlePragma(Preprocessor &PP,
   AnnotTok.setLocation(VtorDispLoc);
   AnnotTok.setAnnotationEndLoc(EndLoc);
   AnnotTok.setAnnotationValue(reinterpret_cast<void *>(
-      static_cast<uintptr_t>((Kind << 16) | (Value & 0xFFFF))));
+      static_cast<uintptr_t>((Action << 16) | (Value & 0xFFFF))));
   PP.EnterToken(AnnotTok);
 }
 
@@ -1721,10 +1721,10 @@ void PragmaMSPragma::HandlePragma(Preprocessor &PP,
 void PragmaDetectMismatchHandler::HandlePragma(Preprocessor &PP,
                                                PragmaIntroducerKind Introducer,
                                                Token &Tok) {
-  SourceLocation CommentLoc = Tok.getLocation();
+  SourceLocation DetectMismatchLoc = Tok.getLocation();
   PP.Lex(Tok);
   if (Tok.isNot(tok::l_paren)) {
-    PP.Diag(CommentLoc, diag::err_expected) << tok::l_paren;
+    PP.Diag(DetectMismatchLoc, diag::err_expected) << tok::l_paren;
     return;
   }
 
@@ -1759,10 +1759,10 @@ void PragmaDetectMismatchHandler::HandlePragma(Preprocessor &PP,
 
   // If the pragma is lexically sound, notify any interested PPCallbacks.
   if (PP.getPPCallbacks())
-    PP.getPPCallbacks()->PragmaDetectMismatch(CommentLoc, NameString,
+    PP.getPPCallbacks()->PragmaDetectMismatch(DetectMismatchLoc, NameString,
                                               ValueString);
 
-  Actions.ActOnPragmaDetectMismatch(NameString, ValueString);
+  Actions.ActOnPragmaDetectMismatch(DetectMismatchLoc, NameString, ValueString);
 }
 
 /// \brief Handle the microsoft \#pragma comment extension.
@@ -1793,22 +1793,22 @@ void PragmaCommentHandler::HandlePragma(Preprocessor &PP,
 
   // Verify that this is one of the 5 whitelisted options.
   IdentifierInfo *II = Tok.getIdentifierInfo();
-  Sema::PragmaMSCommentKind Kind =
-    llvm::StringSwitch<Sema::PragmaMSCommentKind>(II->getName())
-    .Case("linker",   Sema::PCK_Linker)
-    .Case("lib",      Sema::PCK_Lib)
-    .Case("compiler", Sema::PCK_Compiler)
-    .Case("exestr",   Sema::PCK_ExeStr)
-    .Case("user",     Sema::PCK_User)
-    .Default(Sema::PCK_Unknown);
-  if (Kind == Sema::PCK_Unknown) {
+  PragmaMSCommentKind Kind =
+    llvm::StringSwitch<PragmaMSCommentKind>(II->getName())
+    .Case("linker",   PCK_Linker)
+    .Case("lib",      PCK_Lib)
+    .Case("compiler", PCK_Compiler)
+    .Case("exestr",   PCK_ExeStr)
+    .Case("user",     PCK_User)
+    .Default(PCK_Unknown);
+  if (Kind == PCK_Unknown) {
     PP.Diag(Tok.getLocation(), diag::err_pragma_comment_unknown_kind);
     return;
   }
 
   // On PS4, issue a warning about any pragma comments other than
   // #pragma comment lib.
-  if (PP.getTargetInfo().getTriple().isPS4() && Kind != Sema::PCK_Lib) {
+  if (PP.getTargetInfo().getTriple().isPS4() && Kind != PCK_Lib) {
     PP.Diag(Tok.getLocation(), diag::warn_pragma_comment_ignored)
       << II->getName();
     return;
@@ -1844,7 +1844,7 @@ void PragmaCommentHandler::HandlePragma(Preprocessor &PP,
   if (PP.getPPCallbacks())
     PP.getPPCallbacks()->PragmaComment(CommentLoc, II, ArgumentString);
 
-  Actions.ActOnPragmaMSComment(Kind, ArgumentString);
+  Actions.ActOnPragmaMSComment(CommentLoc, Kind, ArgumentString);
 }
 
 // #pragma clang optimize off

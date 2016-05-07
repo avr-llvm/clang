@@ -280,6 +280,7 @@ void OMPClauseProfiler::VistOMPClauseWithPreInit(
 
 void OMPClauseProfiler::VistOMPClauseWithPostUpdate(
     const OMPClauseWithPostUpdate *C) {
+  VistOMPClauseWithPreInit(C);
   if (auto *E = C->getPostUpdateExpr())
     Profiler->VisitStmt(E);
 }
@@ -378,7 +379,6 @@ OMPClauseProfiler::VisitOMPFirstprivateClause(const OMPFirstprivateClause *C) {
 void
 OMPClauseProfiler::VisitOMPLastprivateClause(const OMPLastprivateClause *C) {
   VisitOMPClauseList(C);
-  VistOMPClauseWithPreInit(C);
   VistOMPClauseWithPostUpdate(C);
   for (auto *E : C->source_exprs()) {
     Profiler->VisitStmt(E);
@@ -399,7 +399,6 @@ void OMPClauseProfiler::VisitOMPReductionClause(
       C->getQualifierLoc().getNestedNameSpecifier());
   Profiler->VisitName(C->getNameInfo().getName());
   VisitOMPClauseList(C);
-  VistOMPClauseWithPreInit(C);
   VistOMPClauseWithPostUpdate(C);
   for (auto *E : C->privates()) {
     Profiler->VisitStmt(E);
@@ -416,6 +415,7 @@ void OMPClauseProfiler::VisitOMPReductionClause(
 }
 void OMPClauseProfiler::VisitOMPLinearClause(const OMPLinearClause *C) {
   VisitOMPClauseList(C);
+  VistOMPClauseWithPostUpdate(C);
   for (auto *E : C->privates()) {
     Profiler->VisitStmt(E);
   }
@@ -1258,6 +1258,7 @@ StmtProfiler::VisitLambdaExpr(const LambdaExpr *S) {
        C != CEnd; ++C) {
     ID.AddInteger(C->getCaptureKind());
     switch (C->getCaptureKind()) {
+    case LCK_StarThis:
     case LCK_This:
       break;
     case LCK_ByRef:

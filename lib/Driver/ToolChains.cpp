@@ -329,6 +329,36 @@ void MachO::AddLinkRuntimeLib(const ArgList &Args, ArgStringList &CmdArgs,
   }
 }
 
+StringRef Darwin::getPlatformFamily() const {
+  switch (TargetPlatform) {
+    case DarwinPlatformKind::MacOS:
+      return "MacOSX";
+    case DarwinPlatformKind::IPhoneOS:
+    case DarwinPlatformKind::IPhoneOSSimulator:
+      return "iPhone";
+    case DarwinPlatformKind::TvOS:
+    case DarwinPlatformKind::TvOSSimulator:
+      return "AppleTV";
+    case DarwinPlatformKind::WatchOS:
+    case DarwinPlatformKind::WatchOSSimulator:
+      return "Watch";
+  }
+  llvm_unreachable("Unsupported platform");
+}
+
+StringRef Darwin::getSDKName(StringRef isysroot) {
+  // Assume SDK has path: SOME_PATH/SDKs/PlatformXX.YY.sdk
+  llvm::sys::path::const_iterator SDKDir;
+  auto BeginSDK = llvm::sys::path::begin(isysroot);
+  auto EndSDK = llvm::sys::path::end(isysroot);
+  for (auto IT = BeginSDK; IT != EndSDK; ++IT) {
+    StringRef SDK = *IT;
+    if (SDK.endswith(".sdk"))
+      return SDK.slice(0, SDK.size() - 4);
+  }
+  return "";
+}
+
 StringRef Darwin::getOSLibraryNameSuffix() const {
   switch(TargetPlatform) {
   case DarwinPlatformKind::MacOS:
@@ -353,34 +383,8 @@ void Darwin::addProfileRTLibs(const ArgList &Args,
                               ArgStringList &CmdArgs) const {
   if (!needsProfileRT(Args)) return;
 
-  // TODO: Clean this up once autoconf is gone
-  SmallString<128> P(getDriver().ResourceDir);
-  llvm::sys::path::append(P, "lib", "darwin");
-  const char *Library = "libclang_rt.profile_osx.a";
-
-  // Select the appropriate runtime library for the target.
-  if (isTargetWatchOS()) {
-    Library = "libclang_rt.profile_watchos.a";
-  } else if (isTargetWatchOSSimulator()) {
-    llvm::sys::path::append(P, "libclang_rt.profile_watchossim.a");
-    Library = getVFS().exists(P) ? "libclang_rt.profile_watchossim.a"
-                                 : "libclang_rt.profile_watchos.a";
-  } else if (isTargetTvOS()) {
-    Library = "libclang_rt.profile_tvos.a";
-  } else if (isTargetTvOSSimulator()) {
-    llvm::sys::path::append(P, "libclang_rt.profile_tvossim.a");
-    Library = getVFS().exists(P) ? "libclang_rt.profile_tvossim.a"
-                                 : "libclang_rt.profile_tvos.a";
-  } else if (isTargetIPhoneOS()) {
-    Library = "libclang_rt.profile_ios.a";
-  } else if (isTargetIOSSimulator()) {
-    llvm::sys::path::append(P, "libclang_rt.profile_iossim.a");
-    Library = getVFS().exists(P) ? "libclang_rt.profile_iossim.a"
-                                 : "libclang_rt.profile_ios.a";
-  } else {
-    assert(isTargetMacOS() && "unexpected non MacOS platform");
-  }
-  AddLinkRuntimeLib(Args, CmdArgs, Library,
+  AddLinkRuntimeLib(Args, CmdArgs, (Twine("libclang_rt.profile_") +
+       getOSLibraryNameSuffix() + ".a").str(),
                     /*AlwaysLink*/ true);
 }
 
@@ -448,6 +452,8 @@ void DarwinClang::AddLinkRuntimeLibArgs(const ArgList &Args,
                       /*AlwaysLink=*/true);
     AddLinkSanitizerLibArgs(Args, CmdArgs, "stats");
   }
+  if (Sanitize.needsEsanRt())
+    AddLinkSanitizerLibArgs(Args, CmdArgs, "esan");
 
   // Otherwise link libSystem, then the dynamic runtime library, and finally any
   // target specific static runtime library.
@@ -564,11 +570,8 @@ void Darwin::AddDeploymentTarget(DerivedArgList &Args) const {
         TvOSTarget.empty() && Args.hasArg(options::OPT_isysroot)) {
       if (const Arg *A = Args.getLastArg(options::OPT_isysroot)) {
         StringRef isysroot = A->getValue();
-        // Assume SDK has path: SOME_PATH/SDKs/PlatformXX.YY.sdk
-        size_t BeginSDK = isysroot.rfind("SDKs/");
-        size_t EndSDK = isysroot.rfind(".sdk");
-        if (BeginSDK != StringRef::npos && EndSDK != StringRef::npos) {
-          StringRef SDK = isysroot.slice(BeginSDK + 5, EndSDK);
+        StringRef SDK = getSDKName(isysroot);
+        if (SDK.size() > 0) {
           // Slice the version number out.
           // Version number is between the first and the last number.
           size_t StartVer = SDK.find_first_of("0123456789");
@@ -721,6 +724,17 @@ void Darwin::AddDeploymentTarget(DerivedArgList &Args) const {
     Platform = WatchOSSimulator;
 
   setTarget(Platform, Major, Minor, Micro);
+
+  if (const Arg *A = Args.getLastArg(options::OPT_isysroot)) {
+    StringRef SDK = getSDKName(A->getValue());
+    if (SDK.size() > 0) {
+      size_t StartVer = SDK.find_first_of("0123456789");
+      StringRef SDKName = SDK.slice(0, StartVer);
+      if (!SDKName.startswith(getPlatformFamily()))
+        getDriver().Diag(diag::warn_incompatible_sysroot)
+            << SDKName << getPlatformFamily();
+    }
+  }
 }
 
 void DarwinClang::AddCXXStdlibLibArgs(const ArgList &Args,
@@ -1251,13 +1265,18 @@ void Darwin::CheckObjCARC() const {
 }
 
 SanitizerMask Darwin::getSupportedSanitizers() const {
+  const bool IsX86_64 = getTriple().getArch() == llvm::Triple::x86_64;
   SanitizerMask Res = ToolChain::getSupportedSanitizers();
   Res |= SanitizerKind::Address;
   if (isTargetMacOS()) {
     if (!isMacosxVersionLT(10, 9))
       Res |= SanitizerKind::Vptr;
     Res |= SanitizerKind::SafeStack;
-    Res |= SanitizerKind::Thread;
+    if (IsX86_64)
+      Res |= SanitizerKind::Thread;
+  } else if (isTargetIOSSimulator() || isTargetTvOSSimulator()) {
+    if (IsX86_64)
+      Res |= SanitizerKind::Thread;
   }
   return Res;
 }
@@ -2608,10 +2627,6 @@ std::string HexagonToolChain::getHexagonTargetDir(
   if (getVFS().exists(InstallRelDir = InstalledDir + "/../target"))
     return InstallRelDir;
 
-  std::string PrefixRelDir = std::string(LLVM_PREFIX) + "/target";
-  if (getVFS().exists(PrefixRelDir))
-    return PrefixRelDir;
-
   return InstallRelDir;
 }
 
@@ -3018,6 +3033,10 @@ SanitizerMask CloudABI::getSupportedSanitizers() const {
   return Res;
 }
 
+SanitizerMask CloudABI::getDefaultSanitizers() const {
+  return SanitizerKind::SafeStack;
+}
+
 /// OpenBSD - OpenBSD tool chain which can call as(1) and ld(1) directly.
 
 OpenBSD::OpenBSD(const Driver &D, const llvm::Triple &Triple,
@@ -3111,16 +3130,7 @@ FreeBSD::FreeBSD(const Driver &D, const llvm::Triple &Triple,
     getFilePaths().push_back(getDriver().SysRoot + "/usr/lib");
 }
 
-ToolChain::CXXStdlibType FreeBSD::GetCXXStdlibType(const ArgList &Args) const {
-  if (Arg *A = Args.getLastArg(options::OPT_stdlib_EQ)) {
-    StringRef Value = A->getValue();
-    if (Value == "libstdc++")
-      return ToolChain::CST_Libstdcxx;
-    if (Value == "libc++")
-      return ToolChain::CST_Libcxx;
-
-    getDriver().Diag(diag::err_drv_invalid_stdlib_name) << A->getAsString(Args);
-  }
+ToolChain::CXXStdlibType FreeBSD::GetDefaultCXXStdlibType() const {
   if (getTriple().getOSMajorVersion() >= 10)
     return ToolChain::CST_Libcxx;
   return ToolChain::CST_Libstdcxx;
@@ -3263,17 +3273,7 @@ Tool *NetBSD::buildAssembler() const {
 
 Tool *NetBSD::buildLinker() const { return new tools::netbsd::Linker(*this); }
 
-ToolChain::CXXStdlibType NetBSD::GetCXXStdlibType(const ArgList &Args) const {
-  if (Arg *A = Args.getLastArg(options::OPT_stdlib_EQ)) {
-    StringRef Value = A->getValue();
-    if (Value == "libstdc++")
-      return ToolChain::CST_Libstdcxx;
-    if (Value == "libc++")
-      return ToolChain::CST_Libcxx;
-
-    getDriver().Diag(diag::err_drv_invalid_stdlib_name) << A->getAsString(Args);
-  }
-
+ToolChain::CXXStdlibType NetBSD::GetDefaultCXXStdlibType() const {
   unsigned Major, Minor, Micro;
   getTriple().getOSVersion(Major, Minor, Micro);
   if (Major >= 7 || Major == 0) {
@@ -4163,11 +4163,14 @@ void Linux::AddCudaIncludeArgs(const ArgList &DriverArgs,
   if (DriverArgs.hasArg(options::OPT_nocudainc))
     return;
 
-  if (CudaInstallation.isValid()) {
-    addSystemInclude(DriverArgs, CC1Args, CudaInstallation.getIncludePath());
-    CC1Args.push_back("-include");
-    CC1Args.push_back("__clang_cuda_runtime_wrapper.h");
+  if (!CudaInstallation.isValid()) {
+    getDriver().Diag(diag::err_drv_no_cuda_installation);
+    return;
   }
+
+  addSystemInclude(DriverArgs, CC1Args, CudaInstallation.getIncludePath());
+  CC1Args.push_back("-include");
+  CC1Args.push_back("__clang_cuda_runtime_wrapper.h");
 }
 
 bool Linux::isPIEDefault() const { return getSanitizerArgs().requiresPIE(); }
@@ -4194,6 +4197,8 @@ SanitizerMask Linux::getSupportedSanitizers() const {
     Res |= SanitizerKind::Thread;
   if (IsX86_64 || IsMIPS64 || IsPowerPC64 || IsAArch64)
     Res |= SanitizerKind::Memory;
+  if (IsX86_64)
+    Res |= SanitizerKind::Efficiency;
   if (IsX86 || IsX86_64) {
     Res |= SanitizerKind::Function;
   }
@@ -4252,6 +4257,10 @@ CudaToolChain::addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
                                      llvm::opt::ArgStringList &CC1Args) const {
   Linux::addClangTargetOptions(DriverArgs, CC1Args);
   CC1Args.push_back("-fcuda-is-device");
+
+  if (DriverArgs.hasFlag(options::OPT_fcuda_flush_denormals_to_zero,
+                         options::OPT_fno_cuda_flush_denormals_to_zero, false))
+    CC1Args.push_back("-fcuda-flush-denormals-to-zero");
 
   if (DriverArgs.hasArg(options::OPT_nocudalib))
     return;

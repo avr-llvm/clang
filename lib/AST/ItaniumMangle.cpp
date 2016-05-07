@@ -20,6 +20,7 @@
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
+#include "clang/AST/DeclOpenMP.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
@@ -66,8 +67,9 @@ static const DeclContext *getEffectiveDeclContext(const Decl *D) {
   }
   
   const DeclContext *DC = D->getDeclContext();
-  if (const CapturedDecl *CD = dyn_cast<CapturedDecl>(DC))
-    return getEffectiveDeclContext(CD);
+  if (isa<CapturedDecl>(DC) || isa<OMPDeclareReductionDecl>(DC)) {
+    return getEffectiveDeclContext(cast<Decl>(DC));
+  }
 
   if (const auto *VD = dyn_cast<VarDecl>(D))
     if (VD->isExternC())
@@ -77,7 +79,7 @@ static const DeclContext *getEffectiveDeclContext(const Decl *D) {
     if (FD->isExternC())
       return FD->getASTContext().getTranslationUnitDecl();
 
-  return DC;
+  return DC->getRedeclContext();
 }
 
 static const DeclContext *getEffectiveParentContext(const DeclContext *DC) {
@@ -1999,6 +2001,7 @@ void CXXNameMangler::mangleType(const BuiltinType *T) {
   //                 ::= Ds # char16_t
   //                 ::= Dn # std::nullptr_t (i.e., decltype(nullptr))
   //                 ::= u <source-name>    # vendor extended type
+  std::string type_name;
   switch (T->getKind()) {
   case BuiltinType::Void:
     Out << 'v';
@@ -2089,42 +2092,12 @@ void CXXNameMangler::mangleType(const BuiltinType *T) {
   case BuiltinType::ObjCSel:
     Out << "13objc_selector";
     break;
-  case BuiltinType::OCLImage1d:
-    Out << "11ocl_image1d";
+#define IMAGE_TYPE(ImgType, Id, SingletonId, Access, Suffix) \
+  case BuiltinType::Id: \
+    type_name = "ocl_" #ImgType "_" #Suffix; \
+    Out << type_name.size() << type_name; \
     break;
-  case BuiltinType::OCLImage1dArray:
-    Out << "16ocl_image1darray";
-    break;
-  case BuiltinType::OCLImage1dBuffer:
-    Out << "17ocl_image1dbuffer";
-    break;
-  case BuiltinType::OCLImage2d:
-    Out << "11ocl_image2d";
-    break;
-  case BuiltinType::OCLImage2dArray:
-    Out << "16ocl_image2darray";
-    break;
-  case BuiltinType::OCLImage2dDepth:
-    Out << "16ocl_image2ddepth";
-    break;
-  case BuiltinType::OCLImage2dArrayDepth:
-    Out << "21ocl_image2darraydepth";
-    break;
-  case BuiltinType::OCLImage2dMSAA:
-    Out << "15ocl_image2dmsaa";
-    break;
-  case BuiltinType::OCLImage2dArrayMSAA:
-    Out << "20ocl_image2darraymsaa";
-    break;
-  case BuiltinType::OCLImage2dMSAADepth:
-    Out << "20ocl_image2dmsaadepth";
-    break;
-  case BuiltinType::OCLImage2dArrayMSAADepth:
-    Out << "25ocl_image2darraymsaadepth";
-    break;
-  case BuiltinType::OCLImage3d:
-    Out << "11ocl_image3d";
-    break;
+#include "clang/Basic/OpenCLImageTypes.def"
   case BuiltinType::OCLSampler:
     Out << "11ocl_sampler";
     break;
@@ -2163,8 +2136,13 @@ StringRef CXXNameMangler::getCallingConvQualifierName(CallingConv CC) {
   case CC_IntelOclBicc:
   case CC_SpirFunction:
   case CC_SpirKernel:
+  case CC_PreserveMost:
+  case CC_PreserveAll:
     // FIXME: we should be mangling all of the above.
     return "";
+
+  case CC_Swift:
+    return "swiftcall";
   }
   llvm_unreachable("bad calling convention");
 }
@@ -2193,8 +2171,20 @@ CXXNameMangler::mangleExtParameterInfo(FunctionProtoType::ExtParameterInfo PI) {
   // Note that these are *not* substitution candidates.  Demanglers might
   // have trouble with this if the parameter type is fully substituted.
 
+  switch (PI.getABI()) {
+  case ParameterABI::Ordinary:
+    break;
+
+  // All of these start with "swift", so they come before "ns_consumed".
+  case ParameterABI::SwiftContext:
+  case ParameterABI::SwiftErrorResult:
+  case ParameterABI::SwiftIndirectResult:
+    mangleVendorQualifier(getParameterABISpelling(PI.getABI()));
+    break;
+  }
+
   if (PI.isConsumed())
-    Out << "U11ns_consumed";
+    mangleVendorQualifier("ns_consumed");
 }
 
 // <type>          ::= <function-type>

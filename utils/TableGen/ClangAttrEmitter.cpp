@@ -87,16 +87,13 @@ static std::string ReadPCHRecord(StringRef type) {
 
 // Assumes that the way to get the value is SA->getname()
 static std::string WritePCHRecord(StringRef type, StringRef name) {
-  return StringSwitch<std::string>(type)
-    .EndsWith("Decl *", "AddDeclRef(" + std::string(name) +
-                        ", Record);\n")
-    .Case("TypeSourceInfo *",
-          "AddTypeSourceInfo(" + std::string(name) + ", Record);\n")
+  return "Record." + StringSwitch<std::string>(type)
+    .EndsWith("Decl *", "AddDeclRef(" + std::string(name) + ");\n")
+    .Case("TypeSourceInfo *", "AddTypeSourceInfo(" + std::string(name) + ");\n")
     .Case("Expr *", "AddStmt(" + std::string(name) + ");\n")
-    .Case("IdentifierInfo *", 
-          "AddIdentifierRef(" + std::string(name) + ", Record);\n")
-    .Case("StringRef", "AddString(" + std::string(name) + ", Record);\n")
-    .Default("Record.push_back(" + std::string(name) + ");\n");
+    .Case("IdentifierInfo *", "AddIdentifierRef(" + std::string(name) + ");\n")
+    .Case("StringRef", "AddString(" + std::string(name) + ");\n")
+    .Default("push_back(" + std::string(name) + ");\n");
 }
 
 // Normalize attribute name by removing leading and trailing
@@ -371,7 +368,7 @@ namespace {
       OS << getLowerName();
     }
     void writePCHWrite(raw_ostream &OS) const override {
-      OS << "    AddString(SA->get" << getUpperName() << "(), Record);\n";
+      OS << "    Record.AddString(SA->get" << getUpperName() << "());\n";
     }
     void writeValue(raw_ostream &OS) const override {
       OS << "\\\"\" << get" << getUpperName() << "() << \"\\\"";
@@ -487,10 +484,10 @@ namespace {
     void writePCHWrite(raw_ostream &OS) const override {
       OS << "    Record.push_back(SA->is" << getUpperName() << "Expr());\n";
       OS << "    if (SA->is" << getUpperName() << "Expr())\n";
-      OS << "      AddStmt(SA->get" << getUpperName() << "Expr());\n";
+      OS << "      Record.AddStmt(SA->get" << getUpperName() << "Expr());\n";
       OS << "    else\n";
-      OS << "      AddTypeSourceInfo(SA->get" << getUpperName()
-         << "Type(), Record);\n";
+      OS << "      Record.AddTypeSourceInfo(SA->get" << getUpperName()
+         << "Type());\n";
     }
     void writeValue(raw_ostream &OS) const override {
       OS << "\";\n";
@@ -887,7 +884,7 @@ namespace {
       OS << getLowerName();
     }
     void writePCHWrite(raw_ostream &OS) const override {
-      OS << "    AddVersionTuple(SA->get" << getUpperName() << "(), Record);\n";
+      OS << "    Record.AddVersionTuple(SA->get" << getUpperName() << "());\n";
     }
     void writeValue(raw_ostream &OS) const override {
       OS << getLowerName() << "=\" << get" << getUpperName() << "() << \"";
@@ -1103,11 +1100,21 @@ createArgument(const Record &Arg, StringRef Attr,
 
 static void writeAvailabilityValue(raw_ostream &OS) {
   OS << "\" << getPlatform()->getName();\n"
+     << "  if (getStrict()) OS << \", strict\";\n"
      << "  if (!getIntroduced().empty()) OS << \", introduced=\" << getIntroduced();\n"
      << "  if (!getDeprecated().empty()) OS << \", deprecated=\" << getDeprecated();\n"
      << "  if (!getObsoleted().empty()) OS << \", obsoleted=\" << getObsoleted();\n"
      << "  if (getUnavailable()) OS << \", unavailable\";\n"
      << "  OS << \"";
+}
+
+static void writeDeprecatedAttrValue(raw_ostream &OS, std::string &Variety) {
+  OS << "\\\"\" << getMessage() << \"\\\"\";\n";
+  // Only GNU deprecated has an optional fixit argument at the second position.
+  if (Variety == "GNU")
+     OS << "    if (!getReplacement().empty()) OS << \", \\\"\""
+           " << getReplacement() << \"\\\"\";\n";
+  OS << "    OS << \"";
 }
 
 static void writeGetSpellingFunction(Record &R, raw_ostream &OS) {
@@ -1223,6 +1230,8 @@ writePrettyPrintFunction(Record &R,
       OS << "(";
     if (Spelling == "availability") {
       writeAvailabilityValue(OS);
+    } else if (Spelling == "deprecated" || Spelling == "gnu::deprecated") {
+        writeDeprecatedAttrValue(OS, Variety);
     } else {
       unsigned index = 0;
       for (const auto &arg : Args) {
@@ -1761,8 +1770,10 @@ namespace {
 
 static const AttrClassDescriptor AttrClassDescriptors[] = {
   { "ATTR", "Attr" },
+  { "STMT_ATTR", "StmtAttr" },
   { "INHERITABLE_ATTR", "InheritableAttr" },
-  { "INHERITABLE_PARAM_ATTR", "InheritableParamAttr" }
+  { "INHERITABLE_PARAM_ATTR", "InheritableParamAttr" },
+  { "PARAMETER_ABI_ATTR", "ParameterABIAttr" }
 };
 
 static void emitDefaultDefine(raw_ostream &OS, StringRef name,
@@ -2805,6 +2816,7 @@ void EmitClangAttrParsedAttrImpl(RecordKeeper &Records, raw_ostream &OS) {
     SS << ", " << I->second->getValueAsBit("HasCustomParsing");
     SS << ", " << I->second->isSubClassOf("TargetSpecificAttr");
     SS << ", " << I->second->isSubClassOf("TypeAttr");
+    SS << ", " << I->second->isSubClassOf("StmtAttr");
     SS << ", " << IsKnownToGCC(*I->second);
     SS << ", " << GenerateAppertainsTo(*I->second, OS);
     SS << ", " << GenerateLangOptRequirements(*I->second, OS);

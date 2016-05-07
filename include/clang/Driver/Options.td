@@ -95,6 +95,8 @@ def m_ppc_Features_Group : OptionGroup<"<ppc features group>">,
                            Group<m_Group>;
 def m_wasm_Features_Group : OptionGroup<"<wasm features group>">,
                             Group<m_Group>;
+def m_amdgpu_Features_Group : OptionGroup<"<amdgpu features group>">,
+                              Group<m_Group>;
 
 def m_libc_Group          : OptionGroup<"<m libc group>">, Group<m_Group>;
 def u_Group               : OptionGroup<"<u group>">;
@@ -150,6 +152,9 @@ class InternalDriverOpt : Group<internal_driver_Group>,
 def driver_mode : Joined<["--"], "driver-mode=">, Group<internal_driver_Group>,
   Flags<[CoreOption, DriverOption, HelpHidden]>,
   HelpText<"Set the driver mode to either 'gcc', 'g++', 'cpp', or 'cl'">;
+def rsp_quoting : Joined<["--"], "rsp-quoting=">, Group<internal_driver_Group>,
+  Flags<[CoreOption, DriverOption, HelpHidden]>,
+  HelpText<"Set the rsp quoting to either 'posix', or 'windows'">;
 def ccc_gcc_name : Separate<["-"], "ccc-gcc-name">, InternalDriverOpt,
   HelpText<"Name for native GCC compiler">,
   MetaVarName<"<gcc-path>">;
@@ -335,7 +340,7 @@ def Xassembler : Separate<["-"], "Xassembler">,
   HelpText<"Pass <arg> to the assembler">, MetaVarName<"<arg>">;
 def Xclang : Separate<["-"], "Xclang">,
   HelpText<"Pass <arg> to the clang compiler">, MetaVarName<"<arg>">,
-  Flags<[DriverOption, CoreOption]>;
+  Flags<[DriverOption, CoreOption]>, Group<CompileOnly_Group>;
 def Xcuda_fatbinary : Separate<["-"], "Xcuda-fatbinary">,
   HelpText<"Pass <arg> to fatbinary invocation">, MetaVarName<"<arg>">;
 def Xcuda_ptxas : Separate<["-"], "Xcuda-ptxas">,
@@ -373,15 +378,23 @@ def cxx_isystem : JoinedOrSeparate<["-"], "cxx-isystem">, Group<clang_i_Group>,
 def c : Flag<["-"], "c">, Flags<[DriverOption]>,
   HelpText<"Only run preprocess, compile, and assemble steps">;
 def cuda_device_only : Flag<["--"], "cuda-device-only">,
-  HelpText<"Do device-side CUDA compilation only">;
-def cuda_gpu_arch_EQ : Joined<["--"], "cuda-gpu-arch=">,
-  Flags<[DriverOption, HelpHidden]>, HelpText<"CUDA GPU architecture">;
+  HelpText<"Compile CUDA code for device only">;
 def cuda_host_only : Flag<["--"], "cuda-host-only">,
-  HelpText<"Do host-side CUDA compilation only">;
+  HelpText<"Compile CUDA code for host only.  Has no effect on non-CUDA "
+           "compilations.">;
+def cuda_compile_host_device : Flag<["--"], "cuda-compile-host-device">,
+  HelpText<"Compile CUDA code for both host and device (default).  Has no "
+           "effect on non-CUDA compilations.">;
+def cuda_gpu_arch_EQ : Joined<["--"], "cuda-gpu-arch=">, Flags<[DriverOption]>,
+  HelpText<"CUDA GPU architecture (e.g. sm_35).  May be specified more than once.">;
 def cuda_noopt_device_debug : Flag<["--"], "cuda-noopt-device-debug">,
   HelpText<"Enable device-side debug info generation. Disables ptxas optimizations.">;
+def no_cuda_noopt_device_debug : Flag<["--"], "no-cuda-noopt-device-debug">;
 def cuda_path_EQ : Joined<["--"], "cuda-path=">, Group<i_Group>,
   HelpText<"CUDA installation path">;
+def fcuda_flush_denormals_to_zero : Flag<["-"], "fcuda-flush-denormals-to-zero">,
+  Flags<[CC1Option]>, HelpText<"Flush denormal floating point values to zero in CUDA device mode.">;
+def fno_cuda_flush_denormals_to_zero : Flag<["-"], "fno-cuda-flush-denormals-to-zero">;
 def dA : Flag<["-"], "dA">, Group<d_Group>;
 def dD : Flag<["-"], "dD">, Group<d_Group>, Flags<[CC1Option]>,
   HelpText<"Print macro definitions in -E mode in addition to normal output">;
@@ -462,7 +475,7 @@ def fprofile_instr_generate_EQ : Joined<["-"], "fprofile-instr-generate=">,
 def fprofile_instr_use : Flag<["-"], "fprofile-instr-use">, Group<f_Group>,
     Flags<[DriverOption]>;
 def fprofile_instr_use_EQ : Joined<["-"], "fprofile-instr-use=">,
-    Group<f_Group>, Flags<[CC1Option]>,
+    Group<f_Group>, Flags<[DriverOption]>,
     HelpText<"Use instrumentation data for profile-guided optimization">;
 def fcoverage_mapping : Flag<["-"], "fcoverage-mapping">,
     Group<f_Group>, Flags<[CC1Option]>,
@@ -586,6 +599,9 @@ def fno_math_errno : Flag<["-"], "fno-math-errno">, Group<f_Group>;
 def fbracket_depth_EQ : Joined<["-"], "fbracket-depth=">, Group<f_Group>;
 def fsignaling_math : Flag<["-"], "fsignaling-math">, Group<f_Group>;
 def fno_signaling_math : Flag<["-"], "fno-signaling-math">, Group<f_Group>;
+def fjump_tables : Flag<["-"], "fjump-tables">, Group<f_Group>;
+def fno_jump_tables : Flag<["-"], "fno-jump-tables">, Group<f_Group>, Flags<[CC1Option]>,
+  HelpText<"Do not use jump tables for lowering switches">;
 def fsanitize_EQ : CommaJoined<["-"], "fsanitize=">, Group<f_clang_Group>,
                    Flags<[CC1Option, CoreOption]>, MetaVarName<"<check>">,
                    HelpText<"Turn on runtime checks for various forms of undefined "
@@ -796,6 +812,8 @@ def fmodule_name_EQ : Joined<["-"], "fmodule-name=">, Group<f_Group>,
   Flags<[DriverOption,CC1Option]>, MetaVarName<"<name>">,
   HelpText<"Specify the name of the module to build">;
 def fmodule_name : Separate<["-"], "fmodule-name">, Alias<fmodule_name_EQ>;
+def fmodule_implementation_of : Separate<["-"], "fmodule-implementation-of">,
+  Flags<[CC1Option]>, Alias<fmodule_name_EQ>;
 def fmodule_map_file : Joined<["-"], "fmodule-map-file=">,
   Group<f_Group>, Flags<[DriverOption,CC1Option]>, MetaVarName<"<file>">,
   HelpText<"Load this module map file">;
@@ -915,7 +933,7 @@ def fno_strict_aliasing : Flag<["-"], "fno-strict-aliasing">, Group<f_Group>,
 def fstruct_path_tbaa : Flag<["-"], "fstruct-path-tbaa">, Group<f_Group>;
 def fno_struct_path_tbaa : Flag<["-"], "fno-struct-path-tbaa">, Group<f_Group>;
 def fno_strict_enums : Flag<["-"], "fno-strict-enums">, Group<f_Group>;
-def fno_strict_vtable_pointers: Flag<["-"], "fno-strict-vtable-pointers">, 
+def fno_strict_vtable_pointers: Flag<["-"], "fno-strict-vtable-pointers">,
   Group<f_Group>;
 def fno_strict_overflow : Flag<["-"], "fno-strict-overflow">, Group<f_Group>;
 def fno_threadsafe_statics : Flag<["-"], "fno-threadsafe-statics">, Group<f_Group>,
@@ -955,7 +973,7 @@ def fobjc_gc : Flag<["-"], "fobjc-gc">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Enable Objective-C garbage collection">;
 def fobjc_legacy_dispatch : Flag<["-"], "fobjc-legacy-dispatch">, Group<f_Group>;
 def fobjc_new_property : Flag<["-"], "fobjc-new-property">, Group<clang_ignored_f_Group>;
-def fobjc_infer_related_result_type : Flag<["-"], "fobjc-infer-related-result-type">, 
+def fobjc_infer_related_result_type : Flag<["-"], "fobjc-infer-related-result-type">,
                                       Group<f_Group>;
 def fno_objc_infer_related_result_type : Flag<["-"],
   "fno-objc-infer-related-result-type">, Group<f_Group>,
@@ -1049,7 +1067,7 @@ def fstrict_aliasing : Flag<["-"], "fstrict-aliasing">, Group<f_Group>,
 def fstrict_enums : Flag<["-"], "fstrict-enums">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Enable optimizations based on the strict definition of an enum's "
            "value range">;
-def fstrict_vtable_pointers: Flag<["-"], "fstrict-vtable-pointers">, 
+def fstrict_vtable_pointers: Flag<["-"], "fstrict-vtable-pointers">,
   Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Enable optimizations based on the strict rules for overwriting "
              "polymorphic C++ objects">;
@@ -1134,9 +1152,6 @@ def fwhole_program_vtables : Flag<["-"], "fwhole-program-vtables">, Group<f_Grou
   Flags<[CC1Option]>,
   HelpText<"Enables whole-program vtable optimization. Requires -flto">;
 def fno_whole_program_vtables : Flag<["-"], "fno-whole-program-vtables">, Group<f_Group>;
-def fwhole_program_vtables_blacklist_EQ : Joined<["-"], "fwhole-program-vtables-blacklist=">,
-  Group<f_Group>, Flags<[CC1Option]>,
-  HelpText<"Path to a blacklist file for whole-program vtable optimization">;
 def fwrapv : Flag<["-"], "fwrapv">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Treat signed integer overflow as two's complement">;
 def fwritable_strings : Flag<["-"], "fwritable-strings">, Group<f_Group>, Flags<[CC1Option]>,
@@ -1169,7 +1184,7 @@ def fdebug_prefix_map_EQ
 def g_Flag : Flag<["-"], "g">, Group<g_Group>,
   HelpText<"Generate source-level debug information">;
 def gline_tables_only : Flag<["-"], "gline-tables-only">, Group<gN_Group>,
-  HelpText<"Emit debug line number tables only">;
+  Flags<[CoreOption]>, HelpText<"Emit debug line number tables only">;
 def gmlt : Flag<["-"], "gmlt">, Alias<gline_tables_only>;
 def g0 : Flag<["-"], "g0">, Group<gN_Group>;
 def g1 : Flag<["-"], "g1">, Group<gN_Group>, Alias<gline_tables_only>;
@@ -1246,7 +1261,7 @@ def iquote : JoinedOrSeparate<["-"], "iquote">, Group<clang_i_Group>, Flags<[CC1
 def isysroot : JoinedOrSeparate<["-"], "isysroot">, Group<clang_i_Group>, Flags<[CC1Option]>,
   HelpText<"Set the system root directory (usually /)">, MetaVarName<"<dir>">;
 def isystem : JoinedOrSeparate<["-"], "isystem">, Group<clang_i_Group>,
-  Flags<[CC1Option, CoreOption]>,
+  Flags<[CC1Option]>,
   HelpText<"Add directory to SYSTEM include search path">, MetaVarName<"<directory>">;
 def iwithprefixbefore : JoinedOrSeparate<["-"], "iwithprefixbefore">, Group<clang_i_Group>,
   HelpText<"Set directory to include search path with prefix">, MetaVarName<"<dir>">,
@@ -1277,6 +1292,8 @@ def m3dnow : Flag<["-"], "m3dnow">, Group<m_x86_Features_Group>;
 def m64 : Flag<["-"], "m64">, Group<m_Group>, Flags<[DriverOption, CoreOption]>;
 def mx32 : Flag<["-"], "mx32">, Group<m_Group>, Flags<[DriverOption, CoreOption]>;
 def mabi_EQ : Joined<["-"], "mabi=">, Group<m_Group>;
+def miamcu : Flag<["-"], "miamcu">, Group<m_Group>, Flags<[DriverOption, CoreOption]>,
+  HelpText<"Use Intel MCU ABI">;
 def malign_functions_EQ : Joined<["-"], "malign-functions=">, Group<clang_ignored_m_Group>;
 def malign_loops_EQ : Joined<["-"], "malign-loops=">, Group<clang_ignored_m_Group>;
 def malign_jumps_EQ : Joined<["-"], "malign-jumps=">, Group<clang_ignored_m_Group>;
@@ -1304,6 +1321,8 @@ def mfix_and_continue : Flag<["-"], "mfix-and-continue">, Group<clang_ignored_m_
 def mieee_fp : Flag<["-"], "mieee-fp">, Group<clang_ignored_m_Group>;
 def minline_all_stringops : Flag<["-"], "minline-all-stringops">, Group<clang_ignored_m_Group>;
 def mno_inline_all_stringops : Flag<["-"], "mno-inline-all-stringops">, Group<clang_ignored_m_Group>;
+def malign_double : Flag<["-"], "malign-double">, Group<m_Group>, Flags<[CC1Option]>,
+  HelpText<"Align doubles to two words in structs (x86 only)">;
 def mfloat_abi_EQ : Joined<["-"], "mfloat-abi=">, Group<m_Group>;
 def mfpmath_EQ : Joined<["-"], "mfpmath=">, Group<m_Group>;
 def mfpu_EQ : Joined<["-"], "mfpu=">, Group<m_Group>;
@@ -1352,6 +1371,8 @@ def mno_relax_all : Flag<["-"], "mno-relax-all">, Group<m_Group>;
 def mno_rtd: Flag<["-"], "mno-rtd">, Group<m_Group>;
 def mno_soft_float : Flag<["-"], "mno-soft-float">, Group<m_Group>;
 def mno_stackrealign : Flag<["-"], "mno-stackrealign">, Group<m_Group>;
+def mno_x87 : Flag<["-"], "mno-x87">, Group<m_x86_Features_Group>;
+def mno_80387 : Flag<["-"], "mno-80387">, Alias<mno_x87>;
 def mno_sse2 : Flag<["-"], "mno-sse2">, Group<m_x86_Features_Group>;
 def mno_sse3 : Flag<["-"], "mno-sse3">, Group<m_x86_Features_Group>;
 def mno_sse4a : Flag<["-"], "mno-sse4a">, Group<m_x86_Features_Group>;
@@ -1392,6 +1413,7 @@ def mno_prfchw : Flag<["-"], "mno-prfchw">, Group<m_x86_Features_Group>;
 def mno_rdseed : Flag<["-"], "mno-rdseed">, Group<m_x86_Features_Group>;
 def mno_adx : Flag<["-"], "mno-adx">, Group<m_x86_Features_Group>;
 def mno_sha : Flag<["-"], "mno-sha">, Group<m_x86_Features_Group>;
+def mno_cx16 : Flag<["-"], "mno-cx16">, Group<m_x86_Features_Group>;
 def mno_fxsr : Flag<["-"], "mno-fxsr">, Group<m_x86_Features_Group>;
 def mno_xsave : Flag<["-"], "mno-xsave">, Group<m_x86_Features_Group>;
 def mno_xsaveopt : Flag<["-"], "mno-xsaveopt">, Group<m_x86_Features_Group>;
@@ -1438,6 +1460,16 @@ def ffixed_x18 : Flag<["-"], "ffixed-x18">, Group<m_aarch64_Features_Group>,
 
 def msimd128 : Flag<["-"], "msimd128">, Group<m_wasm_Features_Group>;
 def mno_simd128 : Flag<["-"], "mno-simd128">, Group<m_wasm_Features_Group>;
+
+def mamdgpu_debugger_abi : Joined<["-"], "mamdgpu-debugger-abi=">,
+  Flags<[HelpHidden]>,
+  Group<m_Group>,
+  HelpText<"Generate additional code for specified <version> of debugger ABI (AMDGPU only)">,
+  MetaVarName<"<version>">;
+def mamdgpu_debugger_insert_nops : Flag<["-"], "mamdgpu-debugger-insert-nops">,
+  Group<m_amdgpu_Features_Group>;
+def mamdgpu_debugger_reserve_trap_regs : Flag<["-"], "mamdgpu-debugger-reserve-trap-regs">,
+  Group<m_amdgpu_Features_Group>;
 
 def mvsx : Flag<["-"], "mvsx">, Group<m_ppc_Features_Group>;
 def mno_vsx : Flag<["-"], "mno-vsx">, Group<m_ppc_Features_Group>;
@@ -1493,6 +1525,10 @@ def fno_zvector : Flag<["-"], "fno-zvector">, Group<f_Group>,
 def mzvector : Flag<["-"], "mzvector">, Alias<fzvector>;
 def mno_zvector : Flag<["-"], "mno-zvector">, Alias<fno_zvector>;
 
+def mbackchain : Flag<["-"], "mbackchain">, Group<m_Group>, Flags<[DriverOption,CC1Option]>,
+  HelpText<"Link stack frames through backchain on System Z">;
+def mno_backchain : Flag<["-"], "mno-backchain">, Group<m_Group>, Flags<[DriverOption,CC1Option]>;
+
 def mno_warn_nonportable_cfstrings : Flag<["-"], "mno-warn-nonportable-cfstrings">, Group<m_Group>;
 def mno_omit_leaf_frame_pointer : Flag<["-"], "mno-omit-leaf-frame-pointer">, Group<m_Group>;
 def momit_leaf_frame_pointer : Flag<["-"], "momit-leaf-frame-pointer">, Group<m_Group>,
@@ -1518,6 +1554,8 @@ def mno_implicit_float : Flag<["-"], "mno-implicit-float">, Group<m_Group>,
 def mimplicit_float : Flag<["-"], "mimplicit-float">, Group<m_Group>;
 def mrecip : Flag<["-"], "mrecip">, Group<m_Group>;
 def mrecip_EQ : CommaJoined<["-"], "mrecip=">, Group<m_Group>, Flags<[CC1Option]>;
+def mx87 : Flag<["-"], "mx87">, Group<m_x86_Features_Group>;
+def m80387 : Flag<["-"], "m80387">, Alias<mx87>;
 def msse2 : Flag<["-"], "msse2">, Group<m_x86_Features_Group>;
 def msse3 : Flag<["-"], "msse3">, Group<m_x86_Features_Group>;
 def msse4a : Flag<["-"], "msse4a">, Group<m_x86_Features_Group>;
@@ -1681,7 +1719,7 @@ def nostdlib : Flag<["-"], "nostdlib">;
 def object : Flag<["-"], "object">;
 def o : JoinedOrSeparate<["-"], "o">, Flags<[DriverOption, RenderAsInput, CC1Option, CC1AsOption]>,
   HelpText<"Write output to <file>">, MetaVarName<"<file>">;
-def omptargets_EQ : CommaJoined<["-"], "omptargets=">, Flags<[DriverOption, CC1Option]>,
+def fomptargets_EQ : CommaJoined<["-"], "fomptargets=">, Flags<[DriverOption, CC1Option]>,
   HelpText<"Specify comma-separated list of triples OpenMP offloading targets to be supported">;
 def pagezero__size : JoinedOrSeparate<["-"], "pagezero_size">;
 def pass_exit_codes : Flag<["-", "--"], "pass-exit-codes">, Flags<[Unsupported]>;

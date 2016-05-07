@@ -1,5 +1,5 @@
-// RUN: %clang_cc1 -analyze -analyzer-checker=alpha.osx.cocoa.Dealloc -fblocks -verify %s
-// RUN: %clang_cc1 -analyze -analyzer-checker=alpha.osx.cocoa.Dealloc -fblocks -triple x86_64-apple-darwin10 -fobjc-arc -fobjc-runtime-has-weak -verify %s
+// RUN: %clang_cc1 -analyze -analyzer-checker=osx.cocoa.Dealloc -fblocks -verify %s
+// RUN: %clang_cc1 -analyze -analyzer-checker=osx.cocoa.Dealloc -fblocks -triple x86_64-apple-darwin10 -fobjc-arc -fobjc-runtime-has-weak -verify %s
 
 #include "Inputs/system-header-simulator-for-objc-dealloc.h"
 
@@ -664,6 +664,25 @@ void ReleaseMe(id arg);
 @end
 #endif
 
+struct SomeStruct {
+  int f;
+};
+@interface ZeroOutStructWithSetter : NSObject
+  @property(assign) struct SomeStruct s;
+@end
+
+@implementation ZeroOutStructWithSetter
+- (void)dealloc {
+  struct SomeStruct zeroedS;
+  zeroedS.f = 0;
+
+  self.s = zeroedS;
+#if NON_ARC
+  [super dealloc];
+#endif
+}
+@end
+
 #if NON_ARC
 @interface ReleaseIvarInArray : NSObject {
   NSObject *_array[3];
@@ -714,3 +733,114 @@ __attribute__((objc_root_class))
 }
 @end
 
+// Warn about calling -dealloc rather than release by mistake.
+
+@interface CallDeallocOnRetainPropIvar : NSObject {
+  NSObject *okToDeallocDirectly;
+}
+
+@property (retain) NSObject *ivar;
+@end
+
+@implementation CallDeallocOnRetainPropIvar
+- (void)dealloc
+{
+#if NON_ARC
+  // Only warn for synthesized ivars.
+  [okToDeallocDirectly dealloc]; // no-warning
+  [_ivar dealloc];  // expected-warning {{'_ivar' should be released rather than deallocated}}
+
+  [super dealloc];
+#endif
+}
+@end
+
+// CIFilter special cases.
+// By design, -[CIFilter dealloc] releases (by calling -setValue: forKey: with
+// 'nil') all ivars (even in its *subclasses*) with names starting with
+// 'input' or that are backed by properties with names starting with 'input'.
+// The Dealloc checker needs to take particular care to not warn about missing
+// releases in this case -- if the user adds a release quiet the
+// warning it may result in an over release.
+
+@interface ImmediateSubCIFilter : CIFilter {
+  NSObject *inputIvar;
+  NSObject *nonInputIvar;
+  NSObject *notPrefixedButBackingPrefixedProperty;
+  NSObject *inputPrefixedButBackingNonPrefixedProperty;
+}
+
+@property(retain) NSObject *inputIvar;
+@property(retain) NSObject *nonInputIvar;
+@property(retain) NSObject *inputAutoSynthesizedIvar;
+@property(retain) NSObject *inputExplicitlySynthesizedToNonPrefixedIvar;
+@property(retain) NSObject *nonPrefixedPropertyBackedByExplicitlySynthesizedPrefixedIvar;
+
+@end
+
+@implementation ImmediateSubCIFilter
+@synthesize inputIvar = inputIvar;
+@synthesize nonInputIvar = nonInputIvar;
+@synthesize inputExplicitlySynthesizedToNonPrefixedIvar = notPrefixedButBackingPrefixedProperty;
+@synthesize nonPrefixedPropertyBackedByExplicitlySynthesizedPrefixedIvar = inputPrefixedButBackingNonPrefixedProperty;
+
+- (void)dealloc {
+#if NON_ARC
+  // We don't want warnings here for:
+  // inputIvar
+  // inputAutoSynthesizedIvar
+  // inputExplicitlySynthesizedToNonPrefixedIvar
+  // inputPrefixedButBackingNonPrefixedProperty
+  [super dealloc];
+  // expected-warning@-1 {{The 'nonInputIvar' ivar in 'ImmediateSubCIFilter' was retained by a synthesized property but not released before '[super dealloc]'}}
+#endif
+}
+@end
+
+@interface SubSubCIFilter : CIFilter {
+  NSObject *inputIvarInSub;
+}
+
+@property(retain) NSObject *inputIvarInSub;
+@end
+
+@implementation SubSubCIFilter
+@synthesize inputIvarInSub = inputIvarInSub;
+
+- (void)dealloc {
+// Don't warn about inputIvarInSub.
+#if NON_ARC
+  [super dealloc];
+#endif
+}
+@end
+@interface OverreleasingCIFilter : CIFilter {
+  NSObject *inputIvar;
+}
+
+@property(retain) NSObject *inputIvar;
+@end
+
+@implementation OverreleasingCIFilter
+@synthesize inputIvar = inputIvar;
+
+- (void)dealloc {
+#if NON_ARC
+  // This is an over release because CIFilter's dealloc will also release it.
+  [inputIvar release]; // expected-warning {{The 'inputIvar' ivar in 'OverreleasingCIFilter' will be released by '-[CIFilter dealloc]' but also released here}}
+  [super dealloc]; // no-warning
+  #endif
+}
+@end
+
+
+@interface NotMissingDeallocCIFilter : CIFilter {
+  NSObject *inputIvar;
+}
+
+@property(retain) NSObject *inputIvar;
+@end
+
+@implementation NotMissingDeallocCIFilter // no-warning
+@synthesize inputIvar = inputIvar;
+@end

@@ -21,6 +21,7 @@
 #include "clang/AST/Attr.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
+#include "clang/AST/DeclOpenMP.h"
 #include "clang/AST/GlobalDecl.h"
 #include "clang/AST/Mangle.h"
 #include "clang/Basic/ABI.h"
@@ -48,7 +49,6 @@ class IndexedInstrProfReader;
 }
 
 namespace clang {
-class TargetCodeGenInfo;
 class ASTContext;
 class AtomicType;
 class FunctionDecl;
@@ -92,6 +92,7 @@ class CGCUDARuntime;
 class BlockFieldFlags;
 class FunctionArgList;
 class CoverageMappingModuleGen;
+class TargetCodeGenInfo;
 
 struct OrderGlobalInits {
   unsigned int priority;
@@ -272,9 +273,9 @@ private:
   std::unique_ptr<CGCXXABI> ABI;
   llvm::LLVMContext &VMContext;
 
-  CodeGenTBAA *TBAA;
+  std::unique_ptr<CodeGenTBAA> TBAA;
   
-  mutable const TargetCodeGenInfo *TheTargetCodeGenInfo;
+  mutable std::unique_ptr<TargetCodeGenInfo> TheTargetCodeGenInfo;
   
   // This should not be moved earlier, since its initialization depends on some
   // of the previous reference members being already initialized and also checks
@@ -284,13 +285,13 @@ private:
   /// Holds information about C++ vtables.
   CodeGenVTables VTables;
 
-  CGObjCRuntime* ObjCRuntime;
-  CGOpenCLRuntime* OpenCLRuntime;
-  CGOpenMPRuntime* OpenMPRuntime;
-  CGCUDARuntime* CUDARuntime;
-  CGDebugInfo* DebugInfo;
-  ObjCEntrypoints *ObjCData;
-  llvm::MDNode *NoObjCARCExceptionsMetadata;
+  std::unique_ptr<CGObjCRuntime> ObjCRuntime;
+  std::unique_ptr<CGOpenCLRuntime> OpenCLRuntime;
+  std::unique_ptr<CGOpenMPRuntime> OpenMPRuntime;
+  std::unique_ptr<CGCUDARuntime> CUDARuntime;
+  std::unique_ptr<CGDebugInfo> DebugInfo;
+  std::unique_ptr<ObjCEntrypoints> ObjCData;
+  llvm::MDNode *NoObjCARCExceptionsMetadata = nullptr;
   std::unique_ptr<llvm::IndexedInstrProfReader> PGOReader;
   InstrProfStats PGOStats;
   std::unique_ptr<llvm::SanitizerStatReport> SanStats;
@@ -434,8 +435,8 @@ private:
   llvm::WeakVH ConstantStringClassRef;
 
   /// \brief The LLVM type corresponding to NSConstantString.
-  llvm::StructType *NSConstantStringType;
-  
+  llvm::StructType *NSConstantStringType = nullptr;
+
   /// \brief The type used to describe the state of a fast enumeration in
   /// Objective-C's for..in loop.
   QualType ObjCFastEnumerationStateType;
@@ -455,24 +456,24 @@ private:
   /// @name Cache for Blocks Runtime Globals
   /// @{
 
-  llvm::Constant *NSConcreteGlobalBlock;
-  llvm::Constant *NSConcreteStackBlock;
+  llvm::Constant *NSConcreteGlobalBlock = nullptr;
+  llvm::Constant *NSConcreteStackBlock = nullptr;
 
-  llvm::Constant *BlockObjectAssign;
-  llvm::Constant *BlockObjectDispose;
+  llvm::Constant *BlockObjectAssign = nullptr;
+  llvm::Constant *BlockObjectDispose = nullptr;
 
-  llvm::Type *BlockDescriptorType;
-  llvm::Type *GenericBlockLiteralType;
+  llvm::Type *BlockDescriptorType = nullptr;
+  llvm::Type *GenericBlockLiteralType = nullptr;
 
   struct {
     int GlobalUniqueCount;
   } Block;
 
   /// void @llvm.lifetime.start(i64 %size, i8* nocapture <ptr>)
-  llvm::Constant *LifetimeStartFn;
+  llvm::Constant *LifetimeStartFn = nullptr;
 
   /// void @llvm.lifetime.end(i64 %size, i8* nocapture <ptr>)
-  llvm::Constant *LifetimeEndFn;
+  llvm::Constant *LifetimeEndFn = nullptr;
 
   GlobalDecl initializedGlobalDecl;
 
@@ -488,8 +489,6 @@ private:
   /// maintain this mapping because identifiers may be formed from distinct
   /// MDNodes.
   llvm::DenseMap<QualType, llvm::Metadata *> MetadataIdMap;
-
-  SanitizerBlacklist WholeProgramVTablesBlacklist;
 
 public:
   CodeGenModule(ASTContext &C, const HeaderSearchOptions &headersearchopts,
@@ -590,7 +589,7 @@ public:
     TypeDescriptorMap[Ty] = C;
   }
 
-  CGDebugInfo *getModuleDebugInfo() { return DebugInfo; }
+  CGDebugInfo *getModuleDebugInfo() { return DebugInfo.get(); }
 
   llvm::MDNode *getNoObjCARCExceptionsMetadata() {
     if (!NoObjCARCExceptionsMetadata)
@@ -1110,12 +1109,14 @@ public:
   /// \param D Threadprivate declaration.
   void EmitOMPThreadPrivateDecl(const OMPThreadPrivateDecl *D);
 
-  /// Returns whether we need bit sets attached to vtables.
-  bool NeedVTableBitSets();
+  /// \brief Emit a code for declare reduction construct.
+  void EmitOMPDeclareReduction(const OMPDeclareReductionDecl *D,
+                               CodeGenFunction *CGF = nullptr);
 
-  /// Returns whether the given record is blacklisted from whole-program
-  /// transformations (i.e. CFI or whole-program vtable optimization).
-  bool IsBitSetBlacklistedRecord(const CXXRecordDecl *RD);
+  /// Returns whether the given record has hidden LTO visibility and therefore
+  /// may participate in (single-module) CFI and whole-program vtable
+  /// optimization.
+  bool HasHiddenLTOVisibility(const CXXRecordDecl *RD);
 
   /// Emit bit set entries for the given vtable using the given layout if
   /// vptr CFI is enabled.
@@ -1170,6 +1171,7 @@ private:
   void EmitGlobalFunctionDefinition(GlobalDecl GD, llvm::GlobalValue *GV);
   void EmitGlobalVarDefinition(const VarDecl *D, bool IsTentative = false);
   void EmitAliasDefinition(GlobalDecl GD);
+  void emitIFuncDefinition(GlobalDecl GD);
   void EmitObjCPropertyImplementations(const ObjCImplementationDecl *D);
   void EmitObjCIvarInitializations(ObjCImplementationDecl *D);
   

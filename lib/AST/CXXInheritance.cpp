@@ -137,6 +137,7 @@ CXXRecordDecl::isCurrentInstantiation(const DeclContext *CurContext) const {
 bool CXXRecordDecl::forallBases(ForallBasesCallback BaseMatches,
                                 bool AllowShortCircuit) const {
   SmallVector<const CXXRecordDecl*, 8> Queue;
+  llvm::SmallPtrSet<const CXXRecordDecl*, 8> Enqueued;
 
   const CXXRecordDecl *Record = this;
   bool AllMatches = true;
@@ -158,12 +159,14 @@ bool CXXRecordDecl::forallBases(ForallBasesCallback BaseMatches,
         AllMatches = false;
         continue;
       }
-      
-      Queue.push_back(Base);
-      if (!BaseMatches(Base)) {
-        if (AllowShortCircuit) return false;
-        AllMatches = false;
-        continue;
+
+      if (Enqueued.insert(Base).second) {
+        Queue.push_back(Base);
+        if (!BaseMatches(Base)) {
+          if (AllowShortCircuit) return false;
+          AllMatches = false;
+          continue;
+        }
       }
     }
 
@@ -402,6 +405,21 @@ bool CXXRecordDecl::FindOrdinaryMember(const CXXBaseSpecifier *Specifier,
       return true;
   }
   
+  return false;
+}
+
+bool CXXRecordDecl::FindOMPReductionMember(const CXXBaseSpecifier *Specifier,
+                                           CXXBasePath &Path,
+                                           DeclarationName Name) {
+  RecordDecl *BaseRecord =
+      Specifier->getType()->castAs<RecordType>()->getDecl();
+
+  for (Path.Decls = BaseRecord->lookup(Name); !Path.Decls.empty();
+       Path.Decls = Path.Decls.slice(1)) {
+    if (Path.Decls.front()->isInIdentifierNamespace(IDNS_OMPReduction))
+      return true;
+  }
+
   return false;
 }
 

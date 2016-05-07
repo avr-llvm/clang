@@ -7738,7 +7738,7 @@ bool Sema::CheckUsingShadowDecl(UsingDecl *Using, NamedDecl *Orig,
   // function will silently decide not to build a shadow decl, which
   // will pre-empt further diagnostics.
   //
-  // We don't need to do this in C++0x because we do the check once on
+  // We don't need to do this in C++11 because we do the check once on
   // the qualifier.
   //
   // FIXME: diagnose the following if we care enough:
@@ -8227,12 +8227,22 @@ NamedDecl *Sema::BuildUsingDeclaration(Scope *S, AccessSpecifier AS,
     }
   }
 
-  // C++0x N2914 [namespace.udecl]p6:
+  // C++14 [namespace.udecl]p6:
   // A using-declaration shall not name a namespace.
   if (R.getAsSingle<NamespaceDecl>()) {
     Diag(IdentLoc, diag::err_using_decl_can_not_refer_to_namespace)
       << SS.getRange();
     return BuildInvalid();
+  }
+
+  // C++14 [namespace.udecl]p7:
+  // A using-declaration shall not name a scoped enumerator.
+  if (auto *ED = R.getAsSingle<EnumConstantDecl>()) {
+    if (cast<EnumDecl>(ED->getDeclContext())->isScoped()) {
+      Diag(IdentLoc, diag::err_using_decl_can_not_refer_to_scoped_enum)
+        << SS.getRange();
+      return BuildInvalid();
+    }
   }
 
   UsingDecl *UD = BuildValid();
@@ -8359,8 +8369,10 @@ bool Sema::CheckUsingDeclQualifier(SourceLocation UsingLoc,
 
     // If we weren't able to compute a valid scope, it must be a
     // dependent class scope.
-    if (!NamedContext || NamedContext->isRecord()) {
-      auto *RD = dyn_cast_or_null<CXXRecordDecl>(NamedContext);
+    if (!NamedContext || NamedContext->getRedeclContext()->isRecord()) {
+      auto *RD = NamedContext
+                     ? cast<CXXRecordDecl>(NamedContext->getRedeclContext())
+                     : nullptr;
       if (RD && RequireCompleteDeclContext(const_cast<CXXScopeSpec&>(SS), RD))
         RD = nullptr;
 
@@ -8409,6 +8421,20 @@ bool Sema::CheckUsingDeclQualifier(SourceLocation UsingLoc,
         Diag(UsingLoc, diag::note_using_decl_class_member_workaround)
           << 2 // reference declaration
           << FixIt;
+      } else if (R.getAsSingle<EnumConstantDecl>()) {
+        // Don't provide a fixit outside C++11 mode; we don't want to suggest
+        // repeating the type of the enumeration here, and we can't do so if
+        // the type is anonymous.
+        FixItHint FixIt;
+        if (getLangOpts().CPlusPlus11) {
+          // Convert 'using X::Y;' to 'auto &Y = X::Y;'.
+          FixIt = FixItHint::CreateReplacement(
+              UsingLoc, "constexpr auto " + NameInfo.getName().getAsString() + " = ");
+        }
+
+        Diag(UsingLoc, diag::note_using_decl_class_member_workaround)
+          << (getLangOpts().CPlusPlus11 ? 4 : 3) // const[expr] variable
+          << FixIt;
       }
       return true;
     }
@@ -8444,7 +8470,7 @@ bool Sema::CheckUsingDeclQualifier(SourceLocation UsingLoc,
     return true;
 
   if (getLangOpts().CPlusPlus11) {
-    // C++0x [namespace.udecl]p3:
+    // C++11 [namespace.udecl]p3:
     //   In a using-declaration used as a member-declaration, the
     //   nested-name-specifier shall name a base class of the class
     //   being defined.
@@ -8584,6 +8610,10 @@ Decl *Sema::ActOnAliasDeclaration(Scope *S,
          TemplateParamLists[TemplateParamLists.size()-1]->getRAngleLoc());
     }
     TemplateParameterList *TemplateParams = TemplateParamLists[0];
+
+    // Check that we can declare a template here.
+    if (CheckTemplateDeclScope(S, TemplateParams))
+      return nullptr;
 
     // Only consider previous declarations in the same scope.
     FilterLookupForScope(Previous, CurContext, S, /*ConsiderLinkage*/false,
@@ -11408,8 +11438,19 @@ ExprResult Sema::BuildCXXDefaultInitExpr(SourceLocation Loc, FieldDecl *Field) {
     CXXRecordDecl *ClassPattern = ParentRD->getTemplateInstantiationPattern();
     DeclContext::lookup_result Lookup =
         ClassPattern->lookup(Field->getDeclName());
-    assert(Lookup.size() == 1);
-    FieldDecl *Pattern = cast<FieldDecl>(Lookup[0]);
+
+    // Lookup can return at most two results: the pattern for the field, or the
+    // injected class name of the parent record. No other member can have the
+    // same name as the field.
+    assert(!Lookup.empty() && Lookup.size() <= 2 &&
+           "more than two lookup results for field name");
+    FieldDecl *Pattern = dyn_cast<FieldDecl>(Lookup[0]);
+    if (!Pattern) {
+      assert(isa<CXXRecordDecl>(Lookup[0]) &&
+             "cannot have other non-field member with same name");
+      Pattern = cast<FieldDecl>(Lookup[1]);
+    }
+
     if (InstantiateInClassInitializer(Loc, Field, Pattern,
                                       getTemplateInstantiationArgs(Field)))
       return ExprError();
@@ -13310,13 +13351,20 @@ void Sema::MarkVTableUsed(SourceLocation Loc, CXXRecordDecl *Class,
     // the deleting destructor is emitted with the vtable, not with the
     // destructor definition as in the Itanium ABI.
     // If it has a definition, we do the check at that point instead.
-    if (Context.getTargetInfo().getCXXABI().isMicrosoft() &&
-        Class->hasUserDeclaredDestructor() &&
-        !Class->getDestructor()->isDefined() &&
-        !Class->getDestructor()->isDeleted()) {
-      CXXDestructorDecl *DD = Class->getDestructor();
-      ContextRAII SavedContext(*this, DD);
-      CheckDestructor(DD);
+    if (Context.getTargetInfo().getCXXABI().isMicrosoft()) {
+      if (Class->hasUserDeclaredDestructor() &&
+          !Class->getDestructor()->isDefined() &&
+          !Class->getDestructor()->isDeleted()) {
+        CXXDestructorDecl *DD = Class->getDestructor();
+        ContextRAII SavedContext(*this, DD);
+        CheckDestructor(DD);
+      } else if (Class->hasAttr<DLLImportAttr>()) {
+        // We always synthesize vtables on the import side. To make sure
+        // CheckDestructor gets called, mark the destructor referenced.
+        assert(Class->getDestructor() &&
+               "The destructor has always been declared on a dllimport class");
+        MarkFunctionReferenced(Loc, Class->getDestructor());
+      }
     }
   }
 

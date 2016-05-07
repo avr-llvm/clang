@@ -22,13 +22,13 @@
 #include "llvm/CodeGen/RegAllocRegistry.h"
 #include "llvm/CodeGen/SchedulerRegistry.h"
 #include "llvm/IR/DataLayout.h"
-#include "llvm/IR/FunctionInfo.h"
+#include "llvm/IR/ModuleSummaryIndex.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/SubtargetFeature.h"
-#include "llvm/Object/FunctionIndexObjectFile.h"
+#include "llvm/Object/ModuleSummaryIndexObjectFile.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/TargetRegistry.h"
@@ -42,6 +42,7 @@
 #include "llvm/Transforms/Instrumentation.h"
 #include "llvm/Transforms/ObjCARC.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Utils/SymbolRewriter.h"
 #include <memory>
 using namespace clang;
@@ -97,7 +98,10 @@ private:
     return PerFunctionPasses;
   }
 
-  void CreatePasses(FunctionInfoIndex *FunctionIndex);
+  /// Set LLVM command line options passed through -backend-option.
+  void setCommandLineOpts();
+
+  void CreatePasses(ModuleSummaryIndex *ModuleSummary);
 
   /// Generates the TargetMachine.
   /// Returns Null if it is unable to create the target machine.
@@ -244,6 +248,17 @@ static void addDataFlowSanitizerPass(const PassManagerBuilder &Builder,
   PM.add(createDataFlowSanitizerPass(LangOpts.SanitizerBlacklistFiles));
 }
 
+static void addEfficiencySanitizerPass(const PassManagerBuilder &Builder,
+                                       legacy::PassManagerBase &PM) {
+  const PassManagerBuilderWrapper &BuilderWrapper =
+      static_cast<const PassManagerBuilderWrapper&>(Builder);
+  const LangOptions &LangOpts = BuilderWrapper.getLangOpts();
+  EfficiencySanitizerOptions Opts;
+  if (LangOpts.Sanitize.has(SanitizerKind::EfficiencyCacheFrag))
+    Opts.ToolType = EfficiencySanitizerOptions::ESAN_CacheFrag;
+  PM.add(createEfficiencySanitizerPass(Opts));
+}
+
 static TargetLibraryInfoImpl *createTLII(llvm::Triple &TargetTriple,
                                          const CodeGenOptions &CodeGenOpts) {
   TargetLibraryInfoImpl *TLII = new TargetLibraryInfoImpl(TargetTriple);
@@ -278,7 +293,7 @@ static void addSymbolRewriterPass(const CodeGenOptions &Opts,
   MPM->add(createRewriteSymbolsPass(DL));
 }
 
-void EmitAssemblyHelper::CreatePasses(FunctionInfoIndex *FunctionIndex) {
+void EmitAssemblyHelper::CreatePasses(ModuleSummaryIndex *ModuleSummary) {
   if (CodeGenOpts.DisableLLVMPasses)
     return;
 
@@ -325,19 +340,27 @@ void EmitAssemblyHelper::CreatePasses(FunctionInfoIndex *FunctionIndex) {
   PMBuilder.DisableUnitAtATime = !CodeGenOpts.UnitAtATime;
   PMBuilder.DisableUnrollLoops = !CodeGenOpts.UnrollLoops;
   PMBuilder.MergeFunctions = CodeGenOpts.MergeFunctions;
-  PMBuilder.PrepareForThinLTO = CodeGenOpts.EmitFunctionSummary;
+  PMBuilder.PrepareForThinLTO = CodeGenOpts.EmitSummaryIndex;
   PMBuilder.PrepareForLTO = CodeGenOpts.PrepareForLTO;
   PMBuilder.RerollLoops = CodeGenOpts.RerollLoops;
 
   legacy::PassManager *MPM = getPerModulePasses();
 
   // If we are performing a ThinLTO importing compile, invoke the LTO
-  // pipeline and pass down the in-memory function index.
-  if (FunctionIndex) {
-    PMBuilder.FunctionIndex = FunctionIndex;
+  // pipeline and pass down the in-memory module summary index.
+  if (ModuleSummary) {
+    PMBuilder.ModuleSummary = ModuleSummary;
     PMBuilder.populateThinLTOPassManager(*MPM);
     return;
   }
+
+  // Add target-specific passes that need to run as early as possible.
+  if (TM)
+    PMBuilder.addExtension(
+        PassManagerBuilder::EP_EarlyAsPossible,
+        [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
+          TM->addEarlyAsPossiblePasses(PM);
+        });
 
   PMBuilder.addExtension(PassManagerBuilder::EP_EarlyAsPossible,
                          addAddDiscriminatorsPass);
@@ -403,6 +426,13 @@ void EmitAssemblyHelper::CreatePasses(FunctionInfoIndex *FunctionIndex) {
                            addDataFlowSanitizerPass);
   }
 
+  if (LangOpts.Sanitize.hasOneOf(SanitizerKind::Efficiency)) {
+    PMBuilder.addExtension(PassManagerBuilder::EP_OptimizerLast,
+                           addEfficiencySanitizerPass);
+    PMBuilder.addExtension(PassManagerBuilder::EP_EnabledOnOptLevel0,
+                           addEfficiencySanitizerPass);
+  }
+
   // Set up the per-function pass manager.
   legacy::FunctionPassManager *FPM = getPerFunctionPasses();
   if (CodeGenOpts.VerifyModule)
@@ -435,7 +465,7 @@ void EmitAssemblyHelper::CreatePasses(FunctionInfoIndex *FunctionIndex) {
     InstrProfOptions Options;
     Options.NoRedZone = CodeGenOpts.DisableRedZone;
     Options.InstrProfileOutput = CodeGenOpts.InstrProfileOutput;
-    MPM->add(createInstrProfilingPass(Options));
+    MPM->add(createInstrProfilingLegacyPass(Options));
   }
   if (CodeGenOpts.hasProfileIRInstr()) {
     if (!CodeGenOpts.InstrProfileOutput.empty())
@@ -443,11 +473,31 @@ void EmitAssemblyHelper::CreatePasses(FunctionInfoIndex *FunctionIndex) {
     else
       PMBuilder.PGOInstrGen = "default.profraw";
   }
+  if (CodeGenOpts.hasProfileIRUse())
+    PMBuilder.PGOInstrUse = CodeGenOpts.ProfileInstrumentUsePath;
 
   if (!CodeGenOpts.SampleProfileFile.empty())
     MPM->add(createSampleProfileLoaderPass(CodeGenOpts.SampleProfileFile));
 
   PMBuilder.populateModulePassManager(*MPM);
+}
+
+void EmitAssemblyHelper::setCommandLineOpts() {
+  SmallVector<const char *, 16> BackendArgs;
+  BackendArgs.push_back("clang"); // Fake program name.
+  if (!CodeGenOpts.DebugPass.empty()) {
+    BackendArgs.push_back("-debug-pass");
+    BackendArgs.push_back(CodeGenOpts.DebugPass.c_str());
+  }
+  if (!CodeGenOpts.LimitFloatPrecision.empty()) {
+    BackendArgs.push_back("-limit-float-precision");
+    BackendArgs.push_back(CodeGenOpts.LimitFloatPrecision.c_str());
+  }
+  for (const std::string &BackendOption : CodeGenOpts.BackendOptions)
+    BackendArgs.push_back(BackendOption.c_str());
+  BackendArgs.push_back(nullptr);
+  llvm::cl::ParseCommandLineOptions(BackendArgs.size() - 1,
+                                    BackendArgs.data());
 }
 
 TargetMachine *EmitAssemblyHelper::CreateTargetMachine(bool MustCreateTM) {
@@ -471,22 +521,6 @@ TargetMachine *EmitAssemblyHelper::CreateTargetMachine(bool MustCreateTM) {
       .Default(~0u);
   assert(CodeModel != ~0u && "invalid code model!");
   llvm::CodeModel::Model CM = static_cast<llvm::CodeModel::Model>(CodeModel);
-
-  SmallVector<const char *, 16> BackendArgs;
-  BackendArgs.push_back("clang"); // Fake program name.
-  if (!CodeGenOpts.DebugPass.empty()) {
-    BackendArgs.push_back("-debug-pass");
-    BackendArgs.push_back(CodeGenOpts.DebugPass.c_str());
-  }
-  if (!CodeGenOpts.LimitFloatPrecision.empty()) {
-    BackendArgs.push_back("-limit-float-precision");
-    BackendArgs.push_back(CodeGenOpts.LimitFloatPrecision.c_str());
-  }
-  for (const std::string &BackendOption : CodeGenOpts.BackendOptions)
-    BackendArgs.push_back(BackendOption.c_str());
-  BackendArgs.push_back(nullptr);
-  llvm::cl::ParseCommandLineOptions(BackendArgs.size() - 1,
-                                    BackendArgs.data());
 
   std::string FeaturesStr =
       llvm::join(TargetOpts.Features.begin(), TargetOpts.Features.end(), ",");
@@ -549,7 +583,7 @@ TargetMachine *EmitAssemblyHelper::CreateTargetMachine(bool MustCreateTM) {
   Options.CompressDebugSections = CodeGenOpts.CompressDebugSections;
 
   // Set EABI version.
-  Options.EABIVersion = llvm::StringSwitch<llvm::EABI>(CodeGenOpts.EABIVersion)
+  Options.EABIVersion = llvm::StringSwitch<llvm::EABI>(TargetOpts.EABIVersion)
                             .Case("4", llvm::EABI::EABI4)
                             .Case("5", llvm::EABI::EABI5)
                             .Case("gnu", llvm::EABI::GNU)
@@ -561,7 +595,6 @@ TargetMachine *EmitAssemblyHelper::CreateTargetMachine(bool MustCreateTM) {
   Options.NoZerosInBSS = CodeGenOpts.NoZeroInitializedInBSS;
   Options.UnsafeFPMath = CodeGenOpts.UnsafeFPMath;
   Options.StackAlignmentOverride = CodeGenOpts.StackAlignment;
-  Options.PositionIndependentExecutable = LangOpts.PIELevel != 0;
   Options.FunctionSections = CodeGenOpts.FunctionSections;
   Options.DataSections = CodeGenOpts.DataSections;
   Options.UniqueSectionNames = CodeGenOpts.UniqueSectionNames;
@@ -626,6 +659,8 @@ void EmitAssemblyHelper::EmitAssembly(BackendAction Action,
                                       raw_pwrite_stream *OS) {
   TimeRegion Region(llvm::TimePassesIsEnabled ? &CodeGenerationTime : nullptr);
 
+  setCommandLineOpts();
+
   bool UsesCodeGen = (Action != Backend_EmitNothing &&
                       Action != Backend_EmitBC &&
                       Action != Backend_EmitLL);
@@ -640,24 +675,24 @@ void EmitAssemblyHelper::EmitAssembly(BackendAction Action,
   // If we are performing a ThinLTO importing compile, load the function
   // index into memory and pass it into CreatePasses, which will add it
   // to the PassManagerBuilder and invoke LTO passes.
-  std::unique_ptr<FunctionInfoIndex> FunctionIndex;
+  std::unique_ptr<ModuleSummaryIndex> ModuleSummary;
   if (!CodeGenOpts.ThinLTOIndexFile.empty()) {
-    ErrorOr<std::unique_ptr<FunctionInfoIndex>> IndexOrErr =
-        llvm::getFunctionIndexForFile(CodeGenOpts.ThinLTOIndexFile,
-                                      [&](const DiagnosticInfo &DI) {
-                                        TheModule->getContext().diagnose(DI);
-                                      });
+    ErrorOr<std::unique_ptr<ModuleSummaryIndex>> IndexOrErr =
+        llvm::getModuleSummaryIndexForFile(
+            CodeGenOpts.ThinLTOIndexFile, [&](const DiagnosticInfo &DI) {
+              TheModule->getContext().diagnose(DI);
+            });
     if (std::error_code EC = IndexOrErr.getError()) {
       std::string Error = EC.message();
       errs() << "Error loading index file '" << CodeGenOpts.ThinLTOIndexFile
              << "': " << Error << "\n";
       return;
     }
-    FunctionIndex = std::move(IndexOrErr.get());
-    assert(FunctionIndex && "Expected non-empty function index");
+    ModuleSummary = std::move(IndexOrErr.get());
+    assert(ModuleSummary && "Expected non-empty module summary index");
   }
 
-  CreatePasses(FunctionIndex.get());
+  CreatePasses(ModuleSummary.get());
 
   switch (Action) {
   case Backend_EmitNothing:
@@ -665,7 +700,8 @@ void EmitAssemblyHelper::EmitAssembly(BackendAction Action,
 
   case Backend_EmitBC:
     getPerModulePasses()->add(createBitcodeWriterPass(
-        *OS, CodeGenOpts.EmitLLVMUseLists, CodeGenOpts.EmitFunctionSummary));
+        *OS, CodeGenOpts.EmitLLVMUseLists, CodeGenOpts.EmitSummaryIndex,
+        CodeGenOpts.EmitSummaryIndex));
     break;
 
   case Backend_EmitLL:
@@ -708,22 +744,22 @@ void EmitAssemblyHelper::EmitAssembly(BackendAction Action,
 void clang::EmitBackendOutput(DiagnosticsEngine &Diags,
                               const CodeGenOptions &CGOpts,
                               const clang::TargetOptions &TOpts,
-                              const LangOptions &LOpts, StringRef TDesc,
+                              const LangOptions &LOpts, const llvm::DataLayout &TDesc,
                               Module *M, BackendAction Action,
                               raw_pwrite_stream *OS) {
   EmitAssemblyHelper AsmHelper(Diags, CGOpts, TOpts, LOpts, M);
 
   AsmHelper.EmitAssembly(Action, OS);
 
-  // If an optional clang TargetInfo description string was passed in, use it to
-  // verify the LLVM TargetMachine's DataLayout.
-  if (AsmHelper.TM && !TDesc.empty()) {
+  // Verify clang's TargetInfo DataLayout against the LLVM TargetMachine's
+  // DataLayout.
+  if (AsmHelper.TM) {
     std::string DLDesc = M->getDataLayout().getStringRepresentation();
-    if (DLDesc != TDesc) {
+    if (DLDesc != TDesc.getStringRepresentation()) {
       unsigned DiagID = Diags.getCustomDiagID(
           DiagnosticsEngine::Error, "backend data layout '%0' does not match "
                                     "expected target description '%1'");
-      Diags.Report(DiagID) << DLDesc << TDesc;
+      Diags.Report(DiagID) << DLDesc << TDesc.getStringRepresentation();
     }
   }
 }

@@ -739,6 +739,8 @@ bool Sema::containsUnexpandedParameterPacks(Declarator &D) {
   case TST_auto:
   case TST_auto_type:
   case TST_decltype_auto:
+#define GENERIC_IMAGE_TYPE(ImgType, Id) case TST_##ImgType##_t:
+#include "clang/Basic/OpenCLImageTypes.def"
   case TST_unknown_anytype:
   case TST_error:
     break;
@@ -996,10 +998,6 @@ ExprResult Sema::BuildEmptyCXXFoldExpr(SourceLocation EllipsisLoc,
                                        BinaryOperatorKind Operator) {
   // [temp.variadic]p9:
   //   If N is zero for a unary fold-expression, the value of the expression is
-  //       *   ->  1
-  //       +   ->  int()
-  //       &   ->  -1
-  //       |   ->  int()
   //       &&  ->  true
   //       ||  ->  false
   //       ,   ->  void()
@@ -1009,17 +1007,6 @@ ExprResult Sema::BuildEmptyCXXFoldExpr(SourceLocation EllipsisLoc,
   // prevent the result from being a null pointer constant.
   QualType ScalarType;
   switch (Operator) {
-  case BO_Add:
-    ScalarType = Context.IntTy;
-    break;
-  case BO_Mul:
-    return ActOnIntegerConstant(EllipsisLoc, 1);
-  case BO_Or:
-    ScalarType = Context.IntTy;
-    break;
-  case BO_And:
-    return CreateBuiltinUnaryOp(EllipsisLoc, UO_Minus,
-                                ActOnIntegerConstant(EllipsisLoc, 1).get());
   case BO_LOr:
     return ActOnCXXBoolLiteral(EllipsisLoc, tok::kw_false);
   case BO_LAnd:

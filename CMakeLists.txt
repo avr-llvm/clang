@@ -209,7 +209,7 @@ endif()
 set(CLANG_DEFAULT_OPENMP_RUNTIME "libomp" CACHE STRING
   "Default OpenMP runtime used by -fopenmp.")
 
-set(CLANG_VENDOR "" CACHE STRING
+set(CLANG_VENDOR ${PACKAGE_VENDOR} CACHE STRING
   "Vendor-specific text for showing with version information.")
 
 if( CLANG_VENDOR )
@@ -595,17 +595,28 @@ if( CLANG_INCLUDE_DOCS )
   add_subdirectory(docs)
 endif()
 
-if(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/clang.order")
-  file(REMOVE "${CMAKE_CURRENT_BINARY_DIR}/clang.order")
-endif()
 
-if(CLANG_ORDER_FILE STREQUAL "${CMAKE_CURRENT_BINARY_DIR}/clang.order")
-  unset(CLANG_ORDER_FILE CACHE)
-  unset(CLANG_ORDER_FILE)
-endif()
+if(APPLE)
+  # this line is needed as a cleanup to ensure that any CMakeCaches with the old
+  # default value get updated to the new default.
+  if(CLANG_ORDER_FILE STREQUAL "")
+    unset(CLANG_ORDER_FILE CACHE)
+    unset(CLANG_ORDER_FILE)
+  endif()
 
-set(CLANG_ORDER_FILE "" CACHE FILEPATH
-  "Order file to use when compiling clang in order to improve startup time.")
+
+  set(CLANG_ORDER_FILE ${CMAKE_CURRENT_BINARY_DIR}/clang.order CACHE FILEPATH
+    "Order file to use when compiling clang in order to improve startup time (Darwin Only - requires ld64).")
+
+  if(CLANG_ORDER_FILE AND NOT EXISTS ${CLANG_ORDER_FILE})
+    string(FIND "${CLANG_ORDER_FILE}" "${CMAKE_CURRENT_BINARY_DIR}" PATH_START)
+    if(PATH_START EQUAL 0)
+      file(WRITE ${CLANG_ORDER_FILE} "\n")
+    else()
+      message(FATAL_ERROR "Specified order file '${CLANG_ORDER_FILE}' does not exist.")
+    endif()
+  endif()
+endif()
 
 if (CLANG_BUILT_STANDALONE OR CMAKE_VERSION VERSION_EQUAL 3 OR
     CMAKE_VERSION VERSION_GREATER 3)
@@ -674,17 +685,21 @@ if (CLANG_ENABLE_BOOTSTRAP)
   
   set(STAMP_DIR ${CMAKE_CURRENT_BINARY_DIR}/${NEXT_CLANG_STAGE}-stamps/)
   set(BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/${NEXT_CLANG_STAGE}-bins/)
+  set(cmake_command ${CMAKE_COMMAND})
 
-  # If on Darwin we need to make bootstrap depend on LTO and pass
-  # DARWIN_LTO_LIBRARY so that -flto will work using the just-built compiler
+  # If the next stage is LTO we need to depend on LTO and possibly LLVMgold
   if(BOOTSTRAP_LLVM_ENABLE_LTO OR LLVM_ENABLE_LTO)
-    set(LTO_DEP LTO llvm-ar llvm-ranlib)
-    set(LTO_AR -DCMAKE_AR=${LLVM_RUNTIME_OUTPUT_INTDIR}/llvm-ar)
-    set(LTO_RANLIB -DCMAKE_RANLIB=${LLVM_RUNTIME_OUTPUT_INTDIR}/llvm-ranlib)
+    set(LTO_DEP LTO)
     if(APPLE)
+      # on Darwin we need to set DARWIN_LTO_LIBRARY so that -flto will work
+      # using the just-built compiler, and we need to override DYLD_LIBRARY_PATH
+      # so that the host object file tools will use the just-built libLTO.
       set(LTO_LIBRARY -DDARWIN_LTO_LIBRARY=${LLVM_SHLIB_OUTPUT_INTDIR}/libLTO.dylib)
+      set(cmake_command ${CMAKE_COMMAND} -E env DYLD_LIBRARY_PATH=${LLVM_LIBRARY_OUTPUT_INTDIR} ${CMAKE_COMMAND})
     elseif(NOT WIN32)
-      list(APPEND LTO_DEP LLVMgold)
+      list(APPEND LTO_DEP LLVMgold llvm-ar llvm-ranlib)
+      set(LTO_AR -DCMAKE_AR=${LLVM_RUNTIME_OUTPUT_INTDIR}/llvm-ar)
+      set(LTO_RANLIB -DCMAKE_RANLIB=${LLVM_RUNTIME_OUTPUT_INTDIR}/llvm-ranlib)
     endif()
   endif()
 
@@ -780,6 +795,7 @@ if (CLANG_ENABLE_BOOTSTRAP)
                  -DCLANG_STAGE=${NEXT_CLANG_STAGE}
                 ${COMPILER_OPTIONS}
                 ${LTO_LIBRARY} ${LTO_AR} ${LTO_RANLIB} ${verbose} ${PGO_OPT}
+    CMAKE_COMMAND ${cmake_command}
     INSTALL_COMMAND ""
     STEP_TARGETS configure build
     ${cmake_3_4_USES_TERMINAL_OPTIONS}
@@ -788,7 +804,7 @@ if (CLANG_ENABLE_BOOTSTRAP)
   # exclude really-install from main target
   set_target_properties(${NEXT_CLANG_STAGE} PROPERTIES _EP_really-install_EXCLUDE_FROM_MAIN On)
   ExternalProject_Add_Step(${NEXT_CLANG_STAGE} really-install
-    COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target install
+    COMMAND ${cmake_command} --build <BINARY_DIR> --target install
     COMMENT "Performing install step for '${NEXT_CLANG_STAGE}'"
     DEPENDEES build
     ${cmake_3_4_USES_TERMINAL}
@@ -804,7 +820,7 @@ if (CLANG_ENABLE_BOOTSTRAP)
     set_target_properties(${NEXT_CLANG_STAGE} PROPERTIES _EP_${target}_EXCLUDE_FROM_MAIN On)
 
     ExternalProject_Add_Step(${NEXT_CLANG_STAGE} ${target}
-      COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target ${target}
+      COMMAND ${cmake_command} --build <BINARY_DIR> --target ${target}
       COMMENT "Performing ${target} for '${NEXT_CLANG_STAGE}'"
       DEPENDEES configure
       ${cmake_3_4_USES_TERMINAL}
@@ -816,4 +832,8 @@ if (CLANG_ENABLE_BOOTSTRAP)
 
     ExternalProject_Add_StepTargets(${NEXT_CLANG_STAGE} ${target})
   endforeach()
+endif()
+
+if (LLVM_ADD_NATIVE_VISUALIZERS_TO_SOLUTION)
+  add_subdirectory(utils/ClangVisualizers)
 endif()

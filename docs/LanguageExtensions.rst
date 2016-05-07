@@ -1505,6 +1505,35 @@ C-style cast applied to each element of the first argument.
 
 Query for this feature with ``__has_builtin(__builtin_convertvector)``.
 
+``__builtin_bitreverse``
+------------------------
+
+* ``__builtin_bitreverse8``
+* ``__builtin_bitreverse16``
+* ``__builtin_bitreverse32``
+* ``__builtin_bitreverse64``
+
+**Syntax**:
+
+.. code-block:: c++
+
+     __builtin_bitreverse32(x)
+
+**Examples**:
+
+.. code-block:: c++
+
+      uint8_t rev_x = __builtin_bitreverse8(x);
+      uint16_t rev_x = __builtin_bitreverse16(x);
+      uint32_t rev_y = __builtin_bitreverse32(y);
+      uint64_t rev_z = __builtin_bitreverse64(z);
+
+**Description**:
+
+The '``__builtin_bitreverse``' family of builtins is used to reverse
+the bitpattern of an integer value; for example ``0b10110110`` becomes
+``0b01101101``.
+
 ``__builtin_unreachable``
 -------------------------
 
@@ -1883,12 +1912,13 @@ X86/X86-64 Language Extensions
 
 The X86 backend has these language extensions:
 
-Memory references off the GS segment
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Memory references to specified segments
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Annotating a pointer with address space #256 causes it to be code generated
-relative to the X86 GS segment register, and address space #257 causes it to be
-relative to the X86 FS segment.  Note that this is a very very low-level
+relative to the X86 GS segment register, address space #257 causes it to be
+relative to the X86 FS segment, and address space #258 causes it to be
+relative to the X86 SS segment.  Note that this is a very very low-level
 feature that should only be used if you know what you're doing (for example in
 an OS kernel).
 
