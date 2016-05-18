@@ -191,6 +191,8 @@ public:
           CXXThisFieldDecl = *Field;
         else if (I->capturesVariable())
           CaptureFields[I->getCapturedVar()] = *Field;
+        else if (I->capturesVariableByCopy())
+          CaptureFields[I->getCapturedVar()] = *Field;
       }
     }
 
@@ -2229,8 +2231,7 @@ public:
   llvm::Function *GenerateCapturedStmtFunction(const CapturedStmt &S);
   Address GenerateCapturedStmtArgument(const CapturedStmt &S);
   llvm::Function *GenerateOpenMPCapturedStmtFunction(const CapturedStmt &S,
-                                                     QualType ReturnQTy);
-  llvm::Function *GenerateOpenMPCapturedStmtFunction(const CapturedStmt &S);
+                                                     bool CastValToPtr = false);
   void GenerateOpenMPCapturedVars(const CapturedStmt &S,
                                   SmallVectorImpl<llvm::Value *> &CapturedVars);
   void emitOMPSimpleStore(LValue LVal, RValue RVal, QualType RValTy,
@@ -2434,7 +2435,7 @@ private:
   void EmitOMPOuterLoop(bool IsMonotonic, bool DynamicOrOrdered,
       const OMPLoopDirective &S, OMPPrivateScope &LoopScope, bool Ordered,
       Address LB, Address UB, Address ST, Address IL, llvm::Value *Chunk);
-  void EmitOMPForOuterLoop(OpenMPScheduleClauseKind ScheduleKind,
+  void EmitOMPForOuterLoop(const OpenMPScheduleTy &ScheduleKind,
                            bool IsMonotonic, const OMPLoopDirective &S,
                            OMPPrivateScope &LoopScope, bool Ordered, Address LB,
                            Address UB, Address ST, Address IL,

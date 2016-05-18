@@ -382,6 +382,29 @@ public:
       : OSTargetInfo<Target>(Triple, Opts) {}
 };
 
+// Haiku Target
+template<typename Target>
+class HaikuTargetInfo : public OSTargetInfo<Target> {
+protected:
+  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                    MacroBuilder &Builder) const override {
+    // Haiku defines; list based off of gcc output
+    Builder.defineMacro("__HAIKU__");
+    Builder.defineMacro("__ELF__");
+    DefineStd(Builder, "unix", Opts);
+  }
+public:
+  HaikuTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+      : OSTargetInfo<Target>(Triple, Opts) {
+    this->SizeType = TargetInfo::UnsignedLong;
+    this->IntPtrType = TargetInfo::SignedLong;
+    this->PtrDiffType = TargetInfo::SignedLong;
+    this->ProcessIDType = TargetInfo::SignedLong;
+    this->TLSSupported = false;
+
+  }
+};
+
 // Minix Target
 template<typename Target>
 class MinixTargetInfo : public OSTargetInfo<Target> {
@@ -427,6 +450,8 @@ protected:
       Builder.defineMacro("_REENTRANT");
     if (Opts.CPlusPlus)
       Builder.defineMacro("_GNU_SOURCE");
+    if (this->HasFloat128)
+      Builder.defineMacro("__FLOAT128__");
   }
 public:
   LinuxTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
@@ -440,6 +465,11 @@ public:
     case llvm::Triple::ppc64:
     case llvm::Triple::ppc64le:
       this->MCountName = "_mcount";
+      break;
+    case llvm::Triple::x86:
+    case llvm::Triple::x86_64:
+    case llvm::Triple::systemz:
+      this->HasFloat128 = true;
       break;
     }
   }
@@ -602,7 +632,7 @@ protected:
     Builder.defineMacro("__KPRINTF_ATTRIBUTE__");
     DefineStd(Builder, "unix", Opts);
     Builder.defineMacro("__ELF__");
-    Builder.defineMacro("__PS4__");
+    Builder.defineMacro("__ORBIS__");
   }
 public:
   PS4OSTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
@@ -844,8 +874,9 @@ public:
     ArchDefinePwr6x = 1 << 10,
     ArchDefinePwr7  = 1 << 11,
     ArchDefinePwr8  = 1 << 12,
-    ArchDefineA2    = 1 << 13,
-    ArchDefineA2q   = 1 << 14
+    ArchDefinePwr9  = 1 << 13,
+    ArchDefineA2    = 1 << 14,
+    ArchDefineA2q   = 1 << 15
   } ArchDefineTypes;
 
   // Note: GCC recognizes the following additional cpus:
@@ -894,6 +925,8 @@ public:
       .Case("pwr7", true)
       .Case("power8", true)
       .Case("pwr8", true)
+      .Case("power9", true)
+      .Case("pwr9", true)
       .Case("powerpc", true)
       .Case("ppc", true)
       .Case("powerpc64", true)
@@ -1096,6 +1129,8 @@ bool PPCTargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasQPX = true;
     } else if (Feature == "+htm") {
       HasHTM = true;
+    } else if (Feature == "+float128") {
+      HasFloat128 = true;
     }
     // TODO: Finish this list and add an assert that we've handled them
     // all.
@@ -1186,6 +1221,10 @@ void PPCTargetInfo::getTargetDefines(const LangOptions &Opts,
     .Case("pwr8",  ArchDefineName | ArchDefinePwr7 | ArchDefinePwr6x
                      | ArchDefinePwr6 | ArchDefinePwr5x | ArchDefinePwr5
                      | ArchDefinePwr4 | ArchDefinePpcgr | ArchDefinePpcsq)
+    .Case("pwr9",  ArchDefineName | ArchDefinePwr8 | ArchDefinePwr7
+                     | ArchDefinePwr6x | ArchDefinePwr6 | ArchDefinePwr5x
+                     | ArchDefinePwr5 | ArchDefinePwr4 | ArchDefinePpcgr
+                     | ArchDefinePpcsq)
     .Case("power3",  ArchDefinePpcgr)
     .Case("power4",  ArchDefinePwr4 | ArchDefinePpcgr | ArchDefinePpcsq)
     .Case("power5",  ArchDefinePwr5 | ArchDefinePwr4 | ArchDefinePpcgr
@@ -1203,6 +1242,10 @@ void PPCTargetInfo::getTargetDefines(const LangOptions &Opts,
     .Case("power8",  ArchDefinePwr8 | ArchDefinePwr7 | ArchDefinePwr6x
                        | ArchDefinePwr6 | ArchDefinePwr5x | ArchDefinePwr5
                        | ArchDefinePwr4 | ArchDefinePpcgr | ArchDefinePpcsq)
+    .Case("power9",  ArchDefinePwr9 | ArchDefinePwr8 | ArchDefinePwr7
+                       | ArchDefinePwr6x | ArchDefinePwr6 | ArchDefinePwr5x
+                       | ArchDefinePwr5 | ArchDefinePwr4 | ArchDefinePpcgr
+                       | ArchDefinePpcsq)
     .Default(ArchDefineNone);
 
   if (defs & ArchDefineName)
@@ -1231,6 +1274,8 @@ void PPCTargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("_ARCH_PWR7");
   if (defs & ArchDefinePwr8)
     Builder.defineMacro("_ARCH_PWR8");
+  if (defs & ArchDefinePwr9)
+    Builder.defineMacro("_ARCH_PWR9");
   if (defs & ArchDefineA2)
     Builder.defineMacro("_ARCH_A2");
   if (defs & ArchDefineA2q) {
@@ -1253,6 +1298,8 @@ void PPCTargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("__CRYPTO__");
   if (HasHTM)
     Builder.defineMacro("__HTM__");
+  if (HasFloat128)
+    Builder.defineMacro("__FLOAT128__");
 
   Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1");
   Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2");
@@ -1303,6 +1350,13 @@ static bool ppcUserFeaturesCheck(DiagnosticsEngine &Diags,
                                                      << "-mno-vsx";
       return false;
     }
+
+    if (std::find(FeaturesVec.begin(), FeaturesVec.end(), "+float128") !=
+        FeaturesVec.end()) {
+      Diags.Report(diag::err_opt_not_valid_with_opt) << "-mfloat128"
+                                                     << "-mno-vsx";
+      return false;
+    }
   }
 
   return true;
@@ -1321,6 +1375,7 @@ bool PPCTargetInfo::initFeatureMap(
     .Case("pwr6", true)
     .Case("pwr7", true)
     .Case("pwr8", true)
+    .Case("pwr9", true)
     .Case("ppc64", true)
     .Case("ppc64le", true)
     .Default(false);
@@ -1328,28 +1383,34 @@ bool PPCTargetInfo::initFeatureMap(
   Features["qpx"] = (CPU == "a2q");
   Features["crypto"] = llvm::StringSwitch<bool>(CPU)
     .Case("ppc64le", true)
+    .Case("pwr9", true)
     .Case("pwr8", true)
     .Default(false);
   Features["power8-vector"] = llvm::StringSwitch<bool>(CPU)
     .Case("ppc64le", true)
+    .Case("pwr9", true)
     .Case("pwr8", true)
     .Default(false);
   Features["bpermd"] = llvm::StringSwitch<bool>(CPU)
     .Case("ppc64le", true)
+    .Case("pwr9", true)
     .Case("pwr8", true)
     .Case("pwr7", true)
     .Default(false);
   Features["extdiv"] = llvm::StringSwitch<bool>(CPU)
     .Case("ppc64le", true)
+    .Case("pwr9", true)
     .Case("pwr8", true)
     .Case("pwr7", true)
     .Default(false);
   Features["direct-move"] = llvm::StringSwitch<bool>(CPU)
     .Case("ppc64le", true)
+    .Case("pwr9", true)
     .Case("pwr8", true)
     .Default(false);
   Features["vsx"] = llvm::StringSwitch<bool>(CPU)
     .Case("ppc64le", true)
+    .Case("pwr9", true)
     .Case("pwr8", true)
     .Case("pwr7", true)
     .Default(false);
@@ -1371,6 +1432,7 @@ bool PPCTargetInfo::hasFeature(StringRef Feature) const {
     .Case("htm", HasHTM)
     .Case("bpermd", HasBPERMD)
     .Case("extdiv", HasExtDiv)
+    .Case("float128", HasFloat128)
     .Default(false);
 }
 
@@ -1380,11 +1442,11 @@ void PPCTargetInfo::setFeatureEnabled(llvm::StringMap<bool> &Features,
   // as well. Do the inverse if we're disabling vsx. We'll diagnose any user
   // incompatible options.
   if (Enabled) {
-    if (Name == "vsx") {
-     Features[Name] = true;
-    } else if (Name == "direct-move") {
+    if (Name == "direct-move") {
       Features[Name] = Features["vsx"] = true;
     } else if (Name == "power8-vector") {
+      Features[Name] = Features["vsx"] = true;
+    } else if (Name == "float128") {
       Features[Name] = Features["vsx"] = true;
     } else {
       Features[Name] = true;
@@ -1392,7 +1454,7 @@ void PPCTargetInfo::setFeatureEnabled(llvm::StringMap<bool> &Features,
   } else {
     if (Name == "vsx") {
       Features[Name] = Features["direct-move"] = Features["power8-vector"] =
-          false;
+          Features["float128"] = false;
     } else {
       Features[Name] = false;
     }
@@ -1937,17 +1999,6 @@ public:
       Builder.defineMacro("__HAS_FMAF__");
     if (hasLDEXPF)
       Builder.defineMacro("__HAS_LDEXPF__");
-    if (hasFP64 && Opts.OpenCL)
-      Builder.defineMacro("cl_khr_fp64");
-    if (Opts.OpenCL) {
-      if (GPU >= GK_NORTHERN_ISLANDS) {
-        Builder.defineMacro("cl_khr_byte_addressable_store");
-        Builder.defineMacro("cl_khr_global_int32_base_atomics");
-        Builder.defineMacro("cl_khr_global_int32_extended_atomics");
-        Builder.defineMacro("cl_khr_local_int32_base_atomics");
-        Builder.defineMacro("cl_khr_local_int32_extended_atomics");
-      }
-    }
   }
 
   BuiltinVaListKind getBuiltinVaListKind() const override {
@@ -2034,6 +2085,31 @@ public:
     }
 
     return true;
+  }
+
+   void setSupportedOpenCLOpts() override {
+     auto &Opts = getSupportedOpenCLOpts();
+     Opts.cl_clang_storage_class_specifiers = 1;
+     Opts.cl_khr_gl_sharing = 1;
+     Opts.cl_khr_gl_event = 1;
+     Opts.cl_khr_d3d10_sharing = 1;
+     Opts.cl_khr_subgroups = 1;
+
+     if (hasFP64)
+       Opts.cl_khr_fp64 = 1;
+     if (GPU >= GK_NORTHERN_ISLANDS) {
+       Opts.cl_khr_byte_addressable_store = 1;
+       Opts.cl_khr_global_int32_base_atomics = 1;
+       Opts.cl_khr_global_int32_extended_atomics = 1;
+       Opts.cl_khr_local_int32_base_atomics = 1;
+       Opts.cl_khr_local_int32_extended_atomics = 1;
+     }
+     if (GPU >= GK_SOUTHERN_ISLANDS)
+       Opts.cl_khr_fp16 = 1;
+       Opts.cl_khr_int64_base_atomics = 1;
+       Opts.cl_khr_int64_extended_atomics = 1;
+       Opts.cl_khr_3d_image_writes = 1;
+       Opts.cl_khr_gl_msaa_sharing = 1;
   }
 };
 
@@ -2653,6 +2729,10 @@ public:
 
   bool hasSjLjLowering() const override {
     return true;
+  }
+
+  void setSupportedOpenCLOpts() override {
+    getSupportedOpenCLOpts().setAll();
   }
 };
 
@@ -4049,21 +4129,15 @@ public:
 };
 
 // x86-32 Haiku target
-class HaikuX86_32TargetInfo : public X86_32TargetInfo {
+class HaikuX86_32TargetInfo : public HaikuTargetInfo<X86_32TargetInfo> {
 public:
   HaikuX86_32TargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
-      : X86_32TargetInfo(Triple, Opts) {
-    SizeType = UnsignedLong;
-    IntPtrType = SignedLong;
-    PtrDiffType = SignedLong;
-    ProcessIDType = SignedLong;
-    this->TLSSupported = false;
+    : HaikuTargetInfo<X86_32TargetInfo>(Triple, Opts) {
   }
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override {
-    X86_32TargetInfo::getTargetDefines(Opts, Builder);
+    HaikuTargetInfo<X86_32TargetInfo>::getTargetDefines(Opts, Builder);
     Builder.defineMacro("__INTEL__");
-    Builder.defineMacro("__HAIKU__");
   }
 };
 
@@ -5011,7 +5085,7 @@ public:
     if (ABI == "aapcs" || ABI == "aapcs-linux" || ABI == "aapcs-vfp") {
       // Embedded targets on Darwin follow AAPCS, but not EABI.
       // Windows on ARM follows AAPCS VFP, but does not conform to EABI.
-      if (!getTriple().isOSDarwin() && !getTriple().isOSWindows())
+      if (!getTriple().isOSBinFormatMachO() && !getTriple().isOSWindows())
         Builder.defineMacro("__ARM_EABI__");
       Builder.defineMacro("__ARM_PCS", "1");
     }
@@ -6852,7 +6926,7 @@ public:
     PtrDiffType = SignedInt;
     SigAtomicType = SignedLong;
     DoubleFormat = &llvm::APFloat::IEEEsingle;
-    DataLayoutString = "e-p:16:8:8-i8:8:8-i16:8:8-i32:8:8-i64:8:8-f32:8:8-f64:8:8-n8";
+    resetDataLayout("e-p:16:8:8-i8:8:8-i16:8:8-i32:8:8-i64:8:8-f32:8:8-f64:8:8-n8");
   }
 
   void getTargetDefines(const LangOptions &Opts,
@@ -8214,6 +8288,12 @@ public:
   CallingConv getDefaultCallingConv(CallingConvMethodType MT) const override {
     return CC_SpirFunction;
   }
+
+  void setSupportedOpenCLOpts() override {
+    // Assume all OpenCL extensions and optional core features are supported
+    // for SPIR since it is a generic target.
+    getSupportedOpenCLOpts().setAll();
+  }
 };
 
 class SPIR32TargetInfo : public SPIRTargetInfo {
@@ -8736,6 +8816,8 @@ static TargetInfo *AllocateTarget(const llvm::Triple &Triple,
         return new MicrosoftX86_64TargetInfo(Triple, Opts);
       }
     }
+    case llvm::Triple::Haiku:
+      return new HaikuTargetInfo<X86_64TargetInfo>(Triple, Opts);
     case llvm::Triple::NaCl:
       return new NaClTargetInfo<X86_64TargetInfo>(Triple, Opts);
     case llvm::Triple::PS4:
@@ -8814,6 +8896,8 @@ TargetInfo::CreateTargetInfo(DiagnosticsEngine &Diags,
 
   if (!Target->handleTargetFeatures(Opts->Features, Diags))
     return nullptr;
+
+  Target->setSupportedOpenCLOpts();
 
   return Target.release();
 }

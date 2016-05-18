@@ -172,7 +172,8 @@ static Address castValueFromUintptr(CodeGenFunction &CGF, QualType DstType,
 }
 
 llvm::Function *
-CodeGenFunction::GenerateOpenMPCapturedStmtFunction(const CapturedStmt &S) {
+CodeGenFunction::GenerateOpenMPCapturedStmtFunction(const CapturedStmt &S,
+                                                    bool CastValToPtr) {
   assert(
       CapturedStmtInfo &&
       "CapturedStmtInfo should be set when generating the captured function");
@@ -196,9 +197,11 @@ CodeGenFunction::GenerateOpenMPCapturedStmtFunction(const CapturedStmt &S) {
     // uintptr. This is necessary given that the runtime library is only able to
     // deal with pointers. We can pass in the same way the VLA type sizes to the
     // outlined function.
-    if ((I->capturesVariableByCopy() && !ArgType->isAnyPointerType()) ||
-        I->capturesVariableArrayType())
-      ArgType = Ctx.getUIntPtrType();
+    if (CastValToPtr) {
+      if ((I->capturesVariableByCopy() && !ArgType->isAnyPointerType()) ||
+          I->capturesVariableArrayType())
+        ArgType = Ctx.getUIntPtrType();
+    }
 
     if (I->capturesVariable() || I->capturesVariableByCopy()) {
       CapVar = I->getCapturedVar();
@@ -252,9 +255,12 @@ CodeGenFunction::GenerateOpenMPCapturedStmtFunction(const CapturedStmt &S) {
                        AlignmentSource::Decl);
     if (FD->hasCapturedVLAType()) {
       LValue CastedArgLVal =
-          MakeAddrLValue(castValueFromUintptr(*this, FD->getType(),
-                                              Args[Cnt]->getName(), ArgLVal),
-                         FD->getType(), AlignmentSource::Decl);
+          CastValToPtr
+              ? MakeAddrLValue(castValueFromUintptr(*this, FD->getType(),
+                                                    Args[Cnt]->getName(),
+                                                    ArgLVal),
+                               FD->getType(), AlignmentSource::Decl)
+              : ArgLVal;
       auto *ExprArg =
           EmitLoadOfLValue(CastedArgLVal, SourceLocation()).getScalarVal();
       auto VAT = FD->getCapturedVLAType();
@@ -274,10 +280,16 @@ CodeGenFunction::GenerateOpenMPCapturedStmtFunction(const CapturedStmt &S) {
              "Not expecting a captured pointer.");
       auto *Var = I->getCapturedVar();
       QualType VarTy = Var->getType();
-      setAddrOfLocalVar(I->getCapturedVar(),
-                        castValueFromUintptr(*this, FD->getType(),
-                                             Args[Cnt]->getName(), ArgLVal,
-                                             VarTy->isReferenceType()));
+      if (!CastValToPtr && VarTy->isReferenceType()) {
+        Address Temp = CreateMemTemp(VarTy);
+        Builder.CreateStore(ArgLVal.getPointer(), Temp);
+        ArgLVal = MakeAddrLValue(Temp, VarTy);
+      }
+      setAddrOfLocalVar(Var, CastValToPtr ? castValueFromUintptr(
+                                                *this, FD->getType(),
+                                                Args[Cnt]->getName(), ArgLVal,
+                                                VarTy->isReferenceType())
+                                          : ArgLVal.getAddress());
     } else {
       // If 'this' is captured, load it into CXXThisValue.
       assert(I->capturesThis());
@@ -564,18 +576,25 @@ bool CodeGenFunction::EmitOMPFirstprivateClause(const OMPExecutableDirective &D,
     auto InitsRef = C->inits().begin();
     for (auto IInit : C->private_copies()) {
       auto *OrigVD = cast<VarDecl>(cast<DeclRefExpr>(*IRef)->getDecl());
+      bool ThisFirstprivateIsLastprivate =
+          Lastprivates.count(OrigVD->getCanonicalDecl()) > 0;
+      auto *FD = CapturedStmtInfo->lookup(OrigVD);
+      if (!ThisFirstprivateIsLastprivate && FD &&
+          !FD->getType()->isReferenceType()) {
+        EmittedAsFirstprivate.insert(OrigVD->getCanonicalDecl());
+        ++IRef;
+        ++InitsRef;
+        continue;
+      }
       FirstprivateIsLastprivate =
-          FirstprivateIsLastprivate ||
-          (Lastprivates.count(OrigVD->getCanonicalDecl()) > 0);
+          FirstprivateIsLastprivate || ThisFirstprivateIsLastprivate;
       if (EmittedAsFirstprivate.insert(OrigVD->getCanonicalDecl()).second) {
         auto *VD = cast<VarDecl>(cast<DeclRefExpr>(IInit)->getDecl());
         auto *VDInit = cast<VarDecl>(cast<DeclRefExpr>(*InitsRef)->getDecl());
         bool IsRegistered;
-        DeclRefExpr DRE(
-            const_cast<VarDecl *>(OrigVD),
-            /*RefersToEnclosingVariableOrCapture=*/CapturedStmtInfo->lookup(
-                OrigVD) != nullptr,
-            (*IRef)->getType(), VK_LValue, (*IRef)->getExprLoc());
+        DeclRefExpr DRE(const_cast<VarDecl *>(OrigVD),
+                        /*RefersToEnclosingVariableOrCapture=*/FD != nullptr,
+                        (*IRef)->getType(), VK_LValue, (*IRef)->getExprLoc());
         Address OriginalAddr = EmitLValue(&DRE).getAddress();
         QualType Type = VD->getType();
         if (Type->isArrayType()) {
@@ -1729,16 +1748,18 @@ void CodeGenFunction::EmitOMPOuterLoop(bool DynamicOrOrdered, bool IsMonotonic,
 }
 
 void CodeGenFunction::EmitOMPForOuterLoop(
-    OpenMPScheduleClauseKind ScheduleKind, bool IsMonotonic,
+    const OpenMPScheduleTy &ScheduleKind, bool IsMonotonic,
     const OMPLoopDirective &S, OMPPrivateScope &LoopScope, bool Ordered,
     Address LB, Address UB, Address ST, Address IL, llvm::Value *Chunk) {
   auto &RT = CGM.getOpenMPRuntime();
 
   // Dynamic scheduling of the outer loop (dynamic, guided, auto, runtime).
-  const bool DynamicOrOrdered = Ordered || RT.isDynamic(ScheduleKind);
+  const bool DynamicOrOrdered =
+      Ordered || RT.isDynamic(ScheduleKind.Schedule);
 
   assert((Ordered ||
-          !RT.isStaticNonchunked(ScheduleKind, /*Chunked=*/Chunk != nullptr)) &&
+          !RT.isStaticNonchunked(ScheduleKind.Schedule,
+                                 /*Chunked=*/Chunk != nullptr)) &&
          "static non-chunked schedule does not need outer loop");
 
   // Emit outer loop.
@@ -1797,8 +1818,8 @@ void CodeGenFunction::EmitOMPForOuterLoop(
 
   if (DynamicOrOrdered) {
     llvm::Value *UBVal = EmitScalarExpr(S.getLastIteration());
-    RT.emitForDispatchInit(*this, S.getLocStart(), ScheduleKind,
-                           IVSize, IVSigned, Ordered, UBVal, Chunk);
+    RT.emitForDispatchInit(*this, S.getLocStart(), ScheduleKind, IVSize,
+                           IVSigned, Ordered, UBVal, Chunk);
   } else {
     RT.emitForStaticInit(*this, S.getLocStart(), ScheduleKind, IVSize, IVSigned,
                          Ordered, IL, LB, UB, ST, Chunk);
@@ -1923,13 +1944,11 @@ bool CodeGenFunction::EmitOMPWorksharingLoop(const OMPLoopDirective &S) {
 
       // Detect the loop schedule kind and chunk.
       llvm::Value *Chunk = nullptr;
-      OpenMPScheduleClauseKind ScheduleKind = OMPC_SCHEDULE_unknown;
-      OpenMPScheduleClauseModifier M1 = OMPC_SCHEDULE_MODIFIER_unknown;
-      OpenMPScheduleClauseModifier M2 = OMPC_SCHEDULE_MODIFIER_unknown;
+      OpenMPScheduleTy ScheduleKind;
       if (auto *C = S.getSingleClause<OMPScheduleClause>()) {
-        ScheduleKind = C->getScheduleKind();
-        M1 = C->getFirstScheduleModifier();
-        M2 = C->getSecondScheduleModifier();
+        ScheduleKind.Schedule = C->getScheduleKind();
+        ScheduleKind.M1 = C->getFirstScheduleModifier();
+        ScheduleKind.M2 = C->getSecondScheduleModifier();
         if (const auto *Ch = C->getChunkSize()) {
           Chunk = EmitScalarExpr(Ch);
           Chunk = EmitScalarConversion(Chunk, Ch->getType(),
@@ -1944,7 +1963,7 @@ bool CodeGenFunction::EmitOMPWorksharingLoop(const OMPLoopDirective &S) {
       // If the static schedule kind is specified or if the ordered clause is
       // specified, and if no monotonic modifier is specified, the effect will
       // be as if the monotonic modifier was specified.
-      if (RT.isStaticNonchunked(ScheduleKind,
+      if (RT.isStaticNonchunked(ScheduleKind.Schedule,
                                 /* Chunked */ Chunk != nullptr) &&
           !Ordered) {
         if (isOpenMPSimdDirective(S.getDirectiveKind()))
@@ -1976,11 +1995,11 @@ bool CodeGenFunction::EmitOMPWorksharingLoop(const OMPLoopDirective &S) {
         // Tell the runtime we are done.
         RT.emitForStaticFinish(*this, S.getLocStart());
       } else {
-        const bool IsMonotonic = Ordered ||
-                                 ScheduleKind == OMPC_SCHEDULE_static ||
-                                 ScheduleKind == OMPC_SCHEDULE_unknown ||
-                                 M1 == OMPC_SCHEDULE_MODIFIER_monotonic ||
-                                 M2 == OMPC_SCHEDULE_MODIFIER_monotonic;
+        const bool IsMonotonic =
+            Ordered || ScheduleKind.Schedule == OMPC_SCHEDULE_static ||
+            ScheduleKind.Schedule == OMPC_SCHEDULE_unknown ||
+            ScheduleKind.M1 == OMPC_SCHEDULE_MODIFIER_monotonic ||
+            ScheduleKind.M2 == OMPC_SCHEDULE_MODIFIER_monotonic;
         // Emit the outer loop, which requests its work chunk [LB..UB] from
         // runtime and runs the inner loop to process it.
         EmitOMPForOuterLoop(ScheduleKind, IsMonotonic, S, LoopScope, Ordered,
@@ -2147,8 +2166,10 @@ void CodeGenFunction::EmitSections(const OMPExecutableDirective &S) {
     (void)LoopScope.Privatize();
 
     // Emit static non-chunked loop.
+    OpenMPScheduleTy ScheduleKind;
+    ScheduleKind.Schedule = OMPC_SCHEDULE_static;
     CGF.CGM.getOpenMPRuntime().emitForStaticInit(
-        CGF, S.getLocStart(), OMPC_SCHEDULE_static, /*IVSize=*/32,
+        CGF, S.getLocStart(), ScheduleKind, /*IVSize=*/32,
         /*IVSigned=*/true, /*Ordered=*/false, IL.getAddress(), LB.getAddress(),
         UB.getAddress(), ST.getAddress());
     // UB = min(UB, GlobalUB);
@@ -2334,6 +2355,13 @@ void CodeGenFunction::EmitOMPTaskBasedDirective(const OMPExecutableDirective &S,
   } else {
     // By default the task is not final.
     Data.Final.setInt(/*IntVal=*/false);
+  }
+  // Check if the task has 'priority' clause.
+  if (const auto *Clause = S.getSingleClause<OMPPriorityClause>()) {
+    // Runtime currently does not support codegen for priority clause argument.
+    // TODO: Add codegen for priority clause arg when runtime lib support it.
+    auto *Prio = Clause->getPriority();
+    Data.Priority.setInt(Prio);
   }
   // The first function argument for tasks is a thread id, the second one is a
   // part id (0 for tied tasks, >=0 for untied task).

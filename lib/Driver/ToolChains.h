@@ -692,6 +692,18 @@ protected:
   Tool *buildLinker() const override;
 };
 
+class LLVM_LIBRARY_VISIBILITY Haiku : public Generic_ELF {
+public:
+  Haiku(const Driver &D, const llvm::Triple &Triple,
+          const llvm::opt::ArgList &Args);
+
+  bool isPIEDefault() const override { return getTriple().getArch() == llvm::Triple::x86_64; }
+
+  void
+  AddClangCXXStdlibIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+                              llvm::opt::ArgStringList &CC1Args) const override;
+};
+
 class LLVM_LIBRARY_VISIBILITY OpenBSD : public Generic_ELF {
 public:
   OpenBSD(const Driver &D, const llvm::Triple &Triple,
@@ -1028,6 +1040,7 @@ public:
   bool getVisualStudioInstallDir(std::string &path) const;
   bool getVisualStudioBinariesFolder(const char *clangProgramPath,
                                      std::string &path) const;
+  VersionTuple getMSVCVersionFromExe() const override;
 
   std::string ComputeEffectiveClangTriple(const llvm::opt::ArgList &Args,
                                           types::ID InputType) const override;
@@ -1105,7 +1118,7 @@ public:
 
 /// MyriadToolChain - A tool chain using either clang or the external compiler
 /// installed by the Movidius SDK to perform all subcommands.
-class LLVM_LIBRARY_VISIBILITY MyriadToolChain : public Generic_GCC {
+class LLVM_LIBRARY_VISIBILITY MyriadToolChain : public Generic_ELF {
 public:
   MyriadToolChain(const Driver &D, const llvm::Triple &Triple,
                   const llvm::opt::ArgList &Args);
