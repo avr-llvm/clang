@@ -403,7 +403,8 @@ static void setPGOUseInstrumentor(CodeGenOptions &Opts,
                                   const std::string ProfileName) {
   auto ReaderOrErr = llvm::IndexedInstrProfReader::create(ProfileName);
   // In error, return silently and let Clang PGOUse report the error message.
-  if (ReaderOrErr.getError()) {
+  if (auto E = ReaderOrErr.takeError()) {
+    llvm::consumeError(std::move(E));
     Opts.setProfileUse(CodeGenOptions::ProfileClangInstr);
     return;
   }
@@ -1833,7 +1834,6 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.NoBitFieldTypeAlign = Args.hasArg(OPT_fno_bitfield_type_align);
   Opts.SinglePrecisionConstants = Args.hasArg(OPT_cl_single_precision_constant);
   Opts.FastRelaxedMath = Args.hasArg(OPT_cl_fast_relaxed_math);
-  Opts.MRTD = Args.hasArg(OPT_mrtd);
   Opts.HexagonQdsp6Compat = Args.hasArg(OPT_mqdsp6_compat);
   Opts.FakeAddressSpaceMap = Args.hasArg(OPT_ffake_address_space_map);
   Opts.ParseUnknownAnytype = Args.hasArg(OPT_funknown_anytype);
@@ -1908,6 +1908,49 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
           << "-fms-memptr-rep=" << A->getValue();
 
     Opts.setMSPointerToMemberRepresentationMethod(InheritanceModel);
+  }
+
+  // Check for MS default calling conventions being specified.
+  if (Arg *A = Args.getLastArg(OPT_fdefault_calling_conv_EQ)) {
+    LangOptions::DefaultCallingConvention DefaultCC =
+        llvm::StringSwitch<LangOptions::DefaultCallingConvention>(
+            A->getValue())
+            .Case("cdecl", LangOptions::DCC_CDecl)
+            .Case("fastcall", LangOptions::DCC_FastCall)
+            .Case("stdcall", LangOptions::DCC_StdCall)
+            .Case("vectorcall", LangOptions::DCC_VectorCall)
+            .Default(LangOptions::DCC_None);
+    if (DefaultCC == LangOptions::DCC_None)
+      Diags.Report(diag::err_drv_invalid_value)
+          << "-fdefault-calling-conv=" << A->getValue();
+
+    llvm::Triple T(TargetOpts.Triple);
+    llvm::Triple::ArchType Arch = T.getArch();
+    bool emitError = (DefaultCC == LangOptions::DCC_FastCall ||
+                  DefaultCC == LangOptions::DCC_StdCall) &&
+                 Arch != llvm::Triple::x86;
+    emitError |= DefaultCC == LangOptions::DCC_VectorCall &&
+                 !(Arch == llvm::Triple::x86 || Arch == llvm::Triple::x86_64);
+    if (emitError)
+      Diags.Report(diag::err_drv_argument_not_allowed_with)
+          << A->getSpelling() << T.getTriple();
+    else
+      Opts.setDefaultCallingConv(DefaultCC);
+  }
+
+  // -mrtd option
+  if (Arg *A = Args.getLastArg(OPT_mrtd)) {
+    if (Opts.getDefaultCallingConv() != LangOptions::DCC_None)
+      Diags.Report(diag::err_drv_argument_not_allowed_with)
+          << A->getSpelling() << "-fdefault-calling-conv";
+    else {
+      llvm::Triple T(TargetOpts.Triple);
+      if (T.getArch() != llvm::Triple::x86)
+        Diags.Report(diag::err_drv_argument_not_allowed_with)
+            << A->getSpelling() << T.getTriple();
+      else
+        Opts.setDefaultCallingConv(LangOptions::DCC_StdCall);
+    }
   }
 
   // Check if -fopenmp is specified.
@@ -2219,10 +2262,15 @@ bool CompilerInvocation::CreateFromArgs(CompilerInvocation &Res,
       LangOpts.ObjCExceptions = 1;
   }
 
-  // During CUDA device-side compilation, the aux triple is the triple used for
-  // host compilation.
-  if (LangOpts.CUDA && LangOpts.CUDAIsDevice) {
-    Res.getTargetOpts().HostTriple = Res.getFrontendOpts().AuxTriple;
+  if (LangOpts.CUDA) {
+    // During CUDA device-side compilation, the aux triple is the
+    // triple used for host compilation.
+    if (LangOpts.CUDAIsDevice)
+      Res.getTargetOpts().HostTriple = Res.getFrontendOpts().AuxTriple;
+
+    // Set default FP_CONTRACT to FAST.
+    if (!Args.hasArg(OPT_ffp_contract))
+      Res.getCodeGenOpts().setFPContractMode(CodeGenOptions::FPC_Fast);
   }
 
   // FIXME: Override value name discarding when asan or msan is used because the

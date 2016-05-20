@@ -2993,7 +2993,7 @@ bool Sema::MergeFunctionDecl(FunctionDecl *New, NamedDecl *&OldD,
             << New << getSpecialMember(OldMethod);
           return true;
         }
-      } else if (OldMethod->isExplicitlyDefaulted() && !isFriend) {
+      } else if (OldMethod->getFirstDecl()->isExplicitlyDefaulted() && !isFriend) {
         Diag(NewMethod->getLocation(),
              diag::err_definition_of_explicitly_defaulted_member)
           << getSpecialMember(OldMethod);
@@ -10441,6 +10441,12 @@ Sema::FinalizeDeclaration(Decl *ThisDecl) {
           (VD->hasAttr<CUDADeviceAttr>() || VD->hasAttr<CUDAConstantAttr>()))
         AllowedInit = VD->getInit()->isConstantInitializer(
             Context, VD->getType()->isReferenceType());
+
+      // Also make sure that destructor, if there is one, is empty.
+      if (AllowedInit)
+        if (CXXRecordDecl *RD = VD->getType()->getAsCXXRecordDecl())
+          AllowedInit =
+              isEmptyCudaDestructor(VD->getLocation(), RD->getDestructor());
 
       if (!AllowedInit) {
         Diag(VD->getLocation(), VD->hasAttr<CUDASharedAttr>()
