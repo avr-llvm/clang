@@ -125,10 +125,15 @@ static llvm::Constant *buildBlockDescriptor(CodeGenModule &CGM,
 
   llvm::Constant *init = llvm::ConstantStruct::getAnon(elements);
 
+  unsigned AddrSpace = 0;
+  if (C.getLangOpts().OpenCL)
+    AddrSpace = C.getTargetAddressSpace(LangAS::opencl_constant);
   llvm::GlobalVariable *global =
     new llvm::GlobalVariable(CGM.getModule(), init->getType(), true,
                              llvm::GlobalValue::InternalLinkage,
-                             init, "__block_descriptor_tmp");
+                             init, "__block_descriptor_tmp", nullptr,
+                             llvm::GlobalValue::NotThreadLocal,
+                             AddrSpace);
 
   return llvm::ConstantExpr::getBitCast(global, CGM.getBlockDescriptorType());
 }
@@ -927,7 +932,10 @@ llvm::Type *CodeGenModule::getBlockDescriptorType() {
                              UnsignedLongTy, UnsignedLongTy, nullptr);
 
   // Now form a pointer to that.
-  BlockDescriptorType = llvm::PointerType::getUnqual(BlockDescriptorType);
+  unsigned AddrSpace = 0;
+  if (getLangOpts().OpenCL)
+    AddrSpace = getContext().getTargetAddressSpace(LangAS::opencl_constant);
+  BlockDescriptorType = llvm::PointerType::get(BlockDescriptorType, AddrSpace);
   return BlockDescriptorType;
 }
 
@@ -2287,9 +2295,36 @@ void CodeGenFunction::enterByrefCleanup(const AutoVarEmission &emission) {
 /// Adjust the declaration of something from the blocks API.
 static void configureBlocksRuntimeObject(CodeGenModule &CGM,
                                          llvm::Constant *C) {
-  if (!CGM.getLangOpts().BlocksRuntimeOptional) return;
-
   auto *GV = cast<llvm::GlobalValue>(C->stripPointerCasts());
+
+  if (CGM.getTarget().getTriple().isOSBinFormatCOFF()) {
+    IdentifierInfo &II = CGM.getContext().Idents.get(C->getName());
+    TranslationUnitDecl *TUDecl = CGM.getContext().getTranslationUnitDecl();
+    DeclContext *DC = TranslationUnitDecl::castToDeclContext(TUDecl);
+
+    assert((isa<llvm::Function>(C->stripPointerCasts()) ||
+            isa<llvm::GlobalVariable>(C->stripPointerCasts())) &&
+           "expected Function or GlobalVariable");
+
+    const NamedDecl *ND = nullptr;
+    for (const auto &Result : DC->lookup(&II))
+      if ((ND = dyn_cast<FunctionDecl>(Result)) ||
+          (ND = dyn_cast<VarDecl>(Result)))
+        break;
+
+    // TODO: support static blocks runtime
+    if (GV->isDeclaration() && (!ND || !ND->hasAttr<DLLExportAttr>())) {
+      GV->setDLLStorageClass(llvm::GlobalValue::DLLImportStorageClass);
+      GV->setLinkage(llvm::GlobalValue::ExternalLinkage);
+    } else {
+      GV->setDLLStorageClass(llvm::GlobalValue::DLLExportStorageClass);
+      GV->setLinkage(llvm::GlobalValue::ExternalLinkage);
+    }
+  }
+
+  if (!CGM.getLangOpts().BlocksRuntimeOptional)
+    return;
+
   if (GV->isDeclaration() && GV->hasExternalLinkage())
     GV->setLinkage(llvm::GlobalValue::ExternalWeakLinkage);
 }
@@ -2337,5 +2372,5 @@ llvm::Constant *CodeGenModule::getNSConcreteStackBlock() {
                                                Int8PtrTy->getPointerTo(),
                                                nullptr);
   configureBlocksRuntimeObject(*this, NSConcreteStackBlock);
-  return NSConcreteStackBlock;  
+  return NSConcreteStackBlock;
 }

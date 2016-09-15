@@ -101,12 +101,14 @@ public:
     AS_CXX11,
     /// __declspec(...)
     AS_Declspec,
+    /// [uuid("...")] class Foo
+    AS_Microsoft,
     /// __ptr16, alignas(...), etc.
     AS_Keyword,
     /// Context-sensitive version of a keyword attribute.
     AS_ContextSensitiveKeyword,
     /// #pragma ...
-    AS_Pragma
+    AS_Pragma,
   };
 
 private:
@@ -283,11 +285,10 @@ private:
     Invalid(false), UsedAsTypeAttr(false), IsAvailability(false),
     IsTypeTagForDatatype(false), IsProperty(false), HasParsedType(false),
     HasProcessingCache(false), NextInPosition(nullptr), NextInPool(nullptr) {
-    ArgsVector Args;
-    Args.push_back(Parm1);
-    Args.push_back(Parm2);
-    Args.push_back(Parm3);
-    memcpy(getArgsBuffer(), &Args[0], 3 * sizeof(ArgsUnion));
+    ArgsUnion *Args = getArgsBuffer();
+    Args[0] = Parm1;
+    Args[1] = Parm2;
+    Args[2] = Parm3;
     AttrKind = getKind(getName(), getScopeName(), syntaxUsed);
   }
   
@@ -370,6 +371,7 @@ public:
   }
 
   bool isDeclspecAttribute() const { return SyntaxUsed == AS_Declspec; }
+  bool isMicrosoftAttribute() const { return SyntaxUsed == AS_Microsoft; }
   bool isCXX11Attribute() const {
     return SyntaxUsed == AS_CXX11 || isAlignasAttribute();
   }
@@ -746,6 +748,19 @@ public:
     list = newList;
   }
 
+  void addAllAtEnd(AttributeList *newList) {
+    if (!list) {
+      list = newList;
+      return;
+    }
+
+    AttributeList *lastInList = list;
+    while (AttributeList *next = lastInList->getNext())
+      lastInList = next;
+
+    lastInList->setNext(newList);
+  }
+
   void set(AttributeList *newList) {
     list = newList;
   }
@@ -870,6 +885,7 @@ enum AttributeDeclKind {
   ExpectedFunction,
   ExpectedUnion,
   ExpectedVariableOrFunction,
+  ExpectedFunctionVariableOrObjCInterface,
   ExpectedFunctionOrMethod,
   ExpectedParameter,
   ExpectedFunctionMethodOrBlock,
@@ -881,6 +897,7 @@ enum AttributeDeclKind {
   ExpectedMethod,
   ExpectedFieldOrGlobalVar,
   ExpectedStruct,
+  ExpectedParameterOrTypedef,
   ExpectedVariableOrTypedef,
   ExpectedTLSVar,
   ExpectedVariableOrField,
@@ -894,7 +911,9 @@ enum AttributeDeclKind {
   ExpectedObjCInstanceMethod,
   ExpectedObjCInterfaceDeclInitMethod,
   ExpectedFunctionVariableOrClass,
+  ExpectedFunctionVariableClassOrObjCInterface,
   ExpectedObjectiveCProtocol,
+  ExpectedStaticOrTLSVar,
   ExpectedFunctionGlobalVarMethodOrProperty,
   ExpectedStructOrUnionOrTypedef,
   ExpectedStructOrTypedef,

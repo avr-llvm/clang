@@ -55,8 +55,6 @@ void B::func_fwd() {}
 // This should work even if 'i' and 'func' were declarations & not definitions,
 // but it doesn't yet.
 
-// CHECK: [[CU:![0-9]+]] = distinct !DICompileUnit(
-// CHECK-SAME:                            imports: [[MODULES:![0-9]*]]
 // CHECK: [[I:![0-9]+]] = distinct !DIGlobalVariable(name: "i",{{.*}} scope: [[NS:![0-9]+]],
 // CHECK: [[NS]] = !DINamespace(name: "B", scope: [[CTXT:![0-9]+]], file: [[FOOCPP:![0-9]+]], line: 1)
 // CHECK: [[FOOCPP]] = !DIFile(filename: "foo.cpp"
@@ -65,6 +63,8 @@ void B::func_fwd() {}
 // CHECK: [[VAR_FWD:![0-9]+]] = distinct !DIGlobalVariable(name: "var_fwd",{{.*}} scope: [[NS]],
 // CHECK-SAME:                                             line: 44
 // CHECK-SAME:                                             isDefinition: true
+// CHECK: [[CU:![0-9]+]] = distinct !DICompileUnit(
+// CHECK-SAME:                            imports: [[MODULES:![0-9]*]]
 // CHECK: [[MODULES]] = !{[[M1:![0-9]+]], [[M2:![0-9]+]], [[M3:![0-9]+]], [[M4:![0-9]+]], [[M5:![0-9]+]], [[M6:![0-9]+]], [[M7:![0-9]+]], [[M8:![0-9]+]], [[M9:![0-9]+]], [[M10:![0-9]+]], [[M11:![0-9]+]], [[M12:![0-9]+]], [[M13:![0-9]+]], [[M14:![0-9]+]], [[M15:![0-9]+]], [[M16:![0-9]+]], [[M17:![0-9]+]]}
 // CHECK: [[M1]] = !DIImportedEntity(tag: DW_TAG_imported_module, scope: [[CTXT]], entity: [[NS]], line: 15)
 
@@ -95,7 +95,7 @@ void B::func_fwd() {}
 // CHECK: [[M11]] = !DIImportedEntity(tag: DW_TAG_imported_declaration, name: "X", scope: [[FUNC]], entity: [[CTXT]]
 // CHECK: [[M12]] = !DIImportedEntity(tag: DW_TAG_imported_declaration, name: "Y", scope: [[FUNC]], entity: [[M11]]
 // CHECK: [[M13]] = !DIImportedEntity(tag: DW_TAG_imported_declaration, scope: [[FUNC]], entity: [[VAR_DECL:![0-9]+]]
-// CHECK: [[VAR_DECL]] = !DIGlobalVariable(name: "var_decl", linkageName: "_ZN1A1B8var_declE", scope: [[NS]],{{.*}} line: 8,
+// CHECK: [[VAR_DECL]] = !DIGlobalVariable(name: "var_decl", linkageName: "{{[^"]*var_decl[^"]*}}", scope: [[NS]],{{.*}} line: 8,
 // CHECK: [[M14]] = !DIImportedEntity(tag: DW_TAG_imported_declaration, scope: [[FUNC]], entity: [[FUNC_DECL:![0-9]+]]
 // CHECK: [[FUNC_DECL]] = !DISubprogram(name: "func_decl",
 // CHECK-SAME:                          scope: [[NS]], file: [[FOOCPP]], line: 9
@@ -111,5 +111,3 @@ void B::func_fwd() {}
 // CHECK-NOLIMIT: !DICompositeType(tag: DW_TAG_structure_type, name: "bar",{{.*}} line: 6,
 // CHECK-NOLIMIT-NOT:              DIFlagFwdDecl
 // CHECK-NOLIMIT-SAME:             ){{$}}
-
-// REQUIRES: dw2

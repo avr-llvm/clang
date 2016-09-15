@@ -113,7 +113,8 @@ namespace {
     KEYOBJC2    = 0x20000,
     KEYZVECTOR  = 0x40000,
     KEYCOROUTINES = 0x80000,
-    KEYAVR = 0x100000,
+    KEYMODULES = 0x100000,
+    KEYAVR = 0x200000,
     KEYALL = (0x1fffff & ~KEYNOMS18 &
               ~KEYNOOPENCL) // KEYNOMS18 and KEYNOOPENCL are used to exclude.
   };
@@ -149,9 +150,10 @@ static KeywordStatus getKeywordStatus(const LangOptions &LangOpts,
   // We treat bridge casts as objective-C keywords so we can warn on them
   // in non-arc mode.
   if (LangOpts.ObjC2 && (Flags & KEYARC)) return KS_Enabled;
-  if (LangOpts.ConceptsTS && (Flags & KEYCONCEPTS)) return KS_Enabled;
   if (LangOpts.ObjC2 && (Flags & KEYOBJC2)) return KS_Enabled;
+  if (LangOpts.ConceptsTS && (Flags & KEYCONCEPTS)) return KS_Enabled;
   if (LangOpts.Coroutines && (Flags & KEYCOROUTINES)) return KS_Enabled;
+  if (LangOpts.ModulesTS && (Flags & KEYMODULES)) return KS_Enabled;
   if (LangOpts.CPlusPlus && (Flags & KEYCXX11)) return KS_Future;
   return KS_Disabled;
 }

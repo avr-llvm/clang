@@ -12,12 +12,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "clang/Frontend/Utils.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/FileManager.h"
 #include "clang/Basic/FileSystemStatCache.h"
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/Basic/SourceManager.h"
+#include "clang/Frontend/Utils.h"
 #include "clang/Lex/Lexer.h"
 #include "clang/Lex/PTHManager.h"
 #include "clang/Lex/Preprocessor.h"
@@ -28,7 +28,6 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/OnDiskHashTable.h"
 #include "llvm/Support/Path.h"
-#include "llvm/Support/raw_ostream.h"
 
 // FIXME: put this somewhere else?
 #ifndef S_ISDIR
@@ -183,14 +182,14 @@ class PTHWriter {
   typedef llvm::DenseMap<const IdentifierInfo*,uint32_t> IDMap;
   typedef llvm::StringMap<OffsetOpt, llvm::BumpPtrAllocator> CachedStrsTy;
 
-  IDMap IM;
   raw_pwrite_stream &Out;
   Preprocessor& PP;
-  uint32_t idcount;
+  IDMap IM;
+  std::vector<llvm::StringMapEntry<OffsetOpt>*> StrEntries;
   PTHMap PM;
   CachedStrsTy CachedStrs;
+  uint32_t idcount;
   Offset CurStrOffset;
-  std::vector<llvm::StringMapEntry<OffsetOpt>*> StrEntries;
 
   //// Get the persistent id for the given IdentifierInfo*.
   uint32_t ResolveID(const IdentifierInfo* II);

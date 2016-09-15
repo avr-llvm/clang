@@ -1120,6 +1120,10 @@ public:
     return getTrailingObjects<ASTTemplateKWAndArgsInfo>()->NumTemplateArgs;
   }
 
+  ArrayRef<TemplateArgumentLoc> template_arguments() const {
+    return {getTemplateArgs(), getNumTemplateArgs()};
+  }
+
   /// \brief Returns true if this expression refers to a function that
   /// was resolved from an overloaded set having size greater than 1.
   bool hadMultipleCandidates() const {
@@ -2402,8 +2406,8 @@ public:
 
   /// \brief Retrieve the member declaration to which this expression refers.
   ///
-  /// The returned declaration will either be a FieldDecl or (in C++)
-  /// a CXXMethodDecl.
+  /// The returned declaration will be a FieldDecl or (in C++) a VarDecl (for
+  /// static data members), a CXXMethodDecl, or an EnumConstantDecl.
   ValueDecl *getMemberDecl() const { return MemberDecl; }
   void setMemberDecl(ValueDecl *D) { MemberDecl = D; }
 
@@ -2489,6 +2493,10 @@ public:
       return 0;
 
     return getTrailingObjects<ASTTemplateKWAndArgsInfo>()->NumTemplateArgs;
+  }
+
+  ArrayRef<TemplateArgumentLoc> template_arguments() const {
+    return {getTemplateArgs(), getNumTemplateArgs()};
   }
 
   /// \brief Retrieve the member declaration name info.
@@ -3854,7 +3862,7 @@ public:
 
   // Explicit InitListExpr's originate from source code (and have valid source
   // locations). Implicit InitListExpr's are created by the semantic analyzer.
-  bool isExplicit() {
+  bool isExplicit() const {
     return LBraceLoc.isValid() && RBraceLoc.isValid();
   }
 
@@ -3956,7 +3964,7 @@ private:
 
   /// Whether this designated initializer used the GNU deprecated
   /// syntax rather than the C99 '=' syntax.
-  bool GNUSyntax : 1;
+  unsigned GNUSyntax : 1;
 
   /// The number of designators in this initializer expression.
   unsigned NumDesignators : 15;
@@ -3970,11 +3978,10 @@ private:
   /// expression.
   Designator *Designators;
 
-
-  DesignatedInitExpr(const ASTContext &C, QualType Ty, unsigned NumDesignators,
-                     const Designator *Designators,
+  DesignatedInitExpr(const ASTContext &C, QualType Ty,
+                     llvm::ArrayRef<Designator> Designators,
                      SourceLocation EqualOrColonLoc, bool GNUSyntax,
-                     ArrayRef<Expr*> IndexExprs, Expr *Init);
+                     ArrayRef<Expr *> IndexExprs, Expr *Init);
 
   explicit DesignatedInitExpr(unsigned NumSubExprs)
     : Expr(DesignatedInitExprClass, EmptyShell()),
@@ -4134,8 +4141,7 @@ public:
   };
 
   static DesignatedInitExpr *Create(const ASTContext &C,
-                                    Designator *Designators,
-                                    unsigned NumDesignators,
+                                    llvm::ArrayRef<Designator> Designators,
                                     ArrayRef<Expr*> IndexExprs,
                                     SourceLocation EqualOrColonLoc,
                                     bool GNUSyntax, Expr *Init);
@@ -4147,48 +4153,15 @@ public:
   unsigned size() const { return NumDesignators; }
 
   // Iterator access to the designators.
-  typedef Designator *designators_iterator;
-  designators_iterator designators_begin() { return Designators; }
-  designators_iterator designators_end() {
-    return Designators + NumDesignators;
+  llvm::MutableArrayRef<Designator> designators() {
+    return {Designators, NumDesignators};
   }
 
-  typedef const Designator *const_designators_iterator;
-  const_designators_iterator designators_begin() const { return Designators; }
-  const_designators_iterator designators_end() const {
-    return Designators + NumDesignators;
+  llvm::ArrayRef<Designator> designators() const {
+    return {Designators, NumDesignators};
   }
 
-  typedef llvm::iterator_range<designators_iterator> designators_range;
-  designators_range designators() {
-    return designators_range(designators_begin(), designators_end());
-  }
-
-  typedef llvm::iterator_range<const_designators_iterator>
-          designators_const_range;
-  designators_const_range designators() const {
-    return designators_const_range(designators_begin(), designators_end());
-  }
-
-  typedef std::reverse_iterator<designators_iterator>
-          reverse_designators_iterator;
-  reverse_designators_iterator designators_rbegin() {
-    return reverse_designators_iterator(designators_end());
-  }
-  reverse_designators_iterator designators_rend() {
-    return reverse_designators_iterator(designators_begin());
-  }
-
-  typedef std::reverse_iterator<const_designators_iterator>
-          const_reverse_designators_iterator;
-  const_reverse_designators_iterator designators_rbegin() const {
-    return const_reverse_designators_iterator(designators_end());
-  }
-  const_reverse_designators_iterator designators_rend() const {
-    return const_reverse_designators_iterator(designators_begin());
-  }
-
-  Designator *getDesignator(unsigned Idx) { return &designators_begin()[Idx]; }
+  Designator *getDesignator(unsigned Idx) { return &designators()[Idx]; }
 
   void setDesignators(const ASTContext &C, const Designator *Desigs,
                       unsigned NumDesigs);
@@ -4474,11 +4447,19 @@ public:
     return cast<Expr>(SubExprs[END_EXPR+i]);
   }
   Expr *getAssocExpr(unsigned i) { return cast<Expr>(SubExprs[END_EXPR+i]); }
-
+  ArrayRef<Expr *> getAssocExprs() const {
+    return NumAssocs
+               ? llvm::makeArrayRef(
+                     &reinterpret_cast<Expr **>(SubExprs)[END_EXPR], NumAssocs)
+               : None;
+  }
   const TypeSourceInfo *getAssocTypeSourceInfo(unsigned i) const {
     return AssocTypes[i];
   }
   TypeSourceInfo *getAssocTypeSourceInfo(unsigned i) { return AssocTypes[i]; }
+  ArrayRef<TypeSourceInfo *> getAssocTypeSourceInfos() const {
+    return NumAssocs ? llvm::makeArrayRef(&AssocTypes[0], NumAssocs) : None;
+  }
 
   QualType getAssocType(unsigned i) const {
     if (const TypeSourceInfo *TS = getAssocTypeSourceInfo(i))
@@ -4886,9 +4867,12 @@ public:
   }
 
   AtomicOp getOp() const { return Op; }
-  unsigned getNumSubExprs() { return NumSubExprs; }
+  unsigned getNumSubExprs() const { return NumSubExprs; }
 
   Expr **getSubExprs() { return reinterpret_cast<Expr **>(SubExprs); }
+  const Expr * const *getSubExprs() const {
+    return reinterpret_cast<Expr * const *>(SubExprs);
+  }
 
   bool isVolatile() const {
     return getPtr()->getType()->getPointeeType().isVolatileQualified();

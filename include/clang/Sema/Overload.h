@@ -84,6 +84,8 @@ namespace clang {
     ICK_Writeback_Conversion,  ///< Objective-C ARC writeback conversion
     ICK_Zero_Event_Conversion, ///< Zero constant to event (OpenCL1.2 6.12.10)
     ICK_C_Only_Conversion,     ///< Conversions allowed in C, but not C++
+    ICK_Incompatible_Pointer_Conversion, ///< C-only conversion between pointers
+                                         ///  with incompatible types
     ICK_Num_Conversion_Kinds,  ///< The number of conversion kinds
   };
 
@@ -97,8 +99,10 @@ namespace clang {
     ICR_Conversion,              ///< Conversion
     ICR_Complex_Real_Conversion, ///< Complex <-> Real conversion
     ICR_Writeback_Conversion,    ///< ObjC ARC writeback conversion
-    ICR_C_Conversion             ///< Conversion only allowed in the C standard.
+    ICR_C_Conversion,            ///< Conversion only allowed in the C standard.
                                  ///  (e.g. void* to char*)
+    ICR_C_Conversion_Extension   ///< Conversion not allowed by the C standard,
+                                 ///  but that we accept as an extension anyway.
   };
 
   ImplicitConversionRank GetConversionRank(ImplicitConversionKind Kind);
@@ -397,7 +401,7 @@ namespace clang {
 
     /// \brief Whether the target is really a std::initializer_list, and the
     /// sequence only represents the worst element conversion.
-    bool StdInitializerListElement : 1;
+    unsigned StdInitializerListElement : 1;
 
     void setKind(Kind K) {
       destruct();
@@ -428,8 +432,9 @@ namespace clang {
     };
 
     ImplicitConversionSequence()
-      : ConversionKind(Uninitialized), StdInitializerListElement(false)
-    {}
+        : ConversionKind(Uninitialized), StdInitializerListElement(false) {
+      Standard.setAsIdentityConversion();
+    }
     ~ImplicitConversionSequence() {
       destruct();
     }
@@ -803,6 +808,7 @@ namespace clang {
     DeclAccessPair FoundDecl;
     CXXConstructorDecl *Constructor;
     FunctionTemplateDecl *ConstructorTmpl;
+    explicit operator bool() const { return Constructor; }
   };
   // FIXME: Add an AddOverloadCandidate / AddTemplateOverloadCandidate overload
   // that takes one of these.
@@ -818,7 +824,7 @@ namespace clang {
     Info.ConstructorTmpl = dyn_cast<FunctionTemplateDecl>(D);
     if (Info.ConstructorTmpl)
       D = Info.ConstructorTmpl->getTemplatedDecl();
-    Info.Constructor = cast<CXXConstructorDecl>(D);
+    Info.Constructor = dyn_cast<CXXConstructorDecl>(D);
     return Info;
   }
 } // end namespace clang

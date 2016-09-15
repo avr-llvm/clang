@@ -43,6 +43,9 @@ def Nullability : Package<"nullability">;
 def Cplusplus : Package<"cplusplus">;
 def CplusplusAlpha : Package<"cplusplus">, InPackage<Alpha>, Hidden;
 
+def Valist : Package<"valist">;
+def ValistAlpha : Package<"valist">, InPackage<Alpha>, Hidden;
+
 def DeadCode : Package<"deadcode">;
 def DeadCodeAlpha : Package<"deadcode">, InPackage<Alpha>, Hidden;
 
@@ -72,8 +75,12 @@ def Containers : Package<"containers">, InPackage<CoreFoundation>;
 def LocalizabilityAlpha : Package<"localizability">, InPackage<CocoaAlpha>;
 def LocalizabilityOptIn : Package<"localizability">, InPackage<CocoaOptIn>;
 
+def MPI : Package<"mpi">, InPackage<OptIn>;
+
 def LLVM : Package<"llvm">;
 def Debug : Package<"debug">;
+
+def CloneDetectionAlpha : Package<"clone">, InPackage<Alpha>, Hidden;
 
 //===----------------------------------------------------------------------===//
 // Core Checkers.
@@ -128,6 +135,10 @@ def CastSizeChecker : Checker<"CastSize">,
 def CastToStructChecker : Checker<"CastToStruct">,
   HelpText<"Check for cast from non-struct pointer to struct pointer">,
   DescFile<"CastToStructChecker.cpp">;
+
+def ConversionChecker : Checker<"Conversion">,
+  HelpText<"Loss of sign/precision in implicit conversions">,
+  DescFile<"ConversionChecker.cpp">;
 
 def IdenticalExprChecker : Checker<"IdenticalExpr">,
   HelpText<"Warn about unintended use of identical expressions in operators">,
@@ -245,6 +256,10 @@ def NewDeleteLeaksChecker : Checker<"NewDeleteLeaks">,
   HelpText<"Check for memory leaks. Traces memory managed by new/delete.">,
   DescFile<"MallocChecker.cpp">;
 
+def CXXSelfAssignmentChecker : Checker<"SelfAssignment">,
+  HelpText<"Checks C++ copy and move assignment operators for self assignment">,
+  DescFile<"CXXSelfAssignmentChecker.cpp">;
+
 } // end: "cplusplus"
 
 let ParentPackage = CplusplusAlpha in {
@@ -254,6 +269,27 @@ def VirtualCallChecker : Checker<"VirtualCall">,
   DescFile<"VirtualCallChecker.cpp">;
 
 } // end: "alpha.cplusplus"
+
+
+//===----------------------------------------------------------------------===//
+// Valist checkers.
+//===----------------------------------------------------------------------===//
+
+let ParentPackage = ValistAlpha in {
+
+def UninitializedChecker : Checker<"Uninitialized">,
+  HelpText<"Check for usages of uninitialized (or already released) va_lists.">,
+  DescFile<"ValistChecker.cpp">;
+
+def UnterminatedChecker : Checker<"Unterminated">,
+  HelpText<"Check for va_lists which are not released by a va_end call.">,
+  DescFile<"ValistChecker.cpp">;
+
+def CopyToSelfChecker : Checker<"CopyToSelf">,
+  HelpText<"Check for va_lists which are copied onto itself.">,
+  DescFile<"ValistChecker.cpp">;
+
+} // end : "alpha.valist"
 
 //===----------------------------------------------------------------------===//
 // Deadcode checkers.
@@ -577,6 +613,12 @@ def PluralMisuseChecker : Checker<"PluralMisuseChecker">,
   DescFile<"LocalizationChecker.cpp">;
 }
 
+let ParentPackage = MPI in {
+  def MPIChecker : Checker<"MPI-Checker">,
+  HelpText<"Checks MPI code">,
+  DescFile<"MPIChecker.cpp">;
+}
+
 //===----------------------------------------------------------------------===//
 // Checkers for LLVM development.
 //===----------------------------------------------------------------------===//
@@ -591,6 +633,10 @@ def LLVMConventionsChecker : Checker<"Conventions">,
 //===----------------------------------------------------------------------===//
 
 let ParentPackage = Debug in {
+
+def AnalysisOrderChecker : Checker<"AnalysisOrder">,
+  HelpText<"Print callbacks that are called during analysis in order">,
+  DescFile<"AnalysisOrder.cpp">;
 
 def DominatorsTreeDumper : Checker<"DumpDominators">,
   HelpText<"Print the dominance tree for a given CFG">,
@@ -649,3 +695,17 @@ def BugHashDumper : Checker<"DumpBugHash">,
   DescFile<"DebugCheckers.cpp">;
 
 } // end "debug"
+
+
+//===----------------------------------------------------------------------===//
+// Clone Detection
+//===----------------------------------------------------------------------===//
+
+let ParentPackage = CloneDetectionAlpha in {
+
+def CloneChecker : Checker<"CloneChecker">,
+  HelpText<"Reports similar pieces of code.">,
+  DescFile<"CloneChecker.cpp">;
+
+} // end "clone"
+

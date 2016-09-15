@@ -4,6 +4,7 @@ set(LLVM_LINK_COMPONENTS
 
 add_clang_library(clangStaticAnalyzerCheckers
   AllocationDiagnostics.cpp
+  AnalysisOrderChecker.cpp
   AnalyzerStatsChecker.cpp
   ArrayBoundChecker.cpp
   ArrayBoundCheckerV2.cpp
@@ -22,6 +23,9 @@ add_clang_library(clangStaticAnalyzerCheckers
   CheckerDocumentation.cpp
   ChrootChecker.cpp
   ClangCheckers.cpp
+  CloneChecker.cpp
+  ConversionChecker.cpp
+  CXXSelfAssignmentChecker.cpp
   DeadStoresChecker.cpp
   DebugCheckers.cpp
   DereferenceChecker.cpp
@@ -41,6 +45,9 @@ add_clang_library(clangStaticAnalyzerCheckers
   MallocChecker.cpp
   MallocOverflowSecurityChecker.cpp
   MallocSizeofChecker.cpp
+  MPI-Checker/MPIBugReporter.cpp
+  MPI-Checker/MPIChecker.cpp
+  MPI-Checker/MPIFunctionClassifier.cpp
   NSAutoreleasePoolChecker.cpp
   NSErrorChecker.cpp
   NoReturnFunctionChecker.cpp
@@ -75,6 +82,7 @@ add_clang_library(clangStaticAnalyzerCheckers
   UnreachableCodeChecker.cpp
   VforkChecker.cpp
   VLASizeChecker.cpp
+  ValistChecker.cpp
   VirtualCallChecker.cpp
 
   DEPENDS

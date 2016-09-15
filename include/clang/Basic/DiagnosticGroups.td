@@ -56,6 +56,7 @@ def FloatConversion :
 def DoublePromotion : DiagGroup<"double-promotion">;
 def EnumTooLarge : DiagGroup<"enum-too-large">;
 def UnsupportedNan : DiagGroup<"unsupported-nan">;
+def UnsupportedCB : DiagGroup<"unsupported-cb">;
 def NonLiteralNullConversion : DiagGroup<"non-literal-null-conversion">;
 def NullConversion : DiagGroup<"null-conversion">;
 def ImplicitConversionFloatingPointToBool :
@@ -94,7 +95,9 @@ def CXX11CompatDeprecatedWritableStr :
 def DeprecatedAttributes : DiagGroup<"deprecated-attributes">;
 def DeprecatedDeclarations : DiagGroup<"deprecated-declarations">;
 def UnavailableDeclarations : DiagGroup<"unavailable-declarations">;
-def PartialAvailability : DiagGroup<"partial-availability">;
+def UnguardedAvailability : DiagGroup<"unguarded-availability">;
+// partial-availability is an alias of unguarded-availability.
+def : DiagGroup<"partial-availability", [UnguardedAvailability]>;
 def DeprecatedImplementations :DiagGroup<"deprecated-implementations">;
 def DeprecatedIncrementBool : DiagGroup<"deprecated-increment-bool">;
 def DeprecatedRegister : DiagGroup<"deprecated-register">;
@@ -111,7 +114,8 @@ def Deprecated : DiagGroup<"deprecated", [DeprecatedAttributes,
 def LibLTO : DiagGroup<"liblto">;
 def : DiagGroup<"disabled-optimization">;
 def : DiagGroup<"discard-qual">;
-def : DiagGroup<"div-by-zero">;
+def DivZero : DiagGroup<"division-by-zero">;
+def : DiagGroup<"div-by-zero", [DivZero]>;
 
 def DocumentationHTML : DiagGroup<"documentation-html">;
 def DocumentationUnknownCommand : DiagGroup<"documentation-unknown-command">;
@@ -198,8 +202,6 @@ def CXX14CompatPedantic : DiagGroup<"c++14-compat-pedantic",
 def CXX1zCompat : DiagGroup<"c++1z-compat", [DeprecatedRegister,
                                              DeprecatedIncrementBool]>;
 
-def : DiagGroup<"effc++">;
-def DivZero : DiagGroup<"division-by-zero">;
 def ExitTimeDestructors : DiagGroup<"exit-time-destructors">;
 def FlexibleArrayExtensions : DiagGroup<"flexible-array-extensions">;
 def FourByteMultiChar : DiagGroup<"four-char-constants">;
@@ -223,9 +225,12 @@ def GNUIncludeNext : DiagGroup<"gnu-include-next">;
 def IncompatibleMSStruct : DiagGroup<"incompatible-ms-struct">;
 def IncompatiblePointerTypesDiscardsQualifiers 
   : DiagGroup<"incompatible-pointer-types-discards-qualifiers">;
+def IncompatibleFunctionPointerTypes
+  : DiagGroup<"incompatible-function-pointer-types">;
 def IncompatiblePointerTypes
   : DiagGroup<"incompatible-pointer-types",
-    [IncompatiblePointerTypesDiscardsQualifiers]>;
+    [IncompatiblePointerTypesDiscardsQualifiers,
+     IncompatibleFunctionPointerTypes]>;
 def IncompleteUmbrella : DiagGroup<"incomplete-umbrella">;
 def NonModularIncludeInFrameworkModule
   : DiagGroup<"non-modular-include-in-framework-module">;
@@ -284,6 +289,7 @@ def NonPODVarargs : DiagGroup<"non-pod-varargs">;
 def ClassVarargs : DiagGroup<"class-varargs", [NonPODVarargs]>;
 def : DiagGroup<"nonportable-cfstrings">;
 def NonVirtualDtor : DiagGroup<"non-virtual-dtor">;
+def : DiagGroup<"effc++", [NonVirtualDtor]>;
 def OveralignedType : DiagGroup<"over-aligned">;
 def OldStyleCast : DiagGroup<"old-style-cast">;
 def : DiagGroup<"old-style-definition">;
@@ -311,6 +317,7 @@ def ObjCRootClass : DiagGroup<"objc-root-class">;
 def ObjCPointerIntrospectPerformSelector : DiagGroup<"deprecated-objc-pointer-introspection-performSelector">;
 def ObjCPointerIntrospect : DiagGroup<"deprecated-objc-pointer-introspection", [ObjCPointerIntrospectPerformSelector]>;
 def ObjCMultipleMethodNames : DiagGroup<"objc-multiple-method-names">;
+def OpenCLUnsupportedRGBA: DiagGroup<"opencl-unsupported-rgba">;
 def DeprecatedObjCIsaUsage : DiagGroup<"deprecated-objc-isa-usage">;
 def ExplicitInitializeCall : DiagGroup<"explicit-initialize-call">;
 def Packed : DiagGroup<"packed">;
@@ -341,10 +348,12 @@ def MissingMethodReturnType : DiagGroup<"missing-method-return-type">;
 def ShadowFieldInConstructorModified : DiagGroup<"shadow-field-in-constructor-modified">;
 def ShadowFieldInConstructor : DiagGroup<"shadow-field-in-constructor",
                                          [ShadowFieldInConstructorModified]>;
+def ShadowIvar : DiagGroup<"shadow-ivar">;
 
 // -Wshadow-all is a catch-all for all shadowing. -Wshadow is just the
 // shadowing that we think is unsafe.
-def Shadow : DiagGroup<"shadow", [ShadowFieldInConstructorModified]>;
+def Shadow : DiagGroup<"shadow", [ShadowFieldInConstructorModified,
+                                  ShadowIvar]>;
 def ShadowAll : DiagGroup<"shadow-all", [Shadow, ShadowFieldInConstructor]>;
 
 def Shorten64To32 : DiagGroup<"shorten-64-to-32">;
@@ -772,6 +781,7 @@ def MicrosoftEnumValue : DiagGroup<"microsoft-enum-value">;
 def MicrosoftDefaultArgRedefinition :
     DiagGroup<"microsoft-default-arg-redefinition">;
 def MicrosoftTemplate : DiagGroup<"microsoft-template">;
+def MicrosoftInconsistentDllImport : DiagGroup<"inconsistent-dllimport">;
 def MicrosoftRedeclareStatic : DiagGroup<"microsoft-redeclare-static">;
 def MicrosoftEnumForwardReference :
     DiagGroup<"microsoft-enum-forward-reference">;
@@ -798,7 +808,8 @@ def Microsoft : DiagGroup<"microsoft",
      MicrosoftRedeclareStatic, MicrosoftEnumForwardReference, MicrosoftGoto,
      MicrosoftFlexibleArray, MicrosoftExtraQualification, MicrosoftCast,
      MicrosoftConstInit, MicrosoftVoidPseudoDtor, MicrosoftAnonTag,
-     MicrosoftCommentPaste, MicrosoftEndOfFile]>;
+     MicrosoftCommentPaste, MicrosoftEndOfFile,
+     MicrosoftInconsistentDllImport]>;
 
 def ClangClPch : DiagGroup<"clang-cl-pch">;
 
@@ -868,3 +879,7 @@ def InvalidOrNonExistentDirectory : DiagGroup<"invalid-or-nonexistent-directory"
 def OptionIgnored : DiagGroup<"option-ignored">;
 
 def UnknownArgument : DiagGroup<"unknown-argument">;
+
+// A warning group for warnings about code that clang accepts when
+// compiling OpenCL C/C++ but which is not compatible with the SPIR spec.
+def SpirCompat : DiagGroup<"spir-compat">;

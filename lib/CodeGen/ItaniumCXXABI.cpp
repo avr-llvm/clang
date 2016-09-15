@@ -1390,6 +1390,10 @@ void ItaniumCXXABI::addImplicitStructorParams(CodeGenFunction &CGF,
 }
 
 void ItaniumCXXABI::EmitInstanceFunctionProlog(CodeGenFunction &CGF) {
+  // Naked functions have no prolog.
+  if (CGF.CurFuncDecl && CGF.CurFuncDecl->hasAttr<NakedAttr>())
+    return;
+
   /// Initialize the 'this' slot.
   EmitThisParam(CGF);
 
@@ -1458,9 +1462,7 @@ void ItaniumCXXABI::emitVTableDefinitions(CodeGenVTables &CGVT,
       CGM.GetAddrOfRTTIDescriptor(CGM.getContext().getTagDeclType(RD));
 
   // Create and set the initializer.
-  llvm::Constant *Init = CGVT.CreateVTableInitializer(
-      RD, VTLayout.vtable_component_begin(), VTLayout.getNumVTableComponents(),
-      VTLayout.vtable_thunk_begin(), VTLayout.getNumVTableThunks(), RTTI);
+  llvm::Constant *Init = CGVT.CreateVTableInitializer(VTLayout, RTTI);
   VTable->setInitializer(Init);
 
   // Set the correct linkage.
@@ -1490,7 +1492,7 @@ void ItaniumCXXABI::emitVTableDefinitions(CodeGenVTables &CGVT,
     EmitFundamentalRTTIDescriptors();
 
   if (!VTable->isDeclarationForLinker())
-    CGM.EmitVTableBitSetEntries(VTable, VTLayout);
+    CGM.EmitVTableTypeMetadata(VTable, VTLayout);
 }
 
 bool ItaniumCXXABI::isVirtualOffsetNeededForVTableField(
@@ -1571,11 +1573,11 @@ llvm::GlobalVariable *ItaniumCXXABI::getAddrOfVTable(const CXXRecordDecl *RD,
 
   ItaniumVTableContext &VTContext = CGM.getItaniumVTableContext();
   llvm::ArrayType *ArrayType = llvm::ArrayType::get(
-      CGM.Int8PtrTy, VTContext.getVTableLayout(RD).getNumVTableComponents());
+      CGM.Int8PtrTy, VTContext.getVTableLayout(RD).vtable_components().size());
 
   VTable = CGM.CreateOrReplaceCXXRuntimeVariable(
       Name, ArrayType, llvm::GlobalValue::ExternalLinkage);
-  VTable->setUnnamedAddr(true);
+  VTable->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
 
   if (RD->hasAttr<DLLImportAttr>())
     VTable->setDLLStorageClass(llvm::GlobalValue::DLLImportStorageClass);
@@ -1595,12 +1597,18 @@ llvm::Value *ItaniumCXXABI::getVirtualFunctionPointer(CodeGenFunction &CGF,
   auto *MethodDecl = cast<CXXMethodDecl>(GD.getDecl());
   llvm::Value *VTable = CGF.GetVTablePtr(This, Ty, MethodDecl->getParent());
 
-  CGF.EmitBitSetCodeForVCall(MethodDecl->getParent(), VTable, Loc);
-
   uint64_t VTableIndex = CGM.getItaniumVTableContext().getMethodVTableIndex(GD);
-  llvm::Value *VFuncPtr =
-      CGF.Builder.CreateConstInBoundsGEP1_64(VTable, VTableIndex, "vfn");
-  return CGF.Builder.CreateAlignedLoad(VFuncPtr, CGF.getPointerAlign());
+  if (CGF.ShouldEmitVTableTypeCheckedLoad(MethodDecl->getParent())) {
+    return CGF.EmitVTableTypeCheckedLoad(
+        MethodDecl->getParent(), VTable,
+        VTableIndex * CGM.getContext().getTargetInfo().getPointerWidth(0) / 8);
+  } else {
+    CGF.EmitTypeMetadataCodeForVCall(MethodDecl->getParent(), VTable, Loc);
+
+    llvm::Value *VFuncPtr =
+        CGF.Builder.CreateConstInBoundsGEP1_64(VTable, VTableIndex, "vfn");
+    return CGF.Builder.CreateAlignedLoad(VFuncPtr, CGF.getPointerAlign());
+  }
 }
 
 llvm::Value *ItaniumCXXABI::EmitVirtualDestructorCall(
@@ -1905,10 +1913,18 @@ void ItaniumCXXABI::EmitGuardedInit(CodeGenFunction &CGF,
                                     bool shouldPerformInit) {
   CGBuilderTy &Builder = CGF.Builder;
 
-  // We only need to use thread-safe statics for local non-TLS variables;
-  // global initialization is always single-threaded.
+  // Inline variables that weren't instantiated from variable templates have
+  // partially-ordered initialization within their translation unit.
+  bool NonTemplateInline =
+      D.isInline() &&
+      !isTemplateInstantiation(D.getTemplateSpecializationKind());
+
+  // We only need to use thread-safe statics for local non-TLS variables and
+  // inline variables; other global initialization is always single-threaded
+  // or (through lazy dynamic loading in multiple threads) unsequenced.
   bool threadsafe = getContext().getLangOpts().ThreadsafeStatics &&
-                    D.isLocalVarDecl() && !D.getTLSKind();
+                    (D.isLocalVarDecl() || NonTemplateInline) &&
+                    !D.getTLSKind();
 
   // If we have a global variable with internal linkage and thread-safe statics
   // are disabled, we can just let the guard variable be of type i8.
@@ -1962,7 +1978,11 @@ void ItaniumCXXABI::EmitGuardedInit(CodeGenFunction &CGF,
     if (!D.isLocalVarDecl() && C &&
         CGM.getTarget().getTriple().isOSBinFormatELF()) {
       guard->setComdat(C);
-      CGF.CurFn->setComdat(C);
+      // An inline variable's guard function is run from the per-TU
+      // initialization function, not via a dedicated global ctor function, so
+      // we can't put it in a comdat.
+      if (!NonTemplateInline)
+        CGF.CurFn->setComdat(C);
     } else if (CGM.supportsCOMDAT() && guard->isWeakForLinker()) {
       guard->setComdat(CGM.getModule().getOrInsertComdat(guard->getName()));
     }
@@ -2324,8 +2344,7 @@ LValue ItaniumCXXABI::EmitThreadLocalVarDeclLValue(CodeGenFunction &CGF,
   llvm::Function *Wrapper = getOrCreateThreadLocalWrapper(VD, Val);
 
   llvm::CallInst *CallVal = CGF.Builder.CreateCall(Wrapper);
-  if (isThreadWrapperReplaceable(VD, CGF.CGM))
-    CallVal->setCallingConv(llvm::CallingConv::CXX_FAST_TLS);
+  CallVal->setCallingConv(Wrapper->getCallingConv());
 
   LValue LV;
   if (VD->getType()->isReferenceType())
@@ -3196,9 +3215,6 @@ void ItaniumRTTIBuilder::BuildVMIClassTypeInfo(const CXXRecordDecl *RD) {
   if (!RD->getNumBases())
     return;
 
-  llvm::Type *LongLTy =
-    CGM.getTypes().ConvertType(CGM.getContext().LongTy);
-
   // Now add the base class descriptions.
 
   // Itanium C++ ABI 2.9.5p6c:
@@ -3216,6 +3232,19 @@ void ItaniumRTTIBuilder::BuildVMIClassTypeInfo(const CXXRecordDecl *RD) {
   //       __offset_shift = 8
   //     };
   //   };
+
+  // If we're in mingw and 'long' isn't wide enough for a pointer, use 'long
+  // long' instead of 'long' for __offset_flags. libstdc++abi uses long long on
+  // LLP64 platforms.
+  // FIXME: Consider updating libc++abi to match, and extend this logic to all
+  // LLP64 platforms.
+  QualType OffsetFlagsTy = CGM.getContext().LongTy;
+  const TargetInfo &TI = CGM.getContext().getTargetInfo();
+  if (TI.getTriple().isOSCygMing() && TI.getPointerWidth(0) > TI.getLongWidth())
+    OffsetFlagsTy = CGM.getContext().LongLongTy;
+  llvm::Type *OffsetFlagsLTy =
+      CGM.getTypes().ConvertType(OffsetFlagsTy);
+
   for (const auto &Base : RD->bases()) {
     // The __base_type member points to the RTTI for the base type.
     Fields.push_back(ItaniumRTTIBuilder(CXXABI).BuildTypeInfo(Base.getType()));
@@ -3247,7 +3276,7 @@ void ItaniumRTTIBuilder::BuildVMIClassTypeInfo(const CXXRecordDecl *RD) {
     if (Base.getAccessSpecifier() == AS_public)
       OffsetFlags |= BCTI_Public;
 
-    Fields.push_back(llvm::ConstantInt::get(LongLTy, OffsetFlags));
+    Fields.push_back(llvm::ConstantInt::get(OffsetFlagsLTy, OffsetFlags));
   }
 }
 

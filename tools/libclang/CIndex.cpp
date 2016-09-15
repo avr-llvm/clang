@@ -12,8 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "CIndexer.h"
 #include "CIndexDiagnostic.h"
+#include "CIndexer.h"
 #include "CLog.h"
 #include "CXCursor.h"
 #include "CXSourceLocation.h"
@@ -523,8 +523,10 @@ bool CursorVisitor::VisitChildren(CXCursor Cursor) {
           for (ASTUnit::top_level_iterator TL = CXXUnit->top_level_begin(),
                                         TLEnd = CXXUnit->top_level_end();
                TL != TLEnd; ++TL) {
-            if (Visit(MakeCXCursor(*TL, TU, RegionOfInterest), true))
-              return true;
+            const Optional<bool> V = handleDeclForVisitation(*TL);
+            if (!V.hasValue())
+              continue;
+            return V.getValue();
           }
         } else if (VisitDeclContext(
                                 CXXUnit->getASTContext().getTranslationUnitDecl()))
@@ -621,40 +623,48 @@ bool CursorVisitor::VisitDeclContext(DeclContext *DC) {
     Decl *D = *I;
     if (D->getLexicalDeclContext() != DC)
       continue;
-    CXCursor Cursor = MakeCXCursor(D, TU, RegionOfInterest);
-
-    // Ignore synthesized ivars here, otherwise if we have something like:
-    //   @synthesize prop = _prop;
-    // and '_prop' is not declared, we will encounter a '_prop' ivar before
-    // encountering the 'prop' synthesize declaration and we will think that
-    // we passed the region-of-interest.
-    if (ObjCIvarDecl *ivarD = dyn_cast<ObjCIvarDecl>(D)) {
-      if (ivarD->getSynthesize())
-        continue;
-    }
-
-    // FIXME: ObjCClassRef/ObjCProtocolRef for forward class/protocol
-    // declarations is a mismatch with the compiler semantics.
-    if (Cursor.kind == CXCursor_ObjCInterfaceDecl) {
-      ObjCInterfaceDecl *ID = cast<ObjCInterfaceDecl>(D);
-      if (!ID->isThisDeclarationADefinition())
-        Cursor = MakeCursorObjCClassRef(ID, ID->getLocation(), TU);
-
-    } else if (Cursor.kind == CXCursor_ObjCProtocolDecl) {
-      ObjCProtocolDecl *PD = cast<ObjCProtocolDecl>(D);
-      if (!PD->isThisDeclarationADefinition())
-        Cursor = MakeCursorObjCProtocolRef(PD, PD->getLocation(), TU);
-    }
-
-    const Optional<bool> &V = shouldVisitCursor(Cursor);
+    const Optional<bool> V = handleDeclForVisitation(D);
     if (!V.hasValue())
       continue;
-    if (!V.getValue())
-      return false;
-    if (Visit(Cursor, true))
-      return true;
+    return V.getValue();
   }
   return false;
+}
+
+Optional<bool> CursorVisitor::handleDeclForVisitation(const Decl *D) {
+  CXCursor Cursor = MakeCXCursor(D, TU, RegionOfInterest);
+
+  // Ignore synthesized ivars here, otherwise if we have something like:
+  //   @synthesize prop = _prop;
+  // and '_prop' is not declared, we will encounter a '_prop' ivar before
+  // encountering the 'prop' synthesize declaration and we will think that
+  // we passed the region-of-interest.
+  if (auto *ivarD = dyn_cast<ObjCIvarDecl>(D)) {
+    if (ivarD->getSynthesize())
+      return None;
+  }
+
+  // FIXME: ObjCClassRef/ObjCProtocolRef for forward class/protocol
+  // declarations is a mismatch with the compiler semantics.
+  if (Cursor.kind == CXCursor_ObjCInterfaceDecl) {
+    auto *ID = cast<ObjCInterfaceDecl>(D);
+    if (!ID->isThisDeclarationADefinition())
+      Cursor = MakeCursorObjCClassRef(ID, ID->getLocation(), TU);
+
+  } else if (Cursor.kind == CXCursor_ObjCProtocolDecl) {
+    auto *PD = cast<ObjCProtocolDecl>(D);
+    if (!PD->isThisDeclarationADefinition())
+      Cursor = MakeCursorObjCProtocolRef(PD, PD->getLocation(), TU);
+  }
+
+  const Optional<bool> V = shouldVisitCursor(Cursor);
+  if (!V.hasValue())
+    return None;
+  if (!V.getValue())
+    return false;
+  if (Visit(Cursor, true))
+    return true;
+  return None;
 }
 
 bool CursorVisitor::VisitTranslationUnitDecl(TranslationUnitDecl *D) {
@@ -935,7 +945,7 @@ bool CursorVisitor::VisitObjCMethodDecl(ObjCMethodDecl *ND) {
     if (Visit(TSInfo->getTypeLoc()))
       return true;
 
-  for (const auto *P : ND->params()) {
+  for (const auto *P : ND->parameters()) {
     if (Visit(MakeCXCursor(P, TU, RegionOfInterest)))
       return true;
   }
@@ -1230,6 +1240,15 @@ bool CursorVisitor::VisitUnresolvedUsingTypenameDecl(
   return false;
 }
 
+bool CursorVisitor::VisitStaticAssertDecl(StaticAssertDecl *D) {
+  if (Visit(MakeCXCursor(D->getAssertExpr(), StmtParent, TU, RegionOfInterest)))
+    return true;
+  if (StringLiteral *Message = D->getMessage())
+    if (Visit(MakeCXCursor(Message, StmtParent, TU, RegionOfInterest)))
+      return true;
+  return false;
+}
+
 bool CursorVisitor::VisitDeclarationNameInfo(DeclarationNameInfo Name) {
   switch (Name.getName().getNameKind()) {
   case clang::DeclarationName::Identifier:
@@ -1514,6 +1533,18 @@ bool CursorVisitor::VisitTemplateTypeParmTypeLoc(TemplateTypeParmTypeLoc TL) {
 
 bool CursorVisitor::VisitObjCInterfaceTypeLoc(ObjCInterfaceTypeLoc TL) {
   return Visit(MakeCursorObjCClassRef(TL.getIFaceDecl(), TL.getNameLoc(), TU));
+}
+
+bool CursorVisitor::VisitObjCTypeParamTypeLoc(ObjCTypeParamTypeLoc TL) {
+  if (Visit(MakeCursorTypeRef(TL.getDecl(), TL.getLocStart(), TU)))
+    return true;
+  for (unsigned I = 0, N = TL.getNumProtocols(); I != N; ++I) {
+    if (Visit(MakeCursorObjCProtocolRef(TL.getProtocol(I), TL.getProtocolLoc(I),
+                                        TU)))
+      return true;
+  }
+
+  return false;
 }
 
 bool CursorVisitor::VisitObjCObjectTypeLoc(ObjCObjectTypeLoc TL) {
@@ -1951,6 +1982,15 @@ public:
   void VisitOMPTaskLoopDirective(const OMPTaskLoopDirective *D);
   void VisitOMPTaskLoopSimdDirective(const OMPTaskLoopSimdDirective *D);
   void VisitOMPDistributeDirective(const OMPDistributeDirective *D);
+  void VisitOMPDistributeParallelForDirective(
+      const OMPDistributeParallelForDirective *D);
+  void VisitOMPDistributeParallelForSimdDirective(
+      const OMPDistributeParallelForSimdDirective *D);
+  void VisitOMPDistributeSimdDirective(const OMPDistributeSimdDirective *D);
+  void VisitOMPTargetParallelForSimdDirective(
+      const OMPTargetParallelForSimdDirective *D);
+  void VisitOMPTargetSimdDirective(const OMPTargetSimdDirective *D);
+  void VisitOMPTeamsDistributeDirective(const OMPTeamsDistributeDirective *D);
 
 private:
   void AddDeclarationNameInfo(const Stmt *S);
@@ -2246,6 +2286,18 @@ void OMPClauseEnqueue::VisitOMPDistScheduleClause(
 }
 void OMPClauseEnqueue::VisitOMPDefaultmapClause(
     const OMPDefaultmapClause * /*C*/) {}
+void OMPClauseEnqueue::VisitOMPToClause(const OMPToClause *C) {
+  VisitOMPClauseList(C);
+}
+void OMPClauseEnqueue::VisitOMPFromClause(const OMPFromClause *C) {
+  VisitOMPClauseList(C);
+}
+void OMPClauseEnqueue::VisitOMPUseDevicePtrClause(const OMPUseDevicePtrClause *C) {
+  VisitOMPClauseList(C);
+}
+void OMPClauseEnqueue::VisitOMPIsDevicePtrClause(const OMPIsDevicePtrClause *C) {
+  VisitOMPClauseList(C);
+}
 }
 
 void EnqueueVisitor::EnqueueChildren(const OMPClause *S) {
@@ -2386,21 +2438,20 @@ void EnqueueVisitor::VisitDeclStmt(const DeclStmt *S) {
 }
 void EnqueueVisitor::VisitDesignatedInitExpr(const DesignatedInitExpr *E) {
   AddStmt(E->getInit());
-  for (DesignatedInitExpr::const_reverse_designators_iterator
-         D = E->designators_rbegin(), DEnd = E->designators_rend();
-         D != DEnd; ++D) {
-    if (D->isFieldDesignator()) {
-      if (FieldDecl *Field = D->getField())
-        AddMemberRef(Field, D->getFieldLoc());
+  for (const DesignatedInitExpr::Designator &D :
+       llvm::reverse(E->designators())) {
+    if (D.isFieldDesignator()) {
+      if (FieldDecl *Field = D.getField())
+        AddMemberRef(Field, D.getFieldLoc());
       continue;
     }
-    if (D->isArrayDesignator()) {
-      AddStmt(E->getArrayIndex(*D));
+    if (D.isArrayDesignator()) {
+      AddStmt(E->getArrayIndex(D));
       continue;
     }
-    assert(D->isArrayRangeDesignator() && "Unknown designator kind");
-    AddStmt(E->getArrayRangeEnd(*D));
-    AddStmt(E->getArrayRangeStart(*D));
+    assert(D.isArrayRangeDesignator() && "Unknown designator kind");
+    AddStmt(E->getArrayRangeEnd(D));
+    AddStmt(E->getArrayRangeStart(D));
   }
 }
 void EnqueueVisitor::VisitExplicitCastExpr(const ExplicitCastExpr *E) {
@@ -2696,6 +2747,36 @@ void EnqueueVisitor::VisitOMPTaskLoopSimdDirective(
 
 void EnqueueVisitor::VisitOMPDistributeDirective(
     const OMPDistributeDirective *D) {
+  VisitOMPLoopDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPDistributeParallelForDirective(
+    const OMPDistributeParallelForDirective *D) {
+  VisitOMPLoopDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPDistributeParallelForSimdDirective(
+    const OMPDistributeParallelForSimdDirective *D) {
+  VisitOMPLoopDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPDistributeSimdDirective(
+    const OMPDistributeSimdDirective *D) {
+  VisitOMPLoopDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPTargetParallelForSimdDirective(
+    const OMPTargetParallelForSimdDirective *D) {
+  VisitOMPLoopDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPTargetSimdDirective(
+    const OMPTargetSimdDirective *D) {
+  VisitOMPLoopDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPTeamsDistributeDirective(
+    const OMPTeamsDistributeDirective *D) {
   VisitOMPLoopDirective(D);
 }
 
@@ -3935,6 +4016,9 @@ static const Decl *getDeclFromExpr(const Stmt *E) {
   if (const CXXConstructExpr *CE = dyn_cast<CXXConstructExpr>(E))
     if (!CE->isElidable())
     return CE->getConstructor();
+  if (const CXXInheritedCtorInitExpr *CE =
+          dyn_cast<CXXInheritedCtorInitExpr>(E))
+    return CE->getConstructor();
   if (const ObjCMessageExpr *OME = dyn_cast<ObjCMessageExpr>(E))
     return OME->getMethodDecl();
 
@@ -4412,10 +4496,8 @@ CXString clang_getCursorDisplayName(CXCursor C) {
     SmallString<128> Str;
     llvm::raw_svector_ostream OS(Str);
     OS << *ClassSpec;
-    TemplateSpecializationType::PrintTemplateArgumentList(OS,
-                                      ClassSpec->getTemplateArgs().data(),
-                                      ClassSpec->getTemplateArgs().size(),
-                                                                Policy);
+    TemplateSpecializationType::PrintTemplateArgumentList(
+        OS, ClassSpec->getTemplateArgs().asArray(), Policy);
     return cxstring::createDup(OS.str());
   }
   
@@ -4554,6 +4636,8 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
       return cxstring::createRef("ObjCStringLiteral");
   case CXCursor_ObjCBoolLiteralExpr:
       return cxstring::createRef("ObjCBoolLiteralExpr");
+  case CXCursor_ObjCAvailabilityCheckExpr:
+      return cxstring::createRef("ObjCAvailabilityCheckExpr");
   case CXCursor_ObjCSelfExpr:
       return cxstring::createRef("ObjCSelfExpr");
   case CXCursor_ObjCEncodeExpr:
@@ -4798,6 +4882,8 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
     return cxstring::createRef("OMPTargetParallelDirective");
   case CXCursor_OMPTargetParallelForDirective:
     return cxstring::createRef("OMPTargetParallelForDirective");
+  case CXCursor_OMPTargetUpdateDirective:
+    return cxstring::createRef("OMPTargetUpdateDirective");
   case CXCursor_OMPTeamsDirective:
     return cxstring::createRef("OMPTeamsDirective");
   case CXCursor_OMPCancellationPointDirective:
@@ -4810,10 +4896,24 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
     return cxstring::createRef("OMPTaskLoopSimdDirective");
   case CXCursor_OMPDistributeDirective:
     return cxstring::createRef("OMPDistributeDirective");
+  case CXCursor_OMPDistributeParallelForDirective:
+    return cxstring::createRef("OMPDistributeParallelForDirective");
+  case CXCursor_OMPDistributeParallelForSimdDirective:
+    return cxstring::createRef("OMPDistributeParallelForSimdDirective");
+  case CXCursor_OMPDistributeSimdDirective:
+    return cxstring::createRef("OMPDistributeSimdDirective");
+  case CXCursor_OMPTargetParallelForSimdDirective:
+    return cxstring::createRef("OMPTargetParallelForSimdDirective");
+  case CXCursor_OMPTargetSimdDirective:
+    return cxstring::createRef("OMPTargetSimdDirective");
+  case CXCursor_OMPTeamsDistributeDirective:
+    return cxstring::createRef("OMPTeamsDistributeDirective");
   case CXCursor_OverloadCandidate:
       return cxstring::createRef("OverloadCandidate");
   case CXCursor_TypeAliasTemplateDecl:
       return cxstring::createRef("TypeAliasTemplateDecl");
+  case CXCursor_StaticAssert:
+      return cxstring::createRef("StaticAssert");
   }
 
   llvm_unreachable("Unhandled CXCursorKind");
@@ -5535,6 +5635,7 @@ CXCursor clang_getCursorDefinition(CXCursor C) {
   case Decl::TemplateTypeParm:
   case Decl::EnumConstant:
   case Decl::Field:
+  case Decl::Binding:
   case Decl::MSProperty:
   case Decl::IndirectField:
   case Decl::ObjCIvar:
@@ -5547,6 +5648,7 @@ CXCursor clang_getCursorDefinition(CXCursor C) {
   case Decl::ObjCImplementation:
   case Decl::AccessSpec:
   case Decl::LinkageSpec:
+  case Decl::Export:
   case Decl::ObjCPropertyImpl:
   case Decl::FileScopeAsm:
   case Decl::StaticAssert:
@@ -5605,7 +5707,8 @@ CXCursor clang_getCursorDefinition(CXCursor C) {
 
   case Decl::Var:
   case Decl::VarTemplateSpecialization:
-  case Decl::VarTemplatePartialSpecialization: {
+  case Decl::VarTemplatePartialSpecialization:
+  case Decl::Decomposition: {
     // Ask the variable if it has a definition.
     if (const VarDecl *Def = cast<VarDecl>(D)->getDefinition())
       return MakeCXCursor(Def, TU);
@@ -5639,6 +5742,7 @@ CXCursor clang_getCursorDefinition(CXCursor C) {
                                        D->getLocation(), TU);
 
   case Decl::UsingShadow:
+  case Decl::ConstructorUsingShadow:
     return clang_getCursorDefinition(
                        MakeCXCursor(cast<UsingShadowDecl>(D)->getTargetDecl(),
                                     TU));
@@ -5862,7 +5966,8 @@ CXSourceRange clang_getCursorReferenceNameRange(CXCursor C, unsigned NameFlags,
 }
 
 void clang_enableStackTraces(void) {
-  llvm::sys::PrintStackTraceOnErrorSignal();
+  // FIXME: Provide an argv0 here so we can find llvm-symbolizer.
+  llvm::sys::PrintStackTraceOnErrorSignal(StringRef());
 }
 
 void clang_executeOnThread(void (*fn)(void*), void *user_data,
@@ -6260,7 +6365,7 @@ AnnotateTokensWorker::Visit(CXCursor cursor, CXCursor parent) {
         if (Method->getObjCDeclQualifier())
           HasContextSensitiveKeywords = true;
         else {
-          for (const auto *P : Method->params()) {
+          for (const auto *P : Method->parameters()) {
             if (P->getObjCDeclQualifier()) {
               HasContextSensitiveKeywords = true;
               break;
@@ -6712,6 +6817,7 @@ static void clang_annotateTokensImpl(CXTranslationUnit TU, ASTUnit *CXXUnit,
               .Case("setter", true)
               .Case("strong", true)
               .Case("weak", true)
+              .Case("class", true)
               .Default(false))
             Tokens[I].int_data[0] = CXToken_Keyword;
         }
@@ -7158,6 +7264,7 @@ unsigned clang_Cursor_getObjCPropertyAttributes(CXCursor C, unsigned reserved) {
   SET_CXOBJCPROP_ATTR(weak);
   SET_CXOBJCPROP_ATTR(strong);
   SET_CXOBJCPROP_ATTR(unsafe_unretained);
+  SET_CXOBJCPROP_ATTR(class);
 #undef SET_CXOBJCPROP_ATTR
 
   return Result;
@@ -7676,6 +7783,33 @@ CXSourceRangeList *clang_getSkippedRanges(CXTranslationUnit TU, CXFile file) {
   skipped->ranges = new CXSourceRange[skipped->count];
   for (unsigned i = 0, ei = skipped->count; i != ei; ++i)
     skipped->ranges[i] = cxloc::translateSourceRange(Ctx, wantedRanges[i]);
+
+  return skipped;
+}
+
+CXSourceRangeList *clang_getAllSkippedRanges(CXTranslationUnit TU) {
+  CXSourceRangeList *skipped = new CXSourceRangeList;
+  skipped->count = 0;
+  skipped->ranges = nullptr;
+
+  if (isNotUsableTU(TU)) {
+    LOG_BAD_TU(TU);
+    return skipped;
+  }
+    
+  ASTUnit *astUnit = cxtu::getASTUnit(TU);
+  PreprocessingRecord *ppRec = astUnit->getPreprocessor().getPreprocessingRecord();
+  if (!ppRec)
+    return skipped;
+
+  ASTContext &Ctx = astUnit->getASTContext();
+
+  const std::vector<SourceRange> &SkippedRanges = ppRec->getSkippedRanges();
+
+  skipped->count = SkippedRanges.size();
+  skipped->ranges = new CXSourceRange[skipped->count];
+  for (unsigned i = 0, ei = skipped->count; i != ei; ++i)
+    skipped->ranges[i] = cxloc::translateSourceRange(Ctx, SkippedRanges[i]);
 
   return skipped;
 }

@@ -11,7 +11,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "clang/Frontend/Utils.h"
 #include "clang/Basic/FileManager.h"
 #include "clang/Basic/MacroBuilder.h"
 #include "clang/Basic/SourceManager.h"
@@ -19,15 +18,13 @@
 #include "clang/Basic/Version.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
 #include "clang/Frontend/FrontendOptions.h"
+#include "clang/Frontend/Utils.h"
 #include "clang/Lex/HeaderSearch.h"
 #include "clang/Lex/PTHManager.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Serialization/ASTReader.h"
 #include "llvm/ADT/APFloat.h"
-#include "llvm/Support/FileSystem.h"
-#include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/Path.h"
 using namespace clang;
 
 static bool MacroBodyEndsInBackslash(StringRef MacroBody) {
@@ -437,6 +434,9 @@ static void InitializeStandardPredefinedMacros(const TargetInfo &TI,
     Builder.defineMacro("CL_VERSION_1_1", "110");
     Builder.defineMacro("CL_VERSION_1_2", "120");
     Builder.defineMacro("CL_VERSION_2_0", "200");
+
+    if (TI.isLittleEndian())
+      Builder.defineMacro("__ENDIAN_LITTLE__");
 
     if (LangOpts.FastRelaxedMath)
       Builder.defineMacro("__FAST_RELAXED_MATH__");
@@ -873,10 +873,10 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
   if (unsigned PICLevel = LangOpts.PICLevel) {
     Builder.defineMacro("__PIC__", Twine(PICLevel));
     Builder.defineMacro("__pic__", Twine(PICLevel));
-  }
-  if (unsigned PIELevel = LangOpts.PIELevel) {
-    Builder.defineMacro("__PIE__", Twine(PIELevel));
-    Builder.defineMacro("__pie__", Twine(PIELevel));
+    if (LangOpts.PIE) {
+      Builder.defineMacro("__PIE__", Twine(PICLevel));
+      Builder.defineMacro("__pie__", Twine(PICLevel));
+    }
   }
 
   // Macros to control C99 numerics and <float.h>
@@ -922,13 +922,24 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
   }
 
   // OpenMP definition
-  if (LangOpts.OpenMP) {
-    // OpenMP 2.2:
-    //   In implementations that support a preprocessor, the _OPENMP
-    //   macro name is defined to have the decimal value yyyymm where
-    //   yyyy and mm are the year and the month designations of the
-    //   version of the OpenMP API that the implementation support.
+  // OpenMP 2.2:
+  //   In implementations that support a preprocessor, the _OPENMP
+  //   macro name is defined to have the decimal value yyyymm where
+  //   yyyy and mm are the year and the month designations of the
+  //   version of the OpenMP API that the implementation support.
+  switch (LangOpts.OpenMP) {
+  case 0:
+    break;
+  case 40:
     Builder.defineMacro("_OPENMP", "201307");
+    break;
+  case 45:
+    Builder.defineMacro("_OPENMP", "201511");
+    break;
+  default:
+    // Default version is OpenMP 3.1
+    Builder.defineMacro("_OPENMP", "201107");
+    break;
   }
 
   // CUDA device path compilaton
@@ -938,6 +949,12 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
     Builder.defineMacro("__CUDA_ARCH__");
   }
 
+  // We need to communicate this to our CUDA header wrapper, which in turn
+  // informs the proper CUDA headers of this choice.
+  if (LangOpts.CUDADeviceApproxTranscendentals || LangOpts.FastMath) {
+    Builder.defineMacro("__CLANG_CUDA_APPROX_TRANSCENDENTALS__");
+  }
+
   // OpenCL definitions.
   if (LangOpts.OpenCL) {
 #define OPENCLEXT(Ext) \
@@ -945,6 +962,11 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
         LangOpts.OpenCLVersion)) \
       Builder.defineMacro(#Ext);
 #include "clang/Basic/OpenCLExtensions.def"
+  }
+
+  if (TI.hasInt128Type() && LangOpts.CPlusPlus && LangOpts.GNUMode) {
+    Builder.defineMacro("__GLIBCXX_TYPE_INT_N_0", "__int128");
+    Builder.defineMacro("__GLIBCXX_BITSIZE_INT_N_0", "128");
   }
 
   // Get other target #defines.

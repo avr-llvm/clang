@@ -37,6 +37,7 @@ class Value;
 namespace clang {
 class Expr;
 class GlobalDecl;
+class OMPDependClause;
 class OMPExecutableDirective;
 class OMPLoopDirective;
 class VarDecl;
@@ -201,6 +202,12 @@ private:
   ///    } flags;
   /// } kmp_depend_info_t;
   QualType KmpDependInfoTy;
+  /// struct kmp_dim {  // loop bounds info casted to kmp_int64
+  ///  kmp_int64 lo; // lower
+  ///  kmp_int64 up; // upper
+  ///  kmp_int64 st; // stride
+  /// };
+  QualType KmpDimTy;
   /// \brief Type struct __tgt_offload_entry{
   ///   void      *addr;       // Pointer to the offload entry info.
   ///                          // (function or global)
@@ -990,29 +997,71 @@ public:
   virtual void emitNumTeamsClause(CodeGenFunction &CGF, const Expr *NumTeams,
                                   const Expr *ThreadLimit, SourceLocation Loc);
 
+  /// Struct that keeps all the relevant information that should be kept
+  /// throughout a 'target data' region.
+  class TargetDataInfo {
+    /// Set to true if device pointer information have to be obtained.
+    bool RequiresDevicePointerInfo = false;
+
+  public:
+    /// The array of base pointer passed to the runtime library.
+    llvm::Value *BasePointersArray = nullptr;
+    /// The array of section pointers passed to the runtime library.
+    llvm::Value *PointersArray = nullptr;
+    /// The array of sizes passed to the runtime library.
+    llvm::Value *SizesArray = nullptr;
+    /// The array of map types passed to the runtime library.
+    llvm::Value *MapTypesArray = nullptr;
+    /// The total number of pointers passed to the runtime library.
+    unsigned NumberOfPtrs = 0u;
+    /// Map between the a declaration of a capture and the corresponding base
+    /// pointer address where the runtime returns the device pointers.
+    llvm::DenseMap<const ValueDecl *, Address> CaptureDeviceAddrMap;
+
+    explicit TargetDataInfo() {}
+    explicit TargetDataInfo(bool RequiresDevicePointerInfo)
+        : RequiresDevicePointerInfo(RequiresDevicePointerInfo) {}
+    /// Clear information about the data arrays.
+    void clearArrayInfo() {
+      BasePointersArray = nullptr;
+      PointersArray = nullptr;
+      SizesArray = nullptr;
+      MapTypesArray = nullptr;
+      NumberOfPtrs = 0u;
+    }
+    /// Return true if the current target data information has valid arrays.
+    bool isValid() {
+      return BasePointersArray && PointersArray && SizesArray &&
+             MapTypesArray && NumberOfPtrs;
+    }
+    bool requiresDevicePointerInfo() { return RequiresDevicePointerInfo; }
+  };
+
   /// \brief Emit the target data mapping code associated with \a D.
   /// \param D Directive to emit.
-  /// \param IfCond Expression evaluated in if clause associated with the target
-  /// directive, or null if no if clause is used.
+  /// \param IfCond Expression evaluated in if clause associated with the
+  /// target directive, or null if no device clause is used.
   /// \param Device Expression evaluated in device clause associated with the
   /// target directive, or null if no device clause is used.
-  /// \param CodeGen Function that emits the enclosed region.
+  /// \param Info A record used to store information that needs to be preserved
+  /// until the region is closed.
   virtual void emitTargetDataCalls(CodeGenFunction &CGF,
                                    const OMPExecutableDirective &D,
                                    const Expr *IfCond, const Expr *Device,
-                                   const RegionCodeGenTy &CodeGen);
+                                   const RegionCodeGenTy &CodeGen,
+                                   TargetDataInfo &Info);
 
-  /// \brief Emit the target enter or exit data mapping code associated with
-  /// directive \a D.
+  /// \brief Emit the data mapping/movement code associated with the directive
+  /// \a D that should be of the form 'target [{enter|exit} data | update]'.
   /// \param D Directive to emit.
   /// \param IfCond Expression evaluated in if clause associated with the target
   /// directive, or null if no if clause is used.
   /// \param Device Expression evaluated in device clause associated with the
   /// target directive, or null if no device clause is used.
-  virtual void emitTargetEnterOrExitDataCall(CodeGenFunction &CGF,
-                                             const OMPExecutableDirective &D,
-                                             const Expr *IfCond,
-                                             const Expr *Device);
+  virtual void emitTargetDataStandAloneCall(CodeGenFunction &CGF,
+                                            const OMPExecutableDirective &D,
+                                            const Expr *IfCond,
+                                            const Expr *Device);
 
   /// Marks function \a Fn with properly mangled versions of vector functions.
   /// \param FD Function marked as 'declare simd'.
@@ -1020,6 +1069,16 @@ public:
   /// attributes.
   virtual void emitDeclareSimdFunction(const FunctionDecl *FD,
                                        llvm::Function *Fn);
+
+  /// Emit initialization for doacross loop nesting support.
+  /// \param D Loop-based construct used in doacross nesting construct.
+  virtual void emitDoacrossInit(CodeGenFunction &CGF,
+                                const OMPLoopDirective &D);
+
+  /// Emit code for doacross ordered directive with 'depend' clause.
+  /// \param C 'depend' clause with 'sink|source' dependency kind.
+  virtual void emitDoacrossOrdered(CodeGenFunction &CGF,
+                                   const OMPDependClause *C);
 };
 
 } // namespace CodeGen

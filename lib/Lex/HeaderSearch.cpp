@@ -26,8 +26,8 @@
 #include "llvm/Support/Capacity.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
-#include "llvm/Support/raw_ostream.h"
 #include <cstdio>
+#include <utility>
 #if defined(LLVM_ON_UNIX)
 #include <limits.h>
 #endif
@@ -55,8 +55,9 @@ HeaderSearch::HeaderSearch(IntrusiveRefCntPtr<HeaderSearchOptions> HSOpts,
                            SourceManager &SourceMgr, DiagnosticsEngine &Diags,
                            const LangOptions &LangOpts,
                            const TargetInfo *Target)
-    : HSOpts(HSOpts), Diags(Diags), FileMgr(SourceMgr.getFileManager()),
-      FrameworkMap(64), ModMap(SourceMgr, Diags, LangOpts, Target, *this) {
+    : HSOpts(std::move(HSOpts)), Diags(Diags),
+      FileMgr(SourceMgr.getFileManager()), FrameworkMap(64),
+      ModMap(SourceMgr, Diags, LangOpts, Target, *this) {
   AngledDirIdx = 0;
   SystemDirIdx = 0;
   NoCurDirSearch = false;
@@ -120,11 +121,29 @@ const HeaderMap *HeaderSearch::CreateHeaderMap(const FileEntry *FE) {
 std::string HeaderSearch::getModuleFileName(Module *Module) {
   const FileEntry *ModuleMap =
       getModuleMap().getModuleMapFileForUniquing(Module);
-  return getModuleFileName(Module->Name, ModuleMap->getName());
+  return getModuleFileName(Module->Name, ModuleMap->getName(),
+                           /*UsePrebuiltPath*/false);
 }
 
 std::string HeaderSearch::getModuleFileName(StringRef ModuleName,
-                                            StringRef ModuleMapPath) {
+                                            StringRef ModuleMapPath,
+                                            bool UsePrebuiltPath) {
+  if (UsePrebuiltPath) {
+    if (HSOpts->PrebuiltModulePaths.empty())
+      return std::string();
+
+    // Go though each prebuilt module path and try to find the pcm file.
+    for (const std::string &Dir : HSOpts->PrebuiltModulePaths) {
+      SmallString<256> Result(Dir);
+      llvm::sys::fs::make_absolute(Result);
+
+      llvm::sys::path::append(Result, ModuleName + ".pcm");
+      if (getFileMgr().getFile(Result.str()))
+        return Result.str().str();
+    }
+    return std::string();
+  }
+
   // If we don't have a module cache path or aren't supposed to use one, we
   // can't do anything.
   if (getModuleCachePath().empty())
@@ -248,8 +267,9 @@ const char *DirectoryLookup::getName() const {
 }
 
 const FileEntry *HeaderSearch::getFileAndSuggestModule(
-    StringRef FileName, const DirectoryEntry *Dir, bool IsSystemHeaderDir,
-    Module *RequestingModule, ModuleMap::KnownHeader *SuggestedModule) {
+    StringRef FileName, SourceLocation IncludeLoc, const DirectoryEntry *Dir,
+    bool IsSystemHeaderDir, Module *RequestingModule,
+    ModuleMap::KnownHeader *SuggestedModule) {
   // If we have a module map that might map this header, load it and
   // check whether we'll have a suggestion for a module.
   const FileEntry *File = getFileMgr().getFile(FileName, /*OpenFile=*/true);
@@ -270,6 +290,7 @@ const FileEntry *HeaderSearch::getFileAndSuggestModule(
 const FileEntry *DirectoryLookup::LookupFile(
     StringRef &Filename,
     HeaderSearch &HS,
+    SourceLocation IncludeLoc,
     SmallVectorImpl<char> *SearchPath,
     SmallVectorImpl<char> *RelativePath,
     Module *RequestingModule,
@@ -295,7 +316,7 @@ const FileEntry *DirectoryLookup::LookupFile(
       RelativePath->append(Filename.begin(), Filename.end());
     }
 
-    return HS.getFileAndSuggestModule(TmpDir, getDir(),
+    return HS.getFileAndSuggestModule(TmpDir, IncludeLoc, getDir(),
                                       isSystemHeaderDirectory(),
                                       RequestingModule, SuggestedModule);
   }
@@ -583,7 +604,7 @@ const FileEntry *HeaderSearch::LookupFile(
       RelativePath->append(Filename.begin(), Filename.end());
     }
     // Otherwise, just return the file.
-    return getFileAndSuggestModule(Filename, nullptr,
+    return getFileAndSuggestModule(Filename, IncludeLoc, nullptr,
                                    /*IsSystemHeaderDir*/false,
                                    RequestingModule, SuggestedModule);
   }
@@ -620,7 +641,7 @@ const FileEntry *HeaderSearch::LookupFile(
           Includer ? getFileInfo(Includer).DirInfo != SrcMgr::C_User :
           BuildSystemModule;
       if (const FileEntry *FE = getFileAndSuggestModule(
-              TmpDir, IncluderAndDir.second, IncluderIsSystemHeader,
+              TmpDir, IncludeLoc, IncluderAndDir.second, IncluderIsSystemHeader,
               RequestingModule, SuggestedModule)) {
         if (!Includer) {
           assert(First && "only first includer can have no file");
@@ -711,7 +732,7 @@ const FileEntry *HeaderSearch::LookupFile(
     bool InUserSpecifiedSystemFramework = false;
     bool HasBeenMapped = false;
     const FileEntry *FE = SearchDirs[i].LookupFile(
-        Filename, *this, SearchPath, RelativePath, RequestingModule,
+        Filename, *this, IncludeLoc, SearchPath, RelativePath, RequestingModule,
         SuggestedModule, InUserSpecifiedSystemFramework, HasBeenMapped,
         MappedName);
     if (HasBeenMapped) {

@@ -13,6 +13,7 @@
 
 #include "CodeGenFunction.h"
 #include "CGBlocks.h"
+#include "CGCXXABI.h"
 #include "CGCleanup.h"
 #include "CGDebugInfo.h"
 #include "CGOpenCLRuntime.h"
@@ -77,6 +78,7 @@ void CodeGenFunction::EmitDecl(const Decl &D) {
   case Decl::PragmaDetectMismatch:
   case Decl::AccessSpec:
   case Decl::LinkageSpec:
+  case Decl::Export:
   case Decl::ObjCPropertyImpl:
   case Decl::FileScopeAsm:
   case Decl::Friend:
@@ -85,7 +87,9 @@ void CodeGenFunction::EmitDecl(const Decl &D) {
   case Decl::Captured:
   case Decl::ClassScopeFunctionSpecialization:
   case Decl::UsingShadow:
+  case Decl::ConstructorUsingShadow:
   case Decl::ObjCTypeParam:
+  case Decl::Binding:
     llvm_unreachable("Declaration should not be in declstmts!");
   case Decl::Function:  // void X();
   case Decl::Record:    // struct/union/class X;
@@ -113,11 +117,17 @@ void CodeGenFunction::EmitDecl(const Decl &D) {
     if (CGDebugInfo *DI = getDebugInfo())
       DI->EmitUsingDirective(cast<UsingDirectiveDecl>(D));
     return;
-  case Decl::Var: {
+  case Decl::Var:
+  case Decl::Decomposition: {
     const VarDecl &VD = cast<VarDecl>(D);
     assert(VD.isLocalVarDecl() &&
            "Should not see file-scope variables inside a function!");
-    return EmitVarDecl(VD);
+    EmitVarDecl(VD);
+    if (auto *DD = dyn_cast<DecompositionDecl>(&VD))
+      for (auto *B : DD->bindings())
+        if (auto *HD = B->getHoldingVar())
+          EmitVarDecl(*HD);
+    return;
   }
 
   case Decl::OMPDeclareReduction:
@@ -528,19 +538,6 @@ namespace {
       CGF.EmitCall(FnInfo, CleanupFn, ReturnValueSlot(), Args);
     }
   };
-
-  /// A cleanup to call @llvm.lifetime.end.
-  class CallLifetimeEnd final : public EHScopeStack::Cleanup {
-    llvm::Value *Addr;
-    llvm::Value *Size;
-  public:
-    CallLifetimeEnd(Address addr, llvm::Value *size)
-      : Addr(addr.getPointer()), Size(size) {}
-
-    void Emit(CodeGenFunction &CGF, Flags flags) override {
-      CGF.EmitLifetimeEnd(Size, Addr);
-    }
-  };
 } // end anonymous namespace
 
 /// EmitAutoVarWithLifetime - Does the setup required for an automatic
@@ -679,10 +676,10 @@ void CodeGenFunction::EmitScalarInit(const Expr *init, const ValueDecl *D,
     EmitStoreThroughLValue(RValue::get(value), lvalue, true);
     return;
   }
-  
+
   if (const CXXDefaultInitExpr *DIE = dyn_cast<CXXDefaultInitExpr>(init))
     init = DIE->getExpr();
-    
+
   // If we're emitting a value with lifetime, we have to do the
   // initialization *before* we leave the cleanup scopes.
   if (const ExprWithCleanups *ewc = dyn_cast<ExprWithCleanups>(init)) {
@@ -832,7 +829,7 @@ static bool canEmitInitWithFewStoresAfterMemset(llvm::Constant *Init,
     }
     return true;
   }
-  
+
   if (llvm::ConstantDataSequential *CDS =
         dyn_cast<llvm::ConstantDataSequential>(Init)) {
     for (unsigned i = 0, e = CDS->getNumElements(); i != e; ++i) {
@@ -861,9 +858,9 @@ static void emitStoresForInitAfterMemset(llvm::Constant *Init, llvm::Value *Loc,
     Builder.CreateDefaultAlignedStore(Init, Loc, isVolatile);
     return;
   }
-  
-  if (llvm::ConstantDataSequential *CDS = 
-        dyn_cast<llvm::ConstantDataSequential>(Init)) {
+
+  if (llvm::ConstantDataSequential *CDS =
+          dyn_cast<llvm::ConstantDataSequential>(Init)) {
     for (unsigned i = 0, e = CDS->getNumElements(); i != e; ++i) {
       llvm::Constant *Elt = CDS->getElementAsConstant(i);
 
@@ -919,18 +916,29 @@ void CodeGenFunction::EmitAutoVarDecl(const VarDecl &D) {
   EmitAutoVarCleanups(emission);
 }
 
+/// shouldEmitLifetimeMarkers - Decide whether we need emit the life-time
+/// markers.
+static bool shouldEmitLifetimeMarkers(const CodeGenOptions &CGOpts,
+                                      const LangOptions &LangOpts) {
+  // Asan uses markers for use-after-scope checks.
+  if (CGOpts.SanitizeAddressUseAfterScope)
+    return true;
+
+  // Disable lifetime markers in msan builds.
+  // FIXME: Remove this when msan works with lifetime markers.
+  if (LangOpts.Sanitize.has(SanitizerKind::Memory))
+    return false;
+
+  // For now, only in optimized builds.
+  return CGOpts.OptimizationLevel != 0;
+}
+
 /// Emit a lifetime.begin marker if some criteria are satisfied.
 /// \return a pointer to the temporary size Value if a marker was emitted, null
 /// otherwise
 llvm::Value *CodeGenFunction::EmitLifetimeStart(uint64_t Size,
                                                 llvm::Value *Addr) {
-  // For now, only in optimized builds.
-  if (CGM.getCodeGenOpts().OptimizationLevel == 0)
-    return nullptr;
-
-  // Disable lifetime markers in msan builds.
-  // FIXME: Remove this when msan works with lifetime markers.
-  if (getLangOpts().Sanitize.has(SanitizerKind::Memory))
+  if (!shouldEmitLifetimeMarkers(CGM.getCodeGenOpts(), getLangOpts()))
     return nullptr;
 
   llvm::Value *SizeV = llvm::ConstantInt::get(Int64Ty, Size);
@@ -1263,7 +1271,7 @@ void CodeGenFunction::EmitAutoVarInit(const AutoVarEmission &emission) {
                                llvm::GlobalValue::PrivateLinkage,
                                constant, Name);
     GV->setAlignment(Loc.getAlignment().getQuantity());
-    GV->setUnnamedAddr(true);
+    GV->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
 
     Address SrcPtr = Address(GV, Loc.getAlignment());
     if (SrcPtr.getType() != BP)
@@ -1394,13 +1402,10 @@ void CodeGenFunction::EmitAutoVarCleanups(const AutoVarEmission &emission) {
 
   // Make sure we call @llvm.lifetime.end.  This needs to happen
   // *last*, so the cleanup needs to be pushed *first*.
-  if (emission.useLifetimeMarkers()) {
-    EHStack.pushCleanup<CallLifetimeEnd>(NormalAndEHCleanup,
+  if (emission.useLifetimeMarkers())
+    EHStack.pushCleanup<CallLifetimeEnd>(NormalEHLifetimeMarker,
                                          emission.getAllocatedAddress(),
                                          emission.getSizeForLifetimeMarkers());
-    EHCleanupScope &cleanup = cast<EHCleanupScope>(*EHStack.begin());
-    cleanup.setLifetimeMarker();
-  }
 
   // Check the type for a cleanup.
   if (QualType::DestructionKind dtorKind = D.getType().isDestructedType())
@@ -1765,6 +1770,24 @@ void CodeGenFunction::EmitParmDecl(const VarDecl &D, ParamValue Arg,
     if (BlockInfo) {
       setBlockContextParameter(IPD, ArgNo, Arg.getDirectValue());
       return;
+    }
+
+    // Apply any prologue 'this' adjustments required by the ABI. Be careful to
+    // handle the case where 'this' is passed indirectly as part of an inalloca
+    // struct.
+    if (const CXXMethodDecl *MD =
+            dyn_cast_or_null<CXXMethodDecl>(CurCodeDecl)) {
+      if (MD->isVirtual() && IPD == CXXABIThisDecl) {
+        llvm::Value *This = Arg.isIndirect()
+                                ? Builder.CreateLoad(Arg.getIndirectAddress())
+                                : Arg.getDirectValue();
+        This = CGM.getCXXABI().adjustThisParameterInVirtualFunctionPrologue(
+            *this, CurGD, This);
+        if (Arg.isIndirect())
+          Builder.CreateStore(This, Arg.getIndirectAddress());
+        else
+          Arg = ParamValue::forDirect(This);
+      }
     }
   }
 

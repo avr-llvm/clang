@@ -12,7 +12,6 @@
 
 #include "clang/Basic/LLVM.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/Option/Option.h"
 #include <functional>
 #include <string>
@@ -107,6 +106,7 @@ public:
 private:
   multilib_list Multilibs;
   IncludeDirsFunc IncludeCallback;
+  IncludeDirsFunc FilePathsCallback;
 
 public:
   MultilibSet() {}
@@ -157,6 +157,12 @@ public:
     return *this;
   }
   const IncludeDirsFunc &includeDirsCallback() const { return IncludeCallback; }
+
+  MultilibSet &setFilePathsCallback(IncludeDirsFunc F) {
+    FilePathsCallback = std::move(F);
+    return *this;
+  }
+  const IncludeDirsFunc &filePathsCallback() const { return FilePathsCallback; }
 
 private:
   /// Apply the filter to Multilibs and return the subset that remains
