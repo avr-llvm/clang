@@ -323,29 +323,31 @@ and can be used with `AFL <http://lcamtuf.coredump.cx/afl>`__.
 
 Tracing PCs with guards
 =======================
-Another *experimental* feature that tries to combine `trace-pc`,
-`8bit-counters` and boolean coverage
+Another *experimental* feature that tries to combine the functionality of `trace-pc`,
+`8bit-counters` and boolean coverage.
 
 With ``-fsanitize-coverage=trace-pc-guard`` the compiler will insert the following code
 on every edge:
 
 .. code-block:: none
 
-   if (guard_variable != 0xff)
+   if (guard_variable)
      __sanitizer_cov_trace_pc_guard(&guard_variable)
 
-Every edge will have its own 1-byte `guard_variable`.
-All such guard variables will reside in a dedicated section
-(i.e. they essentially form an array).
+Every edge will have its own `guard_variable` (uintptr_t).
 
 The compler will also insert a module constructor that will call
 
 .. code-block:: c++
 
-   // The guard section is the address range [start, stop).
-   __sanitizer_cov_trace_pc_guard_init(void *start, void *stop);
+   // The guards are [start, stop).
+   // This function may be called multiple times with the same values of start/stop.
+   __sanitizer_cov_trace_pc_guard_init(uintptr_t *start, uintptr_t *stop);
 
-The functions `__sanitizer_cov_trace_pc_guard[_init]` should be defined by the user.
+Similarly to `trace-pc,indirect-calls`, with `trace-pc-guards,indirect-calls`
+``__sanitizer_cov_trace_pc_indirect(void *callee)`` will be inserted on every indirect call.
+
+The functions `__sanitizer_cov_trace_pc_*` should be defined by the user.
 
 Tracing data flow
 =================
