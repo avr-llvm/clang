@@ -4233,9 +4233,14 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       Args.hasArg(options::OPT_frewrite_map_file_EQ)) {
     for (const Arg *A : Args.filtered(options::OPT_frewrite_map_file,
                                       options::OPT_frewrite_map_file_EQ)) {
-      CmdArgs.push_back("-frewrite-map-file");
-      CmdArgs.push_back(A->getValue());
-      A->claim();
+      StringRef Map = A->getValue();
+      if (!llvm::sys::fs::exists(Map)) {
+        D.Diag(diag::err_drv_no_such_file) << Map;
+      } else {
+        CmdArgs.push_back("-frewrite-map-file");
+        CmdArgs.push_back(A->getValue());
+        A->claim();
+      }
     }
   }
 
@@ -6120,6 +6125,33 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("-load");
     CmdArgs.push_back(A->getValue());
     A->claim();
+  }
+
+  // Setup statistics file output.
+  if (const Arg *A = Args.getLastArg(options::OPT_save_stats_EQ)) {
+    StringRef SaveStats = A->getValue();
+
+    SmallString<128> StatsFile;
+    bool DoSaveStats = false;
+    if (SaveStats == "obj") {
+      if (Output.isFilename()) {
+        StatsFile.assign(Output.getFilename());
+        llvm::sys::path::remove_filename(StatsFile);
+      }
+      DoSaveStats = true;
+    } else if (SaveStats == "cwd") {
+      DoSaveStats = true;
+    } else {
+      D.Diag(diag::err_drv_invalid_value) << A->getAsString(Args) << SaveStats;
+    }
+
+    if (DoSaveStats) {
+      StringRef BaseName = llvm::sys::path::filename(Input.getBaseInput());
+      llvm::sys::path::append(StatsFile, BaseName);
+      llvm::sys::path::replace_extension(StatsFile, "stats");
+      CmdArgs.push_back(Args.MakeArgString(Twine("-stats-file=") +
+                                           StatsFile));
+    }
   }
 
   // Forward -Xclang arguments to -cc1, and -mllvm arguments to the LLVM option

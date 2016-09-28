@@ -188,14 +188,16 @@ public:
         Injector(injector) {
     DigestAnalyzerOptions();
     if (Opts->PrintStats) {
-      llvm::EnableStatistics();
+      llvm::EnableStatistics(false);
       TUTotalTimer = new llvm::Timer("Analyzer Total Time");
     }
   }
 
   ~AnalysisConsumer() override {
-    if (Opts->PrintStats)
+    if (Opts->PrintStats) {
       delete TUTotalTimer;
+      llvm::PrintStatistics();
+    }
   }
 
   void DigestAnalyzerOptions() {
