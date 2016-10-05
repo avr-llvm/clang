@@ -1,5 +1,6 @@
 // RUN: %clang_cc1 -std=c++1z %s -emit-llvm -o - -triple %itanium_abi_triple | FileCheck %s --check-prefix=CHECK --check-prefix=CHECK-ITANIUM
-// RUN: %clang_cc1 -std=c++1z %s -emit-llvm -o - -triple %ms_abi_triple | FileCheck %s --check-prefix=CHECK --check-prefix=CHECK-WINDOWS
+// RUN: %clang_cc1 -std=c++1z %s -emit-llvm -o - -triple i686-windows | FileCheck %s --check-prefix=CHECK --check-prefix=CHECK-WINDOWS
+// RUN: %clang_cc1 -std=c++1z %s -emit-llvm -o - -triple x86_64-windows | FileCheck %s --check-prefix=CHECK --check-prefix=CHECK-WINDOWS
 
 struct B;
 struct A {
@@ -18,15 +19,25 @@ struct B {
 struct C {
   operator int *();
   A *operator->();
-  void operator->*(B);
+  void operator->*(A);
+  friend void operator->*(C, B);
 
   friend void operator<<(C, B);
   friend void operator>>(C, B);
   void operator<<(A);
   void operator>>(A);
 
-  void operator=(B);
-  void operator+=(B);
+  void operator=(A);
+  void operator+=(A);
+  friend void operator+=(C, B);
+
+  void operator,(A);
+  friend void operator,(C, B);
+
+  void operator&&(A);
+  void operator||(A);
+  friend void operator&&(C, B);
+  friend void operator||(C, B);
 };
 
 A make_a();
@@ -137,6 +148,17 @@ int dotstar_lhs_before_rhs() {
   int b = make_a_ptr()->*make_mem_ptr_a();
 
   // CHECK: call {{.*}}@{{.*}}make_c{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}make_a{{.*}}(
+  make_c()->*make_a();
+
+  // FIXME: For MS ABI, the order of destruction of parameters here will not be
+  // reverse construction order (parameters are destroyed left-to-right in the
+  // callee). That sadly seems unavoidable; the rules are not implementable as
+  // specified. If we changed parameter destruction order for these functions
+  // to right-to-left, we could make the destruction order match for all cases
+  // other than indirect calls, but we can't completely avoid the problem.
+  //
+  // CHECK: call {{.*}}@{{.*}}make_c{{.*}}(
   // CHECK: call {{.*}}@{{.*}}make_b{{.*}}(
   make_c()->*make_b();
 
@@ -154,61 +176,96 @@ int dotstar_lhs_before_rhs() {
 // CHECK: }
 }
 
-#if 0
-// CHECKDISABLED-LABEL: define {{.*}}@{{.*}}assign_lhs_before_rhs{{.*}}(
+
+// CHECK-LABEL: define {{.*}}@{{.*}}assign_rhs_before_lhs{{.*}}(
 void assign_rhs_before_lhs() {
   extern int &lhs_ref(), rhs();
 
-  // CHECKDISABLED: call {{.*}}@{{.*}}rhs{{.*}}(
-  // CHECKDISABLED: call {{.*}}@{{.*}}lhs_ref{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}rhs{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}lhs_ref{{.*}}(
   lhs_ref() = rhs();
 
-  // CHECKDISABLED: call {{.*}}@{{.*}}rhs{{.*}}(
-  // CHECKDISABLED: call {{.*}}@{{.*}}lhs_ref{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}rhs{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}lhs_ref{{.*}}(
   lhs_ref() += rhs();
 
-  // CHECKDISABLED: call {{.*}}@{{.*}}rhs{{.*}}(
-  // CHECKDISABLED: call {{.*}}@{{.*}}lhs_ref{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}rhs{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}lhs_ref{{.*}}(
   lhs_ref() %= rhs();
 
-  // CHECKDISABLED: call {{.*}}@{{.*}}make_b{{.*}}(
-  // CHECKDISABLED: call {{.*}}@{{.*}}make_c{{.*}}(
-  make_c() = make_b();
+  // CHECK: call {{.*}}@{{.*}}make_a{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}make_c{{.*}}(
+  make_c() = make_a();
 
-  // CHECKDISABLED: call {{.*}}@{{.*}}make_b{{.*}}(
-  // CHECKDISABLED: call {{.*}}@{{.*}}make_c{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}make_a{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}make_c{{.*}}(
+  make_c() += make_a();
+
+  // CHECK: call {{.*}}@{{.*}}make_b{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}make_c{{.*}}(
   make_c() += make_b();
-// CHECKDISABLED: }
+// CHECK: }
 }
-#endif
-#if 0
-// CHECKDISABLED-LABEL: define {{.*}}@{{.*}}shift_lhs_before_rhs{{.*}}(
+
+// CHECK-LABEL: define {{.*}}@{{.*}}shift_lhs_before_rhs{{.*}}(
 void shift_lhs_before_rhs() {
   extern int lhs(), rhs();
 
-  // CHECKDISABLED: call {{.*}}@{{.*}}lhs{{.*}}(
-  // CHECKDISABLED: call {{.*}}@{{.*}}rhs{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}lhs{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}rhs{{.*}}(
   (void)(lhs() << rhs());
 
-  // CHECKDISABLED: call {{.*}}@{{.*}}lhs{{.*}}(
-  // CHECKDISABLED: call {{.*}}@{{.*}}rhs{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}lhs{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}rhs{{.*}}(
   (void)(lhs() >> rhs());
 
-  // CHECKDISABLED: call {{.*}}@{{.*}}make_c{{.*}}(
-  // CHECKDISABLED: call {{.*}}@{{.*}}make_a{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}make_c{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}make_a{{.*}}(
   make_c() << make_a();
 
-  // CHECKDISABLED: call {{.*}}@{{.*}}make_c{{.*}}(
-  // CHECKDISABLED: call {{.*}}@{{.*}}make_a{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}make_c{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}make_a{{.*}}(
   make_c() >> make_a();
 
-  // CHECKDISABLED: call {{.*}}@{{.*}}make_c{{.*}}(
-  // CHECKDISABLED: call {{.*}}@{{.*}}make_b{{.*}}(
+  // FIXME: This is not correct for Windows ABIs, see above.
+  // CHECK: call {{.*}}@{{.*}}make_c{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}make_b{{.*}}(
   make_c() << make_b();
 
-  // CHECKDISABLED: call {{.*}}@{{.*}}make_c{{.*}}(
-  // CHECKDISABLED: call {{.*}}@{{.*}}make_b{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}make_c{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}make_b{{.*}}(
   make_c() >> make_b();
-// CHECKDISABLED: }
+// CHECK: }
 }
-#endif
+
+// CHECK-LABEL: define {{.*}}@{{.*}}comma_lhs_before_rhs{{.*}}(
+void comma_lhs_before_rhs() {
+  // CHECK: call {{.*}}@{{.*}}make_c{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}make_a{{.*}}(
+  make_c() , make_a();
+
+  // FIXME: This is not correct for Windows ABIs, see above.
+  // CHECK: call {{.*}}@{{.*}}make_c{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}make_b{{.*}}(
+  make_c() , make_b();
+}
+
+// CHECK-LABEL: define {{.*}}@{{.*}}andor_lhs_before_rhs{{.*}}(
+void andor_lhs_before_rhs() {
+  // CHECK: call {{.*}}@{{.*}}make_c{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}make_a{{.*}}(
+  make_c() && make_a();
+
+  // CHECK: call {{.*}}@{{.*}}make_c{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}make_a{{.*}}(
+  make_c() || make_a();
+
+  // FIXME: This is not correct for Windows ABIs, see above.
+  // CHECK: call {{.*}}@{{.*}}make_c{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}make_b{{.*}}(
+  make_c() && make_b();
+
+  // CHECK: call {{.*}}@{{.*}}make_c{{.*}}(
+  // CHECK: call {{.*}}@{{.*}}make_b{{.*}}(
+  make_c() || make_b();
+}

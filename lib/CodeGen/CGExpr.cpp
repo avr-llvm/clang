@@ -708,6 +708,8 @@ static bool isFlexibleArrayMemberExpr(const Expr *E) {
           DeclContext::decl_iterator(const_cast<FieldDecl *>(FD)));
       return ++FI == FD->getParent()->field_end();
     }
+  } else if (const auto *IRE = dyn_cast<ObjCIvarRefExpr>(E)) {
+    return IRE->getDecl()->getNextIvar() == nullptr;
   }
 
   return false;
@@ -4121,8 +4123,35 @@ RValue CodeGenFunction::EmitCall(QualType CalleeType, llvm::Value *Callee,
   if (Chain)
     Args.add(RValue::get(Builder.CreateBitCast(Chain, CGM.VoidPtrTy)),
              CGM.getContext().VoidPtrTy);
+
+  // C++17 requires that we evaluate arguments to a call using assignment syntax
+  // right-to-left, and that we evaluate arguments to certain other operators
+  // left-to-right. Note that we allow this to override the order dictated by
+  // the calling convention on the MS ABI, which means that parameter
+  // destruction order is not necessarily reverse construction order.
+  // FIXME: Revisit this based on C++ committee response to unimplementability.
+  EvaluationOrder Order = EvaluationOrder::Default;
+  if (auto *OCE = dyn_cast<CXXOperatorCallExpr>(E)) {
+    if (OCE->isAssignmentOp())
+      Order = EvaluationOrder::ForceRightToLeft;
+    else {
+      switch (OCE->getOperator()) {
+      case OO_LessLess:
+      case OO_GreaterGreater:
+      case OO_AmpAmp:
+      case OO_PipePipe:
+      case OO_Comma:
+      case OO_ArrowStar:
+        Order = EvaluationOrder::ForceLeftToRight;
+        break;
+      default:
+        break;
+      }
+    }
+  }
+
   EmitCallArgs(Args, dyn_cast<FunctionProtoType>(FnType), E->arguments(),
-               E->getDirectCallee(), /*ParamsToSkip*/ 0);
+               E->getDirectCallee(), /*ParamsToSkip*/ 0, Order);
 
   const CGFunctionInfo &FnInfo = CGM.getTypes().arrangeFreeFunctionCall(
       Args, FnType, /*isChainCall=*/Chain);
