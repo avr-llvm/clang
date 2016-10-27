@@ -2811,20 +2811,21 @@ enum FormatAttrKind {
 /// types.
 static FormatAttrKind getFormatAttrKind(StringRef Format) {
   return llvm::StringSwitch<FormatAttrKind>(Format)
-    // Check for formats that get handled specially.
-    .Case("NSString", NSStringFormat)
-    .Case("CFString", CFStringFormat)
-    .Case("strftime", StrftimeFormat)
+      // Check for formats that get handled specially.
+      .Case("NSString", NSStringFormat)
+      .Case("CFString", CFStringFormat)
+      .Case("strftime", StrftimeFormat)
 
-    // Otherwise, check for supported formats.
-    .Cases("scanf", "printf", "printf0", "strfmon", SupportedFormat)
-    .Cases("cmn_err", "vcmn_err", "zcmn_err", SupportedFormat)
-    .Case("kprintf", SupportedFormat) // OpenBSD.
-    .Case("freebsd_kprintf", SupportedFormat) // FreeBSD.
-    .Case("os_trace", SupportedFormat)
+      // Otherwise, check for supported formats.
+      .Cases("scanf", "printf", "printf0", "strfmon", SupportedFormat)
+      .Cases("cmn_err", "vcmn_err", "zcmn_err", SupportedFormat)
+      .Case("kprintf", SupportedFormat)         // OpenBSD.
+      .Case("freebsd_kprintf", SupportedFormat) // FreeBSD.
+      .Case("os_trace", SupportedFormat)
+      .Case("os_log", SupportedFormat)
 
-    .Cases("gcc_diag", "gcc_cdiag", "gcc_cxxdiag", "gcc_tdiag", IgnoredFormat)
-    .Default(InvalidFormat);
+      .Cases("gcc_diag", "gcc_cdiag", "gcc_cxxdiag", "gcc_tdiag", IgnoredFormat)
+      .Default(InvalidFormat);
 }
 
 /// Handle __attribute__((init_priority(priority))) attributes based on
@@ -3051,10 +3052,14 @@ static void handleTransparentUnionAttr(Sema &S, Decl *D,
     return;
   }
 
+  if (FirstType->isIncompleteType())
+    return;
   uint64_t FirstSize = S.Context.getTypeSize(FirstType);
   uint64_t FirstAlign = S.Context.getTypeAlign(FirstType);
   for (; Field != FieldEnd; ++Field) {
     QualType FieldType = Field->getType();
+    if (FieldType->isIncompleteType())
+      return;
     // FIXME: this isn't fully correct; we also need to test whether the
     // members of the union would all have the same calling convention as the
     // first member of the union. Checking just the size and alignment isn't
@@ -3727,6 +3732,10 @@ static void handleSharedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
     S.Diag(Attr.getLoc(), diag::err_cuda_extern_shared) << VD;
     return;
   }
+  if (S.getLangOpts().CUDA && VD->hasLocalStorage() &&
+      S.CUDADiagIfHostCode(Attr.getLoc(), diag::err_cuda_host_shared)
+          << S.CurrentCUDATarget())
+    return;
   D->addAttr(::new (S.Context) CUDASharedAttr(
       Attr.getRange(), S.Context, Attr.getAttributeSpellingListIndex()));
 }
@@ -5326,9 +5335,15 @@ static void handleDeprecatedAttr(Sema &S, Decl *D, const AttributeList &Attr) {
         !(Attr.hasScope() && Attr.getScopeName()->isStr("gnu")))
       S.Diag(Attr.getLoc(), diag::ext_cxx14_attr) << Attr.getName();
 
-  D->addAttr(::new (S.Context) DeprecatedAttr(Attr.getRange(), S.Context, Str,
-                                   Replacement,
-                                   Attr.getAttributeSpellingListIndex()));
+  D->addAttr(::new (S.Context)
+                 DeprecatedAttr(Attr.getRange(), S.Context, Str, Replacement,
+                                Attr.getAttributeSpellingListIndex()));
+}
+
+static bool isGlobalVar(const Decl *D) {
+  if (const auto *S = dyn_cast<VarDecl>(D))
+    return S->hasGlobalStorage();
+  return false;
 }
 
 static void handleNoSanitizeAttr(Sema &S, Decl *D, const AttributeList &Attr) {
@@ -5346,7 +5361,9 @@ static void handleNoSanitizeAttr(Sema &S, Decl *D, const AttributeList &Attr) {
 
     if (parseSanitizerValue(SanitizerName, /*AllowGroups=*/true) == 0)
       S.Diag(LiteralLoc, diag::warn_unknown_sanitizer_ignored) << SanitizerName;
-
+    else if (isGlobalVar(D) && SanitizerName != "address")
+      S.Diag(D->getLocation(), diag::err_attribute_wrong_decl_type)
+          << Attr.getName() << ExpectedFunctionOrMethod;
     Sanitizers.push_back(SanitizerName);
   }
 
@@ -5359,12 +5376,14 @@ static void handleNoSanitizeSpecificAttr(Sema &S, Decl *D,
                                          const AttributeList &Attr) {
   StringRef AttrName = Attr.getName()->getName();
   normalizeName(AttrName);
-  StringRef SanitizerName =
-      llvm::StringSwitch<StringRef>(AttrName)
-          .Case("no_address_safety_analysis", "address")
-          .Case("no_sanitize_address", "address")
-          .Case("no_sanitize_thread", "thread")
-          .Case("no_sanitize_memory", "memory");
+  StringRef SanitizerName = llvm::StringSwitch<StringRef>(AttrName)
+                                .Case("no_address_safety_analysis", "address")
+                                .Case("no_sanitize_address", "address")
+                                .Case("no_sanitize_thread", "thread")
+                                .Case("no_sanitize_memory", "memory");
+  if (isGlobalVar(D) && SanitizerName != "address")
+    S.Diag(D->getLocation(), diag::err_attribute_wrong_decl_type)
+        << Attr.getName() << ExpectedFunction;
   D->addAttr(::new (S.Context)
                  NoSanitizeAttr(Attr.getRange(), S.Context, &SanitizerName, 1,
                                 Attr.getAttributeSpellingListIndex()));
@@ -6359,30 +6378,6 @@ static void handleDelayedForbiddenType(Sema &S, DelayedDiagnostic &diag,
   diag.Triggered = true;
 }
 
-static bool isDeclDeprecated(Decl *D) {
-  do {
-    if (D->isDeprecated())
-      return true;
-    // A category implicitly has the availability of the interface.
-    if (const ObjCCategoryDecl *CatD = dyn_cast<ObjCCategoryDecl>(D))
-      if (const ObjCInterfaceDecl *Interface = CatD->getClassInterface())
-        return Interface->isDeprecated();
-  } while ((D = cast_or_null<Decl>(D->getDeclContext())));
-  return false;
-}
-
-static bool isDeclUnavailable(Decl *D) {
-  do {
-    if (D->isUnavailable())
-      return true;
-    // A category implicitly has the availability of the interface.
-    if (const ObjCCategoryDecl *CatD = dyn_cast<ObjCCategoryDecl>(D))
-      if (const ObjCInterfaceDecl *Interface = CatD->getClassInterface())
-        return Interface->isUnavailable();
-  } while ((D = cast_or_null<Decl>(D->getDeclContext())));
-  return false;
-}
-
 static const AvailabilityAttr *getAttrForPlatform(ASTContext &Context,
                                                   const Decl *D) {
   // Check each AvailabilityAttr to find the one for this platform.
@@ -6411,6 +6406,71 @@ static const AvailabilityAttr *getAttrForPlatform(ASTContext &Context,
   return nullptr;
 }
 
+/// \brief whether we should emit a diagnostic for \c K and \c DeclVersion in
+/// the context of \c Ctx. For example, we should emit an unavailable diagnostic
+/// in a deprecated context, but not the other way around.
+static bool ShouldDiagnoseAvailabilityInContext(Sema &S, AvailabilityResult K,
+                                                VersionTuple DeclVersion,
+                                                Decl *Ctx) {
+  assert(K != AR_Available && "Expected an unavailable declaration here!");
+
+  // Checks if we should emit the availability diagnostic in the context of C.
+  auto CheckContext = [&](const Decl *C) {
+    if (K == AR_NotYetIntroduced) {
+      if (const AvailabilityAttr *AA = getAttrForPlatform(S.Context, C))
+        if (AA->getIntroduced() >= DeclVersion)
+          return true;
+    } else if (K == AR_Deprecated)
+      if (C->isDeprecated())
+        return true;
+
+    if (C->isUnavailable())
+      return true;
+    return false;
+  };
+
+  // FIXME: This is a temporary workaround! Some existing Apple headers depends
+  // on nested declarations in an @interface having the availability of the
+  // interface when they really shouldn't: they are members of the enclosing
+  // context, and can referenced from there.
+  if (S.OriginalLexicalContext && cast<Decl>(S.OriginalLexicalContext) != Ctx) {
+    auto *OrigCtx = cast<Decl>(S.OriginalLexicalContext);
+    if (CheckContext(OrigCtx))
+      return false;
+
+    // An implementation implicitly has the availability of the interface.
+    if (auto *CatOrImpl = dyn_cast<ObjCImplDecl>(OrigCtx)) {
+      if (const ObjCInterfaceDecl *Interface = CatOrImpl->getClassInterface())
+        if (CheckContext(Interface))
+          return false;
+    }
+    // A category implicitly has the availability of the interface.
+    else if (auto *CatD = dyn_cast<ObjCCategoryDecl>(OrigCtx))
+      if (const ObjCInterfaceDecl *Interface = CatD->getClassInterface())
+        if (CheckContext(Interface))
+          return false;
+  }
+
+  do {
+    if (CheckContext(Ctx))
+      return false;
+
+    // An implementation implicitly has the availability of the interface.
+    if (auto *CatOrImpl = dyn_cast<ObjCImplDecl>(Ctx)) {
+      if (const ObjCInterfaceDecl *Interface = CatOrImpl->getClassInterface())
+        if (CheckContext(Interface))
+          return false;
+    }
+    // A category implicitly has the availability of the interface.
+    else if (auto *CatD = dyn_cast<ObjCCategoryDecl>(Ctx))
+      if (const ObjCInterfaceDecl *Interface = CatD->getClassInterface())
+        if (CheckContext(Interface))
+          return false;
+  } while ((Ctx = cast_or_null<Decl>(Ctx->getDeclContext())));
+
+  return true;
+}
+
 static void DoEmitAvailabilityWarning(Sema &S, AvailabilityResult K,
                                       Decl *Ctx, const NamedDecl *D,
                                       StringRef Message, SourceLocation Loc,
@@ -6427,11 +6487,15 @@ static void DoEmitAvailabilityWarning(Sema &S, AvailabilityResult K,
   // Matches diag::note_availability_specified_here.
   unsigned available_here_select_kind;
 
-  // Don't warn if our current context is deprecated or unavailable.
+  VersionTuple DeclVersion;
+  if (const AvailabilityAttr *AA = getAttrForPlatform(S.Context, D))
+    DeclVersion = AA->getIntroduced();
+
+  if (!ShouldDiagnoseAvailabilityInContext(S, K, DeclVersion, Ctx))
+    return;
+
   switch (K) {
   case AR_Deprecated:
-    if (isDeclDeprecated(Ctx) || isDeclUnavailable(Ctx))
-      return;
     diag = !ObjCPropertyAccess ? diag::warn_deprecated
                                : diag::warn_property_method_deprecated;
     diag_message = diag::warn_deprecated_message;
@@ -6441,8 +6505,6 @@ static void DoEmitAvailabilityWarning(Sema &S, AvailabilityResult K,
     break;
 
   case AR_Unavailable:
-    if (isDeclUnavailable(Ctx))
-      return;
     diag = !ObjCPropertyAccess ? diag::err_unavailable
                                : diag::err_property_method_unavailable;
     diag_message = diag::err_unavailable_message;
@@ -6657,29 +6719,6 @@ void Sema::EmitAvailabilityWarning(AvailabilityResult AR,
                             ObjCProperty, ObjCPropertyAccess);
 }
 
-VersionTuple Sema::getVersionForDecl(const Decl *D) const {
-  assert(D && "Expected a declaration here!");
-
-  VersionTuple DeclVersion;
-  if (const auto *AA = getAttrForPlatform(getASTContext(), D))
-    DeclVersion = AA->getIntroduced();
-
-  const ObjCInterfaceDecl *Interface = nullptr;
-
-  if (const auto *MD = dyn_cast<ObjCMethodDecl>(D))
-    Interface = MD->getClassInterface();
-  else if (const auto *ID = dyn_cast<ObjCImplementationDecl>(D))
-    Interface = ID->getClassInterface();
-
-  if (Interface) {
-    if (const auto *AA = getAttrForPlatform(getASTContext(), Interface))
-      if (AA->getIntroduced() > DeclVersion)
-        DeclVersion = AA->getIntroduced();
-  }
-
-  return std::max(DeclVersion, Context.getTargetInfo().getPlatformMinVersion());
-}
-
 namespace {
 
 /// \brief This class implements -Wunguarded-availability.
@@ -6693,6 +6732,7 @@ class DiagnoseUnguardedAvailability
   typedef RecursiveASTVisitor<DiagnoseUnguardedAvailability> Base;
 
   Sema &SemaRef;
+  Decl *Ctx;
 
   /// Stack of potentially nested 'if (@available(...))'s.
   SmallVector<VersionTuple, 8> AvailabilityStack;
@@ -6700,9 +6740,10 @@ class DiagnoseUnguardedAvailability
   void DiagnoseDeclAvailability(NamedDecl *D, SourceRange Range);
 
 public:
-  DiagnoseUnguardedAvailability(Sema &SemaRef, VersionTuple BaseVersion)
-      : SemaRef(SemaRef) {
-    AvailabilityStack.push_back(BaseVersion);
+  DiagnoseUnguardedAvailability(Sema &SemaRef, Decl *Ctx)
+      : SemaRef(SemaRef), Ctx(Ctx) {
+    AvailabilityStack.push_back(
+        SemaRef.Context.getTargetInfo().getPlatformMinVersion());
   }
 
   void IssueDiagnostics(Stmt *S) { TraverseStmt(S); }
@@ -6735,8 +6776,8 @@ void DiagnoseUnguardedAvailability::DiagnoseDeclAvailability(
     NamedDecl *D, SourceRange Range) {
 
   VersionTuple ContextVersion = AvailabilityStack.back();
-  if (AvailabilityResult Result = SemaRef.ShouldDiagnoseAvailabilityOfDecl(
-          D, ContextVersion, nullptr)) {
+  if (AvailabilityResult Result =
+          SemaRef.ShouldDiagnoseAvailabilityOfDecl(D, nullptr)) {
     // All other diagnostic kinds have already been handled in
     // DiagnoseAvailabilityOfDecl.
     if (Result != AR_NotYetIntroduced)
@@ -6744,6 +6785,14 @@ void DiagnoseUnguardedAvailability::DiagnoseDeclAvailability(
 
     const AvailabilityAttr *AA = getAttrForPlatform(SemaRef.getASTContext(), D);
     VersionTuple Introduced = AA->getIntroduced();
+
+    if (ContextVersion >= Introduced)
+      return;
+
+    // If the context of this function is less available than D, we should not
+    // emit a diagnostic.
+    if (!ShouldDiagnoseAvailabilityInContext(SemaRef, Result, Introduced, Ctx))
+      return;
 
     SemaRef.Diag(Range.getBegin(), diag::warn_unguarded_availability)
         << Range << D
@@ -6819,6 +6868,5 @@ void Sema::DiagnoseUnguardedAvailabilityViolations(Decl *D) {
 
   assert(Body && "Need a body here!");
 
-  VersionTuple BaseVersion = getVersionForDecl(D);
-  DiagnoseUnguardedAvailability(*this, BaseVersion).IssueDiagnostics(Body);
+  DiagnoseUnguardedAvailability(*this, D).IssueDiagnostics(Body);
 }

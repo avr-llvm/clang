@@ -956,9 +956,9 @@ bool Sema::isSameOrCompatibleFunctionType(CanQualType Param,
   if (!ParamFunction || !ArgFunction)
     return Param == Arg;
 
-  // Noreturn adjustment.
+  // Noreturn and noexcept adjustment.
   QualType AdjustedParam;
-  if (IsNoReturnConversion(Param, Arg, AdjustedParam))
+  if (IsFunctionConversion(Param, Arg, AdjustedParam))
     return Arg == Context.getCanonicalType(AdjustedParam);
 
   // FIXME: Compatible calling conventions.
@@ -2729,6 +2729,13 @@ CheckOriginalCallArgDeduction(Sema &S, Sema::OriginalCallArg OriginalArg,
     // We don't want to keep the reference around any more.
     OriginalParamType = OriginalParamRef->getPointeeType();
 
+    // FIXME: Resolve core issue (no number yet): if the original P is a
+    // reference type and the transformed A is function type "noexcept F",
+    // the deduced A can be F.
+    QualType Tmp;
+    if (A->isFunctionType() && S.IsFunctionConversion(A, DeducedA, Tmp))
+      return false;
+
     Qualifiers AQuals = A.getQualifiers();
     Qualifiers DeducedAQuals = DeducedA.getQualifiers();
 
@@ -2757,20 +2764,18 @@ CheckOriginalCallArgDeduction(Sema &S, Sema::OriginalCallArg OriginalArg,
   }
 
   //    - The transformed A can be another pointer or pointer to member
-  //      type that can be converted to the deduced A via a qualification
-  //      conversion.
+  //      type that can be converted to the deduced A via a function pointer
+  //      conversion and/or a qualification conversion.
   //
-  // Also allow conversions which merely strip [[noreturn]] from function types
-  // (recursively) as an extension.
-  // FIXME: Currently, this doesn't play nicely with qualification conversions.
+  // Also allow conversions which merely strip __attribute__((noreturn)) from
+  // function types (recursively).
   bool ObjCLifetimeConversion = false;
   QualType ResultTy;
   if ((A->isAnyPointerType() || A->isMemberPointerType()) &&
       (S.IsQualificationConversion(A, DeducedA, false,
                                    ObjCLifetimeConversion) ||
-       S.IsNoReturnConversion(A, DeducedA, ResultTy)))
+       S.IsFunctionConversion(A, DeducedA, ResultTy)))
     return false;
-
 
   //    - If P is a class and P has the form simple-template-id, then the
   //      transformed A can be a derived class of the deduced A. [...]

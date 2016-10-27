@@ -499,19 +499,6 @@ void CodeGenModule::Release() {
   EmitVersionIdentMetadata();
 
   EmitTargetMetadata();
-
-  // Emit any deferred diagnostics gathered during codegen.  We didn't emit them
-  // when we first discovered them because that would have halted codegen,
-  // preventing us from gathering other deferred diags.
-  for (const PartialDiagnosticAt &DiagAt : DeferredDiags) {
-    SourceLocation Loc = DiagAt.first;
-    const PartialDiagnostic &PD = DiagAt.second;
-    DiagnosticBuilder Builder(getDiags().Report(Loc, PD.getDiagID()));
-    PD.Emit(Builder);
-  }
-  // Clear the deferred diags so they don't outlive the ASTContext's
-  // PartialDiagnostic allocator.
-  DeferredDiags.clear();
 }
 
 void CodeGenModule::UpdateCompletedType(const TagDecl *TD) {
@@ -2913,33 +2900,6 @@ void CodeGenModule::EmitGlobalFunctionDefinition(GlobalDecl GD,
                                                  llvm::GlobalValue *GV) {
   const auto *D = cast<FunctionDecl>(GD.getDecl());
 
-  // Emit this function's deferred diagnostics, if none of them are errors.  If
-  // any of them are errors, don't codegen the function, but also don't emit any
-  // of the diagnostics just yet.  Emitting an error during codegen stops
-  // further codegen, and we want to display as many deferred diags as possible.
-  // We'll emit the now twice-deferred diags at the very end of codegen.
-  //
-  // (If a function has both error and non-error diags, we don't emit the
-  // non-error diags here, because order can be significant, e.g. with notes
-  // that follow errors.)
-  auto Diags = D->takeDeferredDiags();
-  bool HasError = llvm::any_of(Diags, [this](const PartialDiagnosticAt &PDAt) {
-    return getDiags().getDiagnosticLevel(PDAt.second.getDiagID(), PDAt.first) >=
-           DiagnosticsEngine::Error;
-  });
-  if (HasError) {
-    DeferredDiags.insert(DeferredDiags.end(),
-                         std::make_move_iterator(Diags.begin()),
-                         std::make_move_iterator(Diags.end()));
-    return;
-  }
-  for (PartialDiagnosticAt &PDAt : Diags) {
-    const SourceLocation &Loc = PDAt.first;
-    const PartialDiagnostic &PD = PDAt.second;
-    DiagnosticBuilder Builder(getDiags().Report(Loc, PD.getDiagID()));
-    PD.Emit(Builder);
-  }
-
   // Compute the function info and LLVM type.
   const CGFunctionInfo &FI = getTypes().arrangeGlobalDeclaration(GD);
   llvm::FunctionType *Ty = getTypes().GetFunctionType(FI);
@@ -3991,9 +3951,33 @@ void CodeGenModule::EmitTopLevelDecl(Decl *D) {
         DI->EmitImportDecl(*Import);
     }
 
-    // Emit the module initializers.
-    for (auto *D : Context.getModuleInitializers(Import->getImportedModule()))
-      EmitTopLevelDecl(D);
+    // Find all of the submodules and emit the module initializers.
+    llvm::SmallPtrSet<clang::Module *, 16> Visited;
+    SmallVector<clang::Module *, 16> Stack;
+    Visited.insert(Import->getImportedModule());
+    Stack.push_back(Import->getImportedModule());
+
+    while (!Stack.empty()) {
+      clang::Module *Mod = Stack.pop_back_val();
+      if (!EmittedModuleInitializers.insert(Mod).second)
+        continue;
+
+      for (auto *D : Context.getModuleInitializers(Mod))
+        EmitTopLevelDecl(D);
+
+      // Visit the submodules of this module.
+      for (clang::Module::submodule_iterator Sub = Mod->submodule_begin(),
+                                             SubEnd = Mod->submodule_end();
+           Sub != SubEnd; ++Sub) {
+        // Skip explicit children; they need to be explicitly imported to emit
+        // the initializers.
+        if ((*Sub)->IsExplicit)
+          continue;
+
+        if (Visited.insert(*Sub).second)
+          Stack.push_back(*Sub);
+      }
+    }
     break;
   }
 

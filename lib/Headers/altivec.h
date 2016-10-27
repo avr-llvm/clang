@@ -2497,6 +2497,26 @@ vec_first_mismatch_or_eos_index(vector unsigned int __a,
   return __res[0] >> 5;
 }
 
+static __inline__ vector double  __ATTRS_o_ai
+vec_insert_exp(vector double __a, vector unsigned long long __b) {
+  return __builtin_vsx_xviexpdp((vector unsigned long long)__a,__b);
+}
+
+static __inline__ vector double  __ATTRS_o_ai
+vec_insert_exp(vector unsigned long long __a, vector unsigned long long __b) {
+  return __builtin_vsx_xviexpdp(__a,__b);
+}
+
+static __inline__ vector float  __ATTRS_o_ai
+vec_insert_exp(vector float __a, vector unsigned int __b) {
+  return __builtin_vsx_xviexpsp((vector unsigned int)__a,__b);
+}
+
+static __inline__ vector float  __ATTRS_o_ai
+vec_insert_exp(vector unsigned int __a, vector unsigned int __b) {
+  return __builtin_vsx_xviexpsp(__a,__b);
+}
+
 #endif
 
 /* vec_cpsgn */
@@ -15033,6 +15053,192 @@ vec_bperm(vector unsigned __int128 __a, vector unsigned char __b) {
 }
 #endif
 #endif
+
+
+/* vec_reve */
+
+static inline __ATTRS_o_ai vector bool char vec_reve(vector bool char __a) {
+  return __builtin_shufflevector(__a, __a, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6,
+                                 5, 4, 3, 2, 1, 0);
+}
+
+static inline __ATTRS_o_ai vector signed char vec_reve(vector signed char __a) {
+  return __builtin_shufflevector(__a, __a, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6,
+                                 5, 4, 3, 2, 1, 0);
+}
+
+static inline __ATTRS_o_ai vector unsigned char
+vec_reve(vector unsigned char __a) {
+  return __builtin_shufflevector(__a, __a, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6,
+                                 5, 4, 3, 2, 1, 0);
+}
+
+static inline __ATTRS_o_ai vector bool int vec_reve(vector bool int __a) {
+  return __builtin_shufflevector(__a, __a, 3, 2, 1, 0);
+}
+
+static inline __ATTRS_o_ai vector signed int vec_reve(vector signed int __a) {
+  return __builtin_shufflevector(__a, __a, 3, 2, 1, 0);
+}
+
+static inline __ATTRS_o_ai vector unsigned int
+vec_reve(vector unsigned int __a) {
+  return __builtin_shufflevector(__a, __a, 3, 2, 1, 0);
+}
+
+static inline __ATTRS_o_ai vector bool short vec_reve(vector bool short __a) {
+  return __builtin_shufflevector(__a, __a, 7, 6, 5, 4, 3, 2, 1, 0);
+}
+
+static inline __ATTRS_o_ai vector signed short
+vec_reve(vector signed short __a) {
+  return __builtin_shufflevector(__a, __a, 7, 6, 5, 4, 3, 2, 1, 0);
+}
+
+static inline __ATTRS_o_ai vector unsigned short
+vec_reve(vector unsigned short __a) {
+  return __builtin_shufflevector(__a, __a, 7, 6, 5, 4, 3, 2, 1, 0);
+}
+
+static inline __ATTRS_o_ai vector float vec_reve(vector float __a) {
+  return __builtin_shufflevector(__a, __a, 3, 2, 1, 0);
+}
+
+#ifdef __VSX__
+static inline __ATTRS_o_ai vector bool long long
+vec_reve(vector bool long long __a) {
+  return __builtin_shufflevector(__a, __a, 1, 0);
+}
+
+static inline __ATTRS_o_ai vector signed long long
+vec_reve(vector signed long long __a) {
+  return __builtin_shufflevector(__a, __a, 1, 0);
+}
+
+static inline __ATTRS_o_ai vector unsigned long long
+vec_reve(vector unsigned long long __a) {
+  return __builtin_shufflevector(__a, __a, 1, 0);
+}
+
+static inline __ATTRS_o_ai vector double vec_reve(vector double __a) {
+  return __builtin_shufflevector(__a, __a, 1, 0);
+}
+#endif
+
+/* vec_revb */
+static __inline__ vector bool char __ATTRS_o_ai
+vec_revb(vector bool char __a) {
+  return __a;
+}
+
+static __inline__ vector signed char __ATTRS_o_ai
+vec_revb(vector signed char __a) {
+  return __a;
+}
+
+static __inline__ vector unsigned char __ATTRS_o_ai
+vec_revb(vector unsigned char __a) {
+  return __a;
+}
+
+static __inline__ vector bool short __ATTRS_o_ai
+vec_revb(vector bool short __a) {
+  vector unsigned char __indices =
+      { 1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14 };
+  return vec_perm(__a, __a, __indices);
+}
+
+static __inline__ vector signed short __ATTRS_o_ai
+vec_revb(vector signed short __a) {
+  vector unsigned char __indices =
+      { 1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14 };
+  return vec_perm(__a, __a, __indices);
+}
+
+static __inline__ vector unsigned short __ATTRS_o_ai
+vec_revb(vector unsigned short __a) {
+  vector unsigned char __indices =
+     { 1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14 };
+  return vec_perm(__a, __a, __indices);
+}
+
+static __inline__ vector bool int __ATTRS_o_ai
+vec_revb(vector bool int __a) {
+  vector unsigned char __indices =
+      { 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12 };
+  return vec_perm(__a, __a, __indices);
+}
+
+static __inline__ vector signed int __ATTRS_o_ai
+vec_revb(vector signed int __a) {
+  vector unsigned char __indices =
+      { 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12 };
+  return vec_perm(__a, __a, __indices);
+}
+
+static __inline__ vector unsigned int __ATTRS_o_ai
+vec_revb(vector unsigned int __a) {
+  vector unsigned char __indices =
+      { 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12 };
+  return vec_perm(__a, __a, __indices);
+}
+
+static __inline__ vector float __ATTRS_o_ai
+vec_revb(vector float __a) {
+ vector unsigned char __indices =
+      { 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12 };
+ return vec_perm(__a, __a, __indices);
+}
+
+#ifdef __VSX__
+static __inline__ vector bool long long __ATTRS_o_ai
+vec_revb(vector bool long long __a) {
+  vector unsigned char __indices =
+      { 7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8 };
+  return vec_perm(__a, __a, __indices);
+}
+
+static __inline__ vector signed long long __ATTRS_o_ai
+vec_revb(vector signed long long __a) {
+  vector unsigned char __indices =
+      { 7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8 };
+  return vec_perm(__a, __a, __indices);
+}
+
+static __inline__ vector unsigned long long __ATTRS_o_ai
+vec_revb(vector unsigned long long __a) {
+  vector unsigned char __indices =
+      { 7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8 };
+  return vec_perm(__a, __a, __indices);
+}
+
+static __inline__ vector double __ATTRS_o_ai
+vec_revb(vector double __a) {
+  vector unsigned char __indices =
+      { 7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8 };
+  return vec_perm(__a, __a, __indices);
+}
+#endif /* End __VSX__ */
+
+#if defined(__POWER8_VECTOR__) && defined(__powerpc64__)
+static __inline__ vector signed __int128 __ATTRS_o_ai
+vec_revb(vector signed __int128 __a) {
+  vector unsigned char __indices =
+      { 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0 };
+  return (vector signed __int128)vec_perm((vector signed int)__a,
+                                          (vector signed int)__a,
+                                           __indices);
+}
+
+static __inline__ vector unsigned __int128 __ATTRS_o_ai
+vec_revb(vector unsigned __int128 __a) {
+  vector unsigned char __indices =
+      { 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0 };
+  return (vector unsigned __int128)vec_perm((vector signed int)__a,
+                                            (vector signed int)__a,
+                                             __indices);
+}
+#endif /* END __POWER8_VECTOR__ && __powerpc64__ */
 
 #undef __ATTRS_o_ai
 

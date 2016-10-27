@@ -420,6 +420,10 @@ private:
   /// \brief The complete set of modules that has been imported.
   llvm::SetVector<clang::Module *> ImportedModules;
 
+  /// \brief The set of modules for which the module initializers
+  /// have been emitted.
+  llvm::SmallPtrSet<clang::Module *, 16> EmittedModuleInitializers;
+
   /// \brief A vector of metadata strings.
   SmallVector<llvm::Metadata *, 16> LinkerOptionsMetadata;
 
@@ -489,10 +493,6 @@ private:
   /// maintain this mapping because identifiers may be formed from distinct
   /// MDNodes.
   llvm::DenseMap<QualType, llvm::Metadata *> MetadataIdMap;
-
-  /// Diags gathered from FunctionDecl::takeDeferredDiags().  Emitted at the
-  /// very end of codegen.
-  std::vector<std::pair<SourceLocation, PartialDiagnostic>> DeferredDiags;
 
 public:
   CodeGenModule(ASTContext &C, const HeaderSearchOptions &headersearchopts,
@@ -832,8 +832,8 @@ public:
 
   /// Given a builtin id for a function like "__builtin_fabsf", return a
   /// Function* for "fabsf".
-  llvm::Value *getBuiltinLibFunction(const FunctionDecl *FD,
-                                     unsigned BuiltinID);
+  llvm::Constant *getBuiltinLibFunction(const FunctionDecl *FD,
+                                        unsigned BuiltinID);
 
   llvm::Function *getIntrinsic(unsigned IID, ArrayRef<llvm::Type*> Tys = None);
 

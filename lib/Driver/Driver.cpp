@@ -994,7 +994,15 @@ bool Driver::HandleImmediateArgs(const Compilation &C) {
   }
 
   if (C.getArgs().hasArg(options::OPT_print_libgcc_file_name)) {
-    llvm::outs() << GetFilePath("libgcc.a", TC) << "\n";
+    ToolChain::RuntimeLibType RLT = TC.GetRuntimeLibType(C.getArgs());
+    switch (RLT) {
+    case ToolChain::RLT_CompilerRT:
+      llvm::outs() << TC.getCompilerRT(C.getArgs(), "builtins") << "\n";
+      break;
+    case ToolChain::RLT_Libgcc:
+      llvm::outs() << GetFilePath("libgcc.a", TC) << "\n";
+      break;
+    }
     return false;
   }
 
@@ -1410,9 +1418,6 @@ class OffloadingActionBuilder final {
   /// The compilation that is using this builder.
   Compilation &C;
 
-  /// The derived arguments associated with this builder.
-  DerivedArgList &Args;
-
   /// Map between an input argument and the offload kinds used to process it.
   std::map<const Arg *, unsigned> InputArgToOffloadKindMap;
 
@@ -1603,6 +1608,11 @@ class OffloadingActionBuilder final {
 
         // We avoid creating host action in device-only mode.
         return CompileDeviceOnly ? ABRT_Ignore_Host : ABRT_Success;
+      } else if (CurPhase > phases::Backend) {
+        // If we are past the backend phase and still have a device action, we
+        // don't have to do anything as this action is already a device
+        // top-level action.
+        return ABRT_Success;
       }
 
       assert(CurPhase < phases::Backend && "Generating single CUDA "
@@ -1747,7 +1757,7 @@ class OffloadingActionBuilder final {
 public:
   OffloadingActionBuilder(Compilation &C, DerivedArgList &Args,
                           const Driver::InputList &Inputs)
-      : C(C), Args(Args) {
+      : C(C) {
     // Create a specialized builder for each device toolchain.
 
     IsValid = true;
@@ -1863,31 +1873,17 @@ public:
   /// Add the offloading top level actions to the provided action list.
   bool appendTopLevelActions(ActionList &AL, Action *HostAction,
                              const Arg *InputArg) {
-    auto NumActions = AL.size();
-
     for (auto *SB : SpecializedBuilders) {
       if (!SB->isValid())
         continue;
       SB->appendTopLevelActions(AL);
     }
 
-    assert(NumActions <= AL.size() && "Expecting more actions, not less!");
-
     // Propagate to the current host action (if any) the offload information
     // associated with the current input.
     if (HostAction)
       HostAction->propagateHostOffloadInfo(InputArgToOffloadKindMap[InputArg],
                                            /*BoundArch=*/nullptr);
-
-    // If any action is added by the builders, -o is ambiguous if we have more
-    // than one top-level action.
-    if (NumActions < AL.size() && Args.hasArg(options::OPT_o) &&
-        AL.size() > 1) {
-      C.getDriver().Diag(
-          clang::diag::err_drv_output_argument_with_multiple_files);
-      return true;
-    }
-
     return false;
   }
 
@@ -2307,7 +2303,7 @@ void Driver::BuildJobs(Compilation &C) const {
     }
 
     BuildJobsForAction(C, A, &C.getDefaultToolChain(),
-                       /*BoundArch*/ nullptr,
+                       /*BoundArch*/ StringRef(),
                        /*AtTopLevel*/ true,
                        /*MultipleArchs*/ ArchNames.size() > 1,
                        /*LinkingOutput*/ LinkingOutput, CachedResults,
@@ -2499,7 +2495,7 @@ static const Tool *selectToolForJob(Compilation &C, bool SaveTemps,
 }
 
 InputInfo Driver::BuildJobsForAction(
-    Compilation &C, const Action *A, const ToolChain *TC, const char *BoundArch,
+    Compilation &C, const Action *A, const ToolChain *TC, StringRef BoundArch,
     bool AtTopLevel, bool MultipleArchs, const char *LinkingOutput,
     std::map<std::pair<const Action *, std::string>, InputInfo> &CachedResults,
     bool BuildForOffloadDevice) const {
@@ -2507,7 +2503,7 @@ InputInfo Driver::BuildJobsForAction(
   // for example, armv7 and armv7s both map to the same triple -- so we need
   // both in our map.
   std::string TriplePlusArch = TC->getTriple().normalize();
-  if (BoundArch) {
+  if (!BoundArch.empty()) {
     TriplePlusArch += "-";
     TriplePlusArch += BoundArch;
   }
@@ -2524,7 +2520,7 @@ InputInfo Driver::BuildJobsForAction(
 }
 
 InputInfo Driver::BuildJobsForActionNoCache(
-    Compilation &C, const Action *A, const ToolChain *TC, const char *BoundArch,
+    Compilation &C, const Action *A, const ToolChain *TC, StringRef BoundArch,
     bool AtTopLevel, bool MultipleArchs, const char *LinkingOutput,
     std::map<std::pair<const Action *, std::string>, InputInfo> &CachedResults,
     bool BuildForOffloadDevice) const {
@@ -2601,9 +2597,9 @@ InputInfo Driver::BuildJobsForActionNoCache(
 
   if (const BindArchAction *BAA = dyn_cast<BindArchAction>(A)) {
     const ToolChain *TC;
-    const char *ArchName = BAA->getArchName();
+    StringRef ArchName = BAA->getArchName();
 
-    if (ArchName)
+    if (!ArchName.empty())
       TC = &getToolChain(C.getArgs(),
                          computeTargetTriple(*this, DefaultTargetTriple,
                                              C.getArgs(), ArchName));
@@ -2745,7 +2741,7 @@ static const char *MakeCLOutputFilename(const ArgList &Args, StringRef ArgValue,
 
 const char *Driver::GetNamedOutputPath(Compilation &C, const JobAction &JA,
                                        const char *BaseInput,
-                                       const char *BoundArch, bool AtTopLevel,
+                                       StringRef BoundArch, bool AtTopLevel,
                                        bool MultipleArchs,
                                        StringRef NormalizedTriple) const {
   llvm::PrettyStackTraceString CrashInfo("Computing output path");
@@ -2831,7 +2827,7 @@ const char *Driver::GetNamedOutputPath(Compilation &C, const JobAction &JA,
       // clang-cl uses BaseName for the executable name.
       NamedOutput =
           MakeCLOutputFilename(C.getArgs(), "", BaseName, types::TY_Image);
-    } else if (MultipleArchs && BoundArch) {
+    } else if (MultipleArchs && !BoundArch.empty()) {
       SmallString<128> Output(getDefaultImageName());
       Output += JA.getOffloadingFileNamePrefix(NormalizedTriple);
       Output += "-";
@@ -2851,7 +2847,7 @@ const char *Driver::GetNamedOutputPath(Compilation &C, const JobAction &JA,
       End = BaseName.rfind('.');
     SmallString<128> Suffixed(BaseName.substr(0, End));
     Suffixed += JA.getOffloadingFileNamePrefix(NormalizedTriple);
-    if (MultipleArchs && BoundArch) {
+    if (MultipleArchs && !BoundArch.empty()) {
       Suffixed += "-";
       Suffixed.append(BoundArch);
     }
@@ -3075,6 +3071,9 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
     case llvm::Triple::NaCl:
       TC = new toolchains::NaClToolChain(*this, Target, Args);
       break;
+    case llvm::Triple::Fuchsia:
+      TC = new toolchains::Fuchsia(*this, Target, Args);
+      break;
     case llvm::Triple::Solaris:
       TC = new toolchains::Solaris(*this, Target, Args);
       break;
@@ -3108,6 +3107,9 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
       break;
     case llvm::Triple::PS4:
       TC = new toolchains::PS4CPU(*this, Target, Args);
+      break;
+    case llvm::Triple::Contiki:
+      TC = new toolchains::Contiki(*this, Target, Args);
       break;
     default:
       // Of these targets, Hexagon is the only one that might have
