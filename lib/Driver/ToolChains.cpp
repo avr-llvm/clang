@@ -809,7 +809,8 @@ void DarwinClang::AddCCKextLibArgs(const ArgList &Args,
 }
 
 DerivedArgList *MachO::TranslateArgs(const DerivedArgList &Args,
-                                     StringRef BoundArch) const {
+                                     StringRef BoundArch,
+                                     Action::OffloadKind) const {
   DerivedArgList *DAL = new DerivedArgList(Args.getBaseArgs());
   const OptTable &Opts = getDriver().getOpts();
 
@@ -1038,10 +1039,12 @@ void MachO::AddLinkRuntimeLibArgs(const ArgList &Args,
   AddLinkRuntimeLib(Args, CmdArgs, CompilerRT, false, true);
 }
 
-DerivedArgList *Darwin::TranslateArgs(const DerivedArgList &Args,
-                                      StringRef BoundArch) const {
+DerivedArgList *
+Darwin::TranslateArgs(const DerivedArgList &Args, StringRef BoundArch,
+                      Action::OffloadKind DeviceOffloadKind) const {
   // First get the generic Apple args, before moving onto Darwin-specific ones.
-  DerivedArgList *DAL = MachO::TranslateArgs(Args, BoundArch);
+  DerivedArgList *DAL =
+      MachO::TranslateArgs(Args, BoundArch, DeviceOffloadKind);
   const OptTable &Opts = getDriver().getOpts();
 
   // If no architecture is bound, none of the translations here are relevant.
@@ -2834,6 +2837,38 @@ bool Generic_GCC::IsIntegratedAssemblerDefault() const {
   }
 }
 
+void Generic_GCC::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
+                                               ArgStringList &CC1Args) const {
+  if (DriverArgs.hasArg(options::OPT_nostdlibinc) ||
+      DriverArgs.hasArg(options::OPT_nostdincxx))
+    return;
+
+  switch (GetCXXStdlibType(DriverArgs)) {
+  case ToolChain::CST_Libcxx: {
+    std::string Path = findLibCxxIncludePath();
+    if (!Path.empty())
+      addSystemInclude(DriverArgs, CC1Args, Path);
+    break;
+  }
+
+  case ToolChain::CST_Libstdcxx:
+    addLibStdCxxIncludePaths(DriverArgs, CC1Args);
+    break;
+  }
+}
+
+std::string Generic_GCC::findLibCxxIncludePath() const {
+  // FIXME: The Linux behavior would probaby be a better approach here.
+  return getDriver().SysRoot + "/usr/include/c++/v1";
+}
+
+void
+Generic_GCC::addLibStdCxxIncludePaths(const llvm::opt::ArgList &DriverArgs,
+                                      llvm::opt::ArgStringList &CC1Args) const {
+  // By default, we don't assume we know where libstdc++ might be installed.
+  // FIXME: If we have a valid GCCInstallation, use it.
+}
+
 /// \brief Helper to add the variant paths of a libstdc++ installation.
 bool Generic_GCC::addLibStdCXXIncludePaths(
     Twine Base, Twine Suffix, StringRef GCCTriple, StringRef GCCMultiarchTriple,
@@ -2865,6 +2900,49 @@ bool Generic_GCC::addLibStdCXXIncludePaths(
 
   addSystemInclude(DriverArgs, CC1Args, Base + Suffix + "/backward");
   return true;
+}
+
+llvm::opt::DerivedArgList *
+Generic_GCC::TranslateArgs(const llvm::opt::DerivedArgList &Args, StringRef,
+                           Action::OffloadKind DeviceOffloadKind) const {
+
+  // If this tool chain is used for an OpenMP offloading device we have to make
+  // sure we always generate a shared library regardless of the commands the
+  // user passed to the host. This is required because the runtime library
+  // is required to load the device image dynamically at run time.
+  if (DeviceOffloadKind == Action::OFK_OpenMP) {
+    DerivedArgList *DAL = new DerivedArgList(Args.getBaseArgs());
+    const OptTable &Opts = getDriver().getOpts();
+
+    // Request the shared library. Given that these options are decided
+    // implicitly, they do not refer to any base argument.
+    DAL->AddFlagArg(/*BaseArg=*/nullptr, Opts.getOption(options::OPT_shared));
+    DAL->AddFlagArg(/*BaseArg=*/nullptr, Opts.getOption(options::OPT_fPIC));
+
+    // Filter all the arguments we don't care passing to the offloading
+    // toolchain as they can mess up with the creation of a shared library.
+    for (auto *A : Args) {
+      switch ((options::ID)A->getOption().getID()) {
+      default:
+        DAL->append(A);
+        break;
+      case options::OPT_shared:
+      case options::OPT_dynamic:
+      case options::OPT_static:
+      case options::OPT_fPIC:
+      case options::OPT_fno_PIC:
+      case options::OPT_fpic:
+      case options::OPT_fno_pic:
+      case options::OPT_fPIE:
+      case options::OPT_fno_PIE:
+      case options::OPT_fpie:
+      case options::OPT_fno_pie:
+        break;
+      }
+    }
+    return DAL;
+  }
+  return nullptr;
 }
 
 void Generic_ELF::addClangTargetOptions(const ArgList &DriverArgs,
@@ -2958,25 +3036,16 @@ MipsLLVMToolChain::GetCXXStdlibType(const ArgList &Args) const {
   return ToolChain::CST_Libcxx;
 }
 
-void MipsLLVMToolChain::AddClangCXXStdlibIncludeArgs(
-    const ArgList &DriverArgs, ArgStringList &CC1Args) const {
-  if (DriverArgs.hasArg(options::OPT_nostdlibinc) ||
-      DriverArgs.hasArg(options::OPT_nostdincxx))
-    return;
-
-  assert((GetCXXStdlibType(DriverArgs) == ToolChain::CST_Libcxx) &&
-         "Only -lc++ (aka libcxx) is suported in this toolchain.");
-
-  const auto &Callback = Multilibs.includeDirsCallback();
-  if (Callback) {
+std::string MipsLLVMToolChain::findLibCxxIncludePath() const {
+  if (const auto &Callback = Multilibs.includeDirsCallback()) {
     for (std::string Path : Callback(SelectedMultilib)) {
       Path = getDriver().getInstalledDir() + Path + "/c++/v1";
       if (llvm::sys::fs::exists(Path)) {
-        addSystemInclude(DriverArgs, CC1Args, Path);
-        break;
+        return Path;
       }
     }
   }
+  return "";
 }
 
 void MipsLLVMToolChain::AddCXXStdlibLibArgs(const ArgList &Args,
@@ -3127,15 +3196,14 @@ void HexagonToolChain::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
   addExternCSystemInclude(DriverArgs, CC1Args, TargetDir + "/hexagon/include");
 }
 
-void HexagonToolChain::AddClangCXXStdlibIncludeArgs(
-    const ArgList &DriverArgs, ArgStringList &CC1Args) const {
-  if (DriverArgs.hasArg(options::OPT_nostdlibinc) ||
-      DriverArgs.hasArg(options::OPT_nostdincxx))
-    return;
 
+void HexagonToolChain::addLibStdCxxIncludePaths(
+    const llvm::opt::ArgList &DriverArgs,
+    llvm::opt::ArgStringList &CC1Args) const {
   const Driver &D = getDriver();
   std::string TargetDir = getHexagonTargetDir(D.InstalledDir, D.PrefixDirs);
-  addSystemInclude(DriverArgs, CC1Args, TargetDir + "/hexagon/include/c++");
+  addLibStdCXXIncludePaths(TargetDir, "/hexagon/include/c++", "", "", "", "",
+                           DriverArgs, CC1Args);
 }
 
 ToolChain::CXXStdlibType
@@ -3293,37 +3361,25 @@ void NaClToolChain::AddCXXStdlibLibArgs(const ArgList &Args,
   CmdArgs.push_back("-lc++");
 }
 
-void NaClToolChain::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
-                                                 ArgStringList &CC1Args) const {
+std::string NaClToolChain::findLibCxxIncludePath() const {
   const Driver &D = getDriver();
-  if (DriverArgs.hasArg(options::OPT_nostdlibinc) ||
-      DriverArgs.hasArg(options::OPT_nostdincxx))
-    return;
-
-  // Check for -stdlib= flags. We only support libc++ but this consumes the arg
-  // if the value is libc++, and emits an error for other values.
-  GetCXXStdlibType(DriverArgs);
 
   SmallString<128> P(D.Dir + "/../");
   switch (getTriple().getArch()) {
   case llvm::Triple::arm:
     llvm::sys::path::append(P, "arm-nacl/include/c++/v1");
-    addSystemInclude(DriverArgs, CC1Args, P.str());
-    break;
+    return P.str();
   case llvm::Triple::x86:
     llvm::sys::path::append(P, "x86_64-nacl/include/c++/v1");
-    addSystemInclude(DriverArgs, CC1Args, P.str());
-    break;
+    return P.str();
   case llvm::Triple::x86_64:
     llvm::sys::path::append(P, "x86_64-nacl/include/c++/v1");
-    addSystemInclude(DriverArgs, CC1Args, P.str());
-    break;
+    return P.str();
   case llvm::Triple::mipsel:
     llvm::sys::path::append(P, "mipsel-nacl/include/c++/v1");
-    addSystemInclude(DriverArgs, CC1Args, P.str());
-    break;
+    return P.str();
   default:
-    break;
+    return "";
   }
 }
 
@@ -3394,15 +3450,10 @@ CloudABI::CloudABI(const Driver &D, const llvm::Triple &Triple,
   getFilePaths().push_back(P.str());
 }
 
-void CloudABI::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
-                                            ArgStringList &CC1Args) const {
-  if (DriverArgs.hasArg(options::OPT_nostdlibinc) &&
-      DriverArgs.hasArg(options::OPT_nostdincxx))
-    return;
-
+std::string CloudABI::findLibCxxIncludePath() const {
   SmallString<128> P(getDriver().Dir);
   llvm::sys::path::append(P, "..", getTriple().str(), "include/c++/v1");
-  addSystemInclude(DriverArgs, CC1Args, P.str());
+  return P.str();
 }
 
 void CloudABI::AddCXXStdlibLibArgs(const ArgList &Args,
@@ -3446,29 +3497,14 @@ Haiku::Haiku(const Driver &D, const llvm::Triple& Triple, const ArgList &Args)
 
 }
 
-void Haiku::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
-                                          ArgStringList &CC1Args) const {
-  if (DriverArgs.hasArg(options::OPT_nostdlibinc) ||
-      DriverArgs.hasArg(options::OPT_nostdincxx))
-    return;
+std::string Haiku::findLibCxxIncludePath() const {
+  return getDriver().SysRoot + "/system/develop/headers/c++/v1";
+}
 
-  switch (GetCXXStdlibType(DriverArgs)) {
-  case ToolChain::CST_Libcxx:
-    addSystemInclude(DriverArgs, CC1Args,
-                     getDriver().SysRoot + "/system/develop/headers/c++/v1");
-    break;
-  case ToolChain::CST_Libstdcxx:
-    addSystemInclude(DriverArgs, CC1Args,
-                     getDriver().SysRoot + "/system/develop/headers/c++");
-    addSystemInclude(DriverArgs, CC1Args,
-                     getDriver().SysRoot + "/system/develop/headers/c++/backward");
-
-    StringRef Triple = getTriple().str();
-    addSystemInclude(DriverArgs, CC1Args,
-                     getDriver().SysRoot + "/system/develop/headers/c++/" +
-                     Triple);
-    break;
-  }
+void Haiku::addLibStdCxxIncludePaths(const llvm::opt::ArgList &DriverArgs,
+                                     llvm::opt::ArgStringList &CC1Args) const {
+  addLibStdCXXIncludePaths(getDriver().SysRoot, "/system/develop/headers/c++",
+                           getTriple().str(), "", "", "", DriverArgs, CC1Args);
 }
 
 /// OpenBSD - OpenBSD tool chain which can call as(1) and ld(1) directly.
@@ -3504,34 +3540,13 @@ ToolChain::CXXStdlibType Bitrig::GetDefaultCXXStdlibType() const {
   return ToolChain::CST_Libcxx;
 }
 
-void Bitrig::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
-                                          ArgStringList &CC1Args) const {
-  if (DriverArgs.hasArg(options::OPT_nostdlibinc) ||
-      DriverArgs.hasArg(options::OPT_nostdincxx))
-    return;
-
-  switch (GetCXXStdlibType(DriverArgs)) {
-  case ToolChain::CST_Libcxx:
-    addSystemInclude(DriverArgs, CC1Args,
-                     getDriver().SysRoot + "/usr/include/c++/v1");
-    break;
-  case ToolChain::CST_Libstdcxx:
-    addSystemInclude(DriverArgs, CC1Args,
-                     getDriver().SysRoot + "/usr/include/c++/stdc++");
-    addSystemInclude(DriverArgs, CC1Args,
-                     getDriver().SysRoot + "/usr/include/c++/stdc++/backward");
-
-    StringRef Triple = getTriple().str();
-    if (Triple.startswith("amd64"))
-      addSystemInclude(DriverArgs, CC1Args,
-                       getDriver().SysRoot + "/usr/include/c++/stdc++/x86_64" +
-                           Triple.substr(5));
-    else
-      addSystemInclude(DriverArgs, CC1Args, getDriver().SysRoot +
-                                                "/usr/include/c++/stdc++/" +
-                                                Triple);
-    break;
-  }
+void Bitrig::addLibStdCxxIncludePaths(const llvm::opt::ArgList &DriverArgs,
+                                      llvm::opt::ArgStringList &CC1Args) const {
+  std::string Triple = getTriple().str();
+  if (StringRef(Triple).startswith("amd64"))
+    Triple = "x86_64" + Triple.substr(5);
+  addLibStdCXXIncludePaths(getDriver().SysRoot, "/usr/include/c++/stdc++",
+                           Triple, "", "", "", DriverArgs, CC1Args);
 }
 
 void Bitrig::AddCXXStdlibLibArgs(const ArgList &Args,
@@ -3570,24 +3585,11 @@ ToolChain::CXXStdlibType FreeBSD::GetDefaultCXXStdlibType() const {
   return ToolChain::CST_Libstdcxx;
 }
 
-void FreeBSD::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
-                                           ArgStringList &CC1Args) const {
-  if (DriverArgs.hasArg(options::OPT_nostdlibinc) ||
-      DriverArgs.hasArg(options::OPT_nostdincxx))
-    return;
-
-  switch (GetCXXStdlibType(DriverArgs)) {
-  case ToolChain::CST_Libcxx:
-    addSystemInclude(DriverArgs, CC1Args,
-                     getDriver().SysRoot + "/usr/include/c++/v1");
-    break;
-  case ToolChain::CST_Libstdcxx:
-    addSystemInclude(DriverArgs, CC1Args,
-                     getDriver().SysRoot + "/usr/include/c++/4.2");
-    addSystemInclude(DriverArgs, CC1Args,
-                     getDriver().SysRoot + "/usr/include/c++/4.2/backward");
-    break;
-  }
+void FreeBSD::addLibStdCxxIncludePaths(
+    const llvm::opt::ArgList &DriverArgs,
+    llvm::opt::ArgStringList &CC1Args) const {
+  addLibStdCXXIncludePaths(getDriver().SysRoot, "/usr/include/c++/4.2", "", "",
+                           "", "", DriverArgs, CC1Args);
 }
 
 void FreeBSD::AddCXXStdlibLibArgs(const ArgList &Args,
@@ -3732,24 +3734,14 @@ ToolChain::CXXStdlibType NetBSD::GetDefaultCXXStdlibType() const {
   return ToolChain::CST_Libstdcxx;
 }
 
-void NetBSD::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
-                                          ArgStringList &CC1Args) const {
-  if (DriverArgs.hasArg(options::OPT_nostdlibinc) ||
-      DriverArgs.hasArg(options::OPT_nostdincxx))
-    return;
+std::string NetBSD::findLibCxxIncludePath() const {
+  return getDriver().SysRoot + "/usr/include/c++/";
+}
 
-  switch (GetCXXStdlibType(DriverArgs)) {
-  case ToolChain::CST_Libcxx:
-    addSystemInclude(DriverArgs, CC1Args,
-                     getDriver().SysRoot + "/usr/include/c++/");
-    break;
-  case ToolChain::CST_Libstdcxx:
-    addSystemInclude(DriverArgs, CC1Args,
-                     getDriver().SysRoot + "/usr/include/g++");
-    addSystemInclude(DriverArgs, CC1Args,
-                     getDriver().SysRoot + "/usr/include/g++/backward");
-    break;
-  }
+void NetBSD::addLibStdCxxIncludePaths(const llvm::opt::ArgList &DriverArgs,
+                                      llvm::opt::ArgStringList &CC1Args) const {
+  addLibStdCXXIncludePaths(getDriver().SysRoot, "/usr/include/g++", "", "", "",
+                           "", DriverArgs, CC1Args);
 }
 
 /// Minix - Minix tool chain which can call as(1) and ld(1) directly.
@@ -3822,6 +3814,9 @@ void Solaris::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
 
   // Include the support directory for things like xlocale and fudged system
   // headers.
+  // FIXME: This is a weird mix of libc++ and libstdc++. We should also be
+  // checking the value of -stdlib= here and adding the includes for libc++
+  // rather than libstdc++ if it's requested.
   addSystemInclude(DriverArgs, CC1Args, "/usr/include/c++/v1/support/solaris");
 
   if (GCCInstallation.isValid()) {
@@ -4697,33 +4692,27 @@ static std::string DetectLibcxxIncludePath(StringRef base) {
   return MaxVersion ? (base + "/" + MaxVersionString).str() : "";
 }
 
-void Linux::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
-                                         ArgStringList &CC1Args) const {
-  if (DriverArgs.hasArg(options::OPT_nostdlibinc) ||
-      DriverArgs.hasArg(options::OPT_nostdincxx))
-    return;
-
-  // Check if libc++ has been enabled and provide its include paths if so.
-  if (GetCXXStdlibType(DriverArgs) == ToolChain::CST_Libcxx) {
-    const std::string LibCXXIncludePathCandidates[] = {
-        DetectLibcxxIncludePath(getDriver().Dir + "/../include/c++"),
-        // If this is a development, non-installed, clang, libcxx will
-        // not be found at ../include/c++ but it likely to be found at
-        // one of the following two locations:
-        DetectLibcxxIncludePath(getDriver().SysRoot + "/usr/local/include/c++"),
-        DetectLibcxxIncludePath(getDriver().SysRoot + "/usr/include/c++") };
-    for (const auto &IncludePath : LibCXXIncludePathCandidates) {
-      if (IncludePath.empty() || !getVFS().exists(IncludePath))
-        continue;
-      // Add the first candidate that exists.
-      addSystemInclude(DriverArgs, CC1Args, IncludePath);
-      break;
-    }
-    return;
+std::string Linux::findLibCxxIncludePath() const {
+  const std::string LibCXXIncludePathCandidates[] = {
+      DetectLibcxxIncludePath(getDriver().Dir + "/../include/c++"),
+      // If this is a development, non-installed, clang, libcxx will
+      // not be found at ../include/c++ but it likely to be found at
+      // one of the following two locations:
+      DetectLibcxxIncludePath(getDriver().SysRoot + "/usr/local/include/c++"),
+      DetectLibcxxIncludePath(getDriver().SysRoot + "/usr/include/c++") };
+  for (const auto &IncludePath : LibCXXIncludePathCandidates) {
+    if (IncludePath.empty() || !getVFS().exists(IncludePath))
+      continue;
+    // Use the first candidate that exists.
+    return IncludePath;
   }
+  return "";
+}
 
+void Linux::addLibStdCxxIncludePaths(const llvm::opt::ArgList &DriverArgs,
+                                     llvm::opt::ArgStringList &CC1Args) const {
   // We need a detected GCC installation on Linux to provide libstdc++'s
-  // headers. We handled the libc++ case above.
+  // headers.
   if (!GCCInstallation.isValid())
     return;
 
@@ -4934,14 +4923,8 @@ void Fuchsia::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
   addExternCSystemInclude(DriverArgs, CC1Args, D.SysRoot + "/include");
 }
 
-void Fuchsia::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
-                                           ArgStringList &CC1Args) const {
-  if (DriverArgs.hasArg(options::OPT_nostdlibinc) ||
-      DriverArgs.hasArg(options::OPT_nostdincxx))
-    return;
-
-  addSystemInclude(DriverArgs, CC1Args,
-                   getDriver().SysRoot + "/include/c++/v1");
+std::string Fuchsia::findLibCxxIncludePath() const {
+  return getDriver().SysRoot + "/include/c++/v1";
 }
 
 void Fuchsia::AddCXXStdlibLibArgs(const ArgList &Args,
@@ -5037,7 +5020,7 @@ void CudaToolChain::AddCudaIncludeArgs(const ArgList &DriverArgs,
 
 llvm::opt::DerivedArgList *
 CudaToolChain::TranslateArgs(const llvm::opt::DerivedArgList &Args,
-                             StringRef BoundArch) const {
+                             StringRef BoundArch, Action::OffloadKind) const {
   DerivedArgList *DAL = new DerivedArgList(Args.getBaseArgs());
   const OptTable &Opts = getDriver().getOpts();
 
@@ -5191,25 +5174,21 @@ void MyriadToolChain::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
     addSystemInclude(DriverArgs, CC1Args, getDriver().SysRoot + "/include");
 }
 
-void MyriadToolChain::AddClangCXXStdlibIncludeArgs(
-    const ArgList &DriverArgs, ArgStringList &CC1Args) const {
-  if (DriverArgs.hasArg(options::OPT_nostdlibinc) ||
-      DriverArgs.hasArg(options::OPT_nostdincxx))
-    return;
+std::string MyriadToolChain::findLibCxxIncludePath() const {
+  std::string Path(getDriver().getInstalledDir());
+  return Path + "/../include/c++/v1";
+}
 
-  if (GetCXXStdlibType(DriverArgs) == ToolChain::CST_Libcxx) {
-    std::string Path(getDriver().getInstalledDir());
-    Path += "/../include/c++/v1";
-    addSystemInclude(DriverArgs, CC1Args, Path);
-  } else {
-    StringRef LibDir = GCCInstallation.getParentLibPath();
-    const GCCVersion &Version = GCCInstallation.getVersion();
-    StringRef TripleStr = GCCInstallation.getTriple().str();
-    const Multilib &Multilib = GCCInstallation.getMultilib();
-    addLibStdCXXIncludePaths(
-        LibDir.str() + "/../" + TripleStr.str() + "/include/c++/" + Version.Text,
-        "", TripleStr, "", "", Multilib.includeSuffix(), DriverArgs, CC1Args);
-  }
+void MyriadToolChain::addLibStdCxxIncludePaths(
+    const llvm::opt::ArgList &DriverArgs,
+    llvm::opt::ArgStringList &CC1Args) const {
+  StringRef LibDir = GCCInstallation.getParentLibPath();
+  const GCCVersion &Version = GCCInstallation.getVersion();
+  StringRef TripleStr = GCCInstallation.getTriple().str();
+  const Multilib &Multilib = GCCInstallation.getMultilib();
+  addLibStdCXXIncludePaths(
+      LibDir.str() + "/../" + TripleStr.str() + "/include/c++/" + Version.Text,
+      "", TripleStr, "", "", Multilib.includeSuffix(), DriverArgs, CC1Args);
 }
 
 // MyriadToolChain handles several triples:
@@ -5298,9 +5277,8 @@ void WebAssembly::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
     addSystemInclude(DriverArgs, CC1Args, getDriver().SysRoot + "/include");
 }
 
-void WebAssembly::AddClangCXXStdlibIncludeArgs(
-      const llvm::opt::ArgList &DriverArgs,
-      llvm::opt::ArgStringList &CC1Args) const {
+void WebAssembly::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
+                                               ArgStringList &CC1Args) const {
   if (!DriverArgs.hasArg(options::OPT_nostdlibinc) &&
       !DriverArgs.hasArg(options::OPT_nostdincxx))
     addSystemInclude(DriverArgs, CC1Args,
