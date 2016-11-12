@@ -357,6 +357,9 @@ def warn_decl_shadow :
           "static data member of %2|"
           "field of %2}1">,
   InGroup<Shadow>, DefaultIgnore;
+def warn_decl_shadow_uncaptured_local :
+  Warning<warn_decl_shadow.Text>,
+  InGroup<ShadowUncapturedLocal>, DefaultIgnore;
 def warn_ctor_parm_shadows_field:
   Warning<"constructor parameter %0 shadows the field %1 of %2">,
   InGroup<ShadowFieldInConstructor>, DefaultIgnore;
@@ -739,7 +742,9 @@ def err_recursive_superclass : Error<
   "trying to recursively use %0 as superclass of %1">;
 def err_conflicting_aliasing_type : Error<"conflicting types for alias %0">;
 def warn_undef_interface : Warning<"cannot find interface declaration for %0">;
-def warn_duplicate_protocol_def : Warning<"duplicate protocol definition of %0 is ignored">;
+def warn_duplicate_protocol_def : Warning<
+  "duplicate protocol definition of %0 is ignored">,
+  InGroup<DiagGroup<"duplicate-protocol">>;
 def err_protocol_has_circular_dependency : Error<
   "protocol has circular dependency">;
 def err_undeclared_protocol : Error<"cannot find protocol declaration for %0">;
@@ -2594,6 +2599,7 @@ def warn_attribute_wrong_decl_type : Warning<
   "functions"
   "|unions"
   "|variables and functions"
+  "|functions and global variables"
   "|functions, variables, and Objective-C interfaces"
   "|functions and methods"
   "|parameters"
@@ -2624,7 +2630,7 @@ def warn_attribute_wrong_decl_type : Warning<
   "|functions, variables, classes, and Objective-C interfaces"
   "|Objective-C protocols"
   "|variables with static or thread storage duration"
-  "|functions and global variables"
+  "|functions, methods, properties, and global variables"
   "|structs, unions, and typedefs"
   "|structs and typedefs"
   "|interface or protocol declarations"
@@ -6230,6 +6236,8 @@ let CategoryName = "Lambda Issue" in {
   def note_lambda_to_block_conv : Note<
     "implicit capture of lambda object due to conversion to block pointer "
     "here">;
+  def note_var_explicitly_captured_here : Note<"variable %0 is"
+    "%select{| explicitly}1 captured here">;
 
   // C++14 lambda init-captures.
   def warn_cxx11_compat_init_capture : Warning<
@@ -8725,6 +8733,15 @@ def warn_nullability_missing : Warning<
   "%select{pointer|block pointer|member pointer}0 is missing a nullability "
   "type specifier (_Nonnull, _Nullable, or _Null_unspecified)">,
   InGroup<NullabilityCompleteness>;
+def warn_nullability_missing_array : Warning<
+  "array parameter is missing a nullability type specifier (_Nonnull, "
+  "_Nullable, or _Null_unspecified)">,
+  InGroup<NullabilityCompletenessOnArrays>;
+
+def warn_nullability_inferred_on_nested_type : Warning<
+  "inferring '_Nonnull' for pointer type within %select{array|reference}0 is "
+  "deprecated">,
+  InGroup<NullabilityInferredOnNestedType>;
 
 def err_objc_type_arg_explicit_nullability : Error<
   "type argument %0 cannot explicitly specify nullability">;

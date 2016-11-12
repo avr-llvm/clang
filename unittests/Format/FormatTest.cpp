@@ -7555,6 +7555,20 @@ TEST_F(FormatTest, FormatObjCMethodDeclarations) {
                "       aShortf:(NSRect)theRect {\n"
                "}",
                continuationStyle);
+
+  // Format pairs correctly.
+  verifyFormat("- (void)drawRectOn:(id)surface\n"
+               "            ofSize:(aaaaaaaa)height\n"
+               "                  :(size_t)width\n"
+               "          atOrigin:(size_t)x\n"
+               "                  :(size_t)y\n"
+               "             aaaaa:(a)yyy\n"
+               "               bbb:(d)cccc;");
+  verifyFormat("- (void)drawRectOn:(id)surface ofSize:(aaa)height:(bbb)width;");
+  verifyFormat("- (void)drawRectOn:(id)surface\n"
+               "            ofSize:(size_t)height\n"
+               "                  :(size_t)width;",
+               getLLVMStyleWithColumns(60));
 }
 
 TEST_F(FormatTest, FormatObjCMethodExpr) {
@@ -7757,6 +7771,12 @@ TEST_F(FormatTest, FormatObjCMethodExpr) {
                "    aaa:aaa];");
   verifyFormat("bool a = ([aaaaaaaa aaaaa] == aaaaaaaaaaaaaaaaa ||\n"
                "          [aaaaaaaa aaaaa] == aaaaaaaaaaaaaaaaaaaa);");
+
+  // Formats pair-parameters.
+  verifyFormat("[I drawRectOn:surface ofSize:aa:bbb atOrigin:cc:dd];");
+  verifyFormat("[I drawRectOn:surface //\n"
+               "        ofSize:aa:bbb\n"
+               "      atOrigin:cc:dd];");
 }
 
 TEST_F(FormatTest, ObjCAt) {
@@ -11542,6 +11562,26 @@ TEST_F(FormatTest, FormatsTableGenCode) {
   FormatStyle Style = getLLVMStyle();
   Style.Language = FormatStyle::LK_TableGen;
   verifyFormat("include \"a.td\"\ninclude \"b.td\"", Style);
+}
+
+TEST_F(FormatTest, ArrayOfTemplates) {
+  EXPECT_EQ("auto a = new unique_ptr<int>[10];",
+            format("auto a = new unique_ptr<int > [ 10];"));
+
+  FormatStyle Spaces = getLLVMStyle();
+  Spaces.SpacesInSquareBrackets = true;
+  EXPECT_EQ("auto a = new unique_ptr<int>[ 10 ];",
+            format("auto a = new unique_ptr<int > [10];", Spaces));
+}
+
+TEST_F(FormatTest, ArrayAsTemplateType) {
+  EXPECT_EQ("auto a = unique_ptr<Foo<Bar>[10]>;",
+            format("auto a = unique_ptr < Foo < Bar>[ 10]> ;"));
+
+  FormatStyle Spaces = getLLVMStyle();
+  Spaces.SpacesInSquareBrackets = true;
+  EXPECT_EQ("auto a = unique_ptr<Foo<Bar>[ 10 ]>;",
+            format("auto a = unique_ptr < Foo < Bar>[10]> ;", Spaces));
 }
 
 // Since this test case uses UNIX-style file path. We disable it for MS

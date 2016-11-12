@@ -384,7 +384,7 @@ def Alias : Attr {
   let Spellings = [GCC<"alias">];
   let Args = [StringArgument<"Aliasee">];
   let Subjects = SubjectList<[Function, GlobalVar], ErrorDiag,
-                             "ExpectedFunctionGlobalVarMethodOrProperty">;
+                             "ExpectedFunctionOrGlobalVar">;
   let Documentation = [Undocumented];
 }
 
@@ -1824,7 +1824,7 @@ def NoSanitizeSpecific : InheritableAttr {
                    GCC<"no_sanitize_thread">,
                    GNU<"no_sanitize_memory">];
   let Subjects = SubjectList<[Function, GlobalVar], ErrorDiag,
-        "ExpectedFunctionGlobalVarMethodOrProperty">;
+        "ExpectedFunctionOrGlobalVar">;
   let Documentation = [NoSanitizeAddressDocs, NoSanitizeThreadDocs,
                        NoSanitizeMemoryDocs];
   let ASTNode = 0;

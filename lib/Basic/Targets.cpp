@@ -465,6 +465,8 @@ protected:
       Triple.getEnvironmentVersion(Maj, Min, Rev);
       this->PlatformName = "android";
       this->PlatformMinVersion = VersionTuple(Maj, Min, Rev);
+      if (Maj)
+        Builder.defineMacro("__ANDROID_API__", Twine(Maj));
     }
     if (Opts.POSIXThreads)
       Builder.defineMacro("_REENTRANT");
@@ -3351,6 +3353,12 @@ void X86TargetInfo::setFeatureEnabledImpl(llvm::StringMap<bool> &Features,
              Name == "avx512vbmi" || Name == "avx512ifma") {
     if (Enabled)
       setSSELevel(Features, AVX512F, Enabled);
+    // Enable BWI instruction if VBMI is being enabled.
+    if (Name == "avx512vbmi" && Enabled)
+      Features["avx512bw"] = true;
+    // Also disable VBMI if BWI is being disabled.
+    if (Name == "avx512bw" && !Enabled)
+      Features["avx512vbmi"] = false;
   } else if (Name == "fma") {
     if (Enabled)
       setSSELevel(Features, AVX, Enabled);
@@ -6797,7 +6805,10 @@ public:
       PtrDiffType = SignedLong;
       break;
     }
-    MaxAtomicPromoteWidth = MaxAtomicInlineWidth = 64;
+    // Up to 32 bits are lock-free atomic, but we're willing to do atomic ops
+    // on up to 64 bits.
+    MaxAtomicPromoteWidth = 64;
+    MaxAtomicInlineWidth = 32;
   }
 
   void getTargetDefines(const LangOptions &Opts,

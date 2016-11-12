@@ -21,7 +21,7 @@
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
 #include "clang/Lex/Preprocessor.h"
-#include "llvm/Bitcode/ReaderWriter.h"
+#include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/DiagnosticPrinter.h"
@@ -772,7 +772,7 @@ CodeGenAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
       }
 
       ErrorOr<std::unique_ptr<llvm::Module>> ModuleOrErr =
-          getLazyBitcodeModule(std::move(*BCBuf), *VMContext);
+          getOwningLazyBitcodeModule(std::move(*BCBuf), *VMContext);
       if (std::error_code EC = ModuleOrErr.getError()) {
         CI.getDiagnostics().Report(diag::err_cannot_open_file) << LinkBCFile
                                                                << EC.message();
