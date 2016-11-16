@@ -4803,10 +4803,21 @@ bool LValueExprEvaluator::VisitDeclRefExpr(const DeclRefExpr *E) {
   return Error(E);
 }
 
+
 bool LValueExprEvaluator::VisitVarDecl(const Expr *E, const VarDecl *VD) {
   CallStackFrame *Frame = nullptr;
-  if (VD->hasLocalStorage() && Info.CurrentCall->Index > 1)
-    Frame = Info.CurrentCall;
+  if (VD->hasLocalStorage() && Info.CurrentCall->Index > 1) {
+    // Only if a local variable was declared in the function currently being
+    // evaluated, do we expect to be able to find its value in the current
+    // frame. (Otherwise it was likely declared in an enclosing context and
+    // could either have a valid evaluatable value (for e.g. a constexpr
+    // variable) or be ill-formed (and trigger an appropriate evaluation
+    // diagnostic)).
+    if (Info.CurrentCall->Callee &&
+        Info.CurrentCall->Callee->Equals(VD->getDeclContext())) {
+      Frame = Info.CurrentCall;
+    }
+  }
 
   if (!VD->getType()->isReferenceType()) {
     if (Frame) {
@@ -5062,6 +5073,7 @@ public:
   bool VisitAddrLabelExpr(const AddrLabelExpr *E)
       { return Success(E); }
   bool VisitCallExpr(const CallExpr *E);
+  bool VisitBuiltinCallExpr(const CallExpr *E, unsigned BuiltinOp);
   bool VisitBlockExpr(const BlockExpr *E) {
     if (!E->getBlockDecl()->hasCaptures())
       return Success(E);
@@ -5256,7 +5268,15 @@ bool PointerExprEvaluator::VisitCallExpr(const CallExpr *E) {
   if (IsStringLiteralCall(E))
     return Success(E);
 
-  switch (unsigned BuiltinOp = E->getBuiltinCallee()) {
+  if (unsigned BuiltinOp = E->getBuiltinCallee())
+    return VisitBuiltinCallExpr(E, BuiltinOp);
+
+  return ExprEvaluatorBaseTy::VisitCallExpr(E);
+}
+
+bool PointerExprEvaluator::VisitBuiltinCallExpr(const CallExpr *E,
+                                                unsigned BuiltinOp) {
+  switch (BuiltinOp) {
   case Builtin::BI__builtin_addressof:
     return EvaluateLValue(E->getArg(0), Result, Info);
   case Builtin::BI__builtin_assume_aligned: {
@@ -6341,6 +6361,7 @@ public:
   }
 
   bool VisitCallExpr(const CallExpr *E);
+  bool VisitBuiltinCallExpr(const CallExpr *E, unsigned BuiltinOp);
   bool VisitBinaryOperator(const BinaryOperator *E);
   bool VisitOffsetOfExpr(const OffsetOfExpr *E);
   bool VisitUnaryOperator(const UnaryOperator *E);
@@ -6921,6 +6942,14 @@ bool IntExprEvaluator::TryEvaluateBuiltinObjectSize(const CallExpr *E,
 }
 
 bool IntExprEvaluator::VisitCallExpr(const CallExpr *E) {
+  if (unsigned BuiltinOp = E->getBuiltinCallee())
+    return VisitBuiltinCallExpr(E, BuiltinOp);
+
+  return ExprEvaluatorBaseTy::VisitCallExpr(E);
+}
+
+bool IntExprEvaluator::VisitBuiltinCallExpr(const CallExpr *E,
+                                            unsigned BuiltinOp) {
   switch (unsigned BuiltinOp = E->getBuiltinCallee()) {
   default:
     return ExprEvaluatorBaseTy::VisitCallExpr(E);

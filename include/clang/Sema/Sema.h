@@ -1796,6 +1796,8 @@ public:
                             bool TypeMayContainAuto);
   void ActOnUninitializedDecl(Decl *dcl, bool TypeMayContainAuto);
   void ActOnInitializerError(Decl *Dcl);
+  bool canInitializeWithParenthesizedList(QualType TargetType);
+
   void ActOnPureSpecifier(Decl *D, SourceLocation PureSpecLoc);
   void ActOnCXXForRangeDecl(Decl *D);
   StmtResult ActOnCXXForRangeIdentifier(Scope *S, SourceLocation IdentLoc,
@@ -9996,7 +9998,7 @@ public:
   /// local diagnostics like in reference binding.
   void RefersToMemberWithReducedAlignment(
       Expr *E,
-      std::function<void(Expr *, RecordDecl *, ValueDecl *, CharUnits)> Action);
+      std::function<void(Expr *, RecordDecl *, FieldDecl *, CharUnits)> Action);
 };
 
 /// \brief RAII object that enters a new expression evaluation context.
